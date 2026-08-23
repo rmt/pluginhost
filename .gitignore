@@ -1,0 +1,14 @@
+# Nim build output
+/build/
+/pluginhost
+nimcache/
+/tests/all_tests
+
+# Local Nimble state
+/.nimble/
+/nimble.develop
+
+# Editor and OS files
+*~
+*.swp
+.DS_Store
