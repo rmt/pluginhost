@@ -3,7 +3,7 @@
 **Plan version:** 1.0.0  
 **Target product release:** `pluginhost` 0.1.0  
 **Initial development version:** 0.0.1-dev  
-**Status:** Approved; Increment 0 completed and accepted  
+**Status:** Approved; Increment 1 in progress  
 **Companion documents:** [`REQUIREMENTS.md`](REQUIREMENTS.md), [`DESIGN.md`](DESIGN.md)
 
 ## 1. Purpose
@@ -702,7 +702,7 @@ This table is updated only when work is reviewed.
 | Increment | Status | Review reference | Notes |
 |---|---|---|---|
 | 0 — Scaffolding | Approved | Iteration 0 review | Includes the `argparse` 4.0.2 CLI |
-| 1 — FFI/ABI | Not started | — | — |
+| 1 — FFI/ABI | In progress | Review unit 1A approved | Raw bindings and ABI proof accepted; review unit 1B is next |
 | 2 — CLAP catalog | Not started | — | — |
 | 3 — CLAP lifecycle | Not started | — | — |
 | 4 — JACK/RT harness | Not started | — | — |

@@ -2,7 +2,10 @@
 
 `pluginhost` is an in-progress standalone Linux JACK host for native CLAP plugins, implemented in Nim. Its intended role is similar to `carla-single`, with one plugin instance and one JACK client per process.
 
-The current development version is **0.0.1-dev**. This increment provides project scaffolding and a working CLI shell only; plugin loading and JACK integration are not implemented yet.
+The current development version is **0.0.1-dev**. The reviewed implementation
+includes the project scaffold, working CLI shell, pinned raw CLAP/JACK FFI, and
+C-versus-Nim ABI tests. Plugin loading and JACK runtime integration are not
+implemented yet.
 
 ## Build
 
@@ -11,6 +14,8 @@ Requirements:
 - Nim 2.2 or later
 - Nimble
 - `argparse` 4.0.2 (installed by Nimble)
+- A GNU-compatible C11 compiler (GCC or Clang) and `pkg-config` for ABI tests
+- JACK development headers and `libjack.so.0` for ABI tests
 
 ```sh
 nimble check
@@ -21,6 +26,7 @@ nimble build
 
 ```sh
 nimble test
+nimble testAbi
 nimble all
 ```
 
@@ -32,6 +38,12 @@ pinned exactly in `pluginhost.nimble`. It was selected over more manual
 help, and parsing from explicit argument arrays for tests. It is MIT-licensed,
 has no transitive package dependencies, and is used only in the non-real-time
 control plane.
+
+`nimble testAbi` verifies the handwritten raw bindings against the vendored
+official CLAP 1.2.10 headers and the installed JACK development headers. The
+complete CLAP header tree is preserved under `vendor/clap/` with its MIT license
+and exact upstream provenance. Draft headers are vendored unchanged but are not
+part of pluginhost's bound or supported ABI surface.
 
 ## Current commands
 

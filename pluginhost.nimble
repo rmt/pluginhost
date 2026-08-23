@@ -23,9 +23,22 @@ proc runUnitTests() =
        " --nimcache:build/nimcache/tests --out:build/test/all_tests " &
        "tests/all_tests.nim"
 
+proc runAbiTests() =
+  exec "mkdir -p build/abi build/nimcache/abi build/test"
+  exec "cc -std=gnu11 -Wall -Wextra -Werror -Ivendor/clap/include " &
+       "$(pkg-config --cflags jack) -c c/abi_probe.c " &
+       "-o build/abi/abi_probe.o"
+  exec "nim c -r --hints:off --mm:arc --threads:on --path:src --path:tests " &
+       getPathsClause() & " --nimcache:build/nimcache/abi " &
+       "--passL:build/abi/abi_probe.o --out:build/test/all_abi_tests " &
+       "tests/abi/all_abi_tests.nim"
+
 task test, "Build the executable and run the fast unit test suite":
   compileTestBinary()
   runUnitTests()
+
+task testAbi, "Run C-versus-Nim ABI conformance tests":
+  runAbiTests()
 
 task all, "Run compile checks, build the executable, and run tests":
   exec "mkdir -p build/nimcache/check"
@@ -33,3 +46,4 @@ task all, "Run compile checks, build the executable, and run tests":
        " --nimcache:build/nimcache/check src/pluginhost.nim"
   compileTestBinary()
   runUnitTests()
+  runAbiTests()
