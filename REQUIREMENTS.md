@@ -427,7 +427,7 @@ Allowed operations must be bounded and deterministic. JACK's documented real-tim
 - Production host logic MUST be written in Nim.
 - Small C files MAY be used only for ABI assertions, build probes, or functionality that cannot be expressed safely through Nim's FFI; they MUST NOT become an alternate host implementation.
 - The project MUST build through Nimble with a documented release command.
-- CI and release builds MUST use a supported Nim 2.x compiler; Nim 2.2.6 is the initial reference compiler.
+- CI and release builds MUST use a supported Nim 2.x compiler; Nim 2.2.10 is the initial reference compiler.
 - Release builds SHOULD use ARC (`--mm:arc`) unless measurement demonstrates another memory manager is equally safe. No managed allocation is permitted on the audio thread regardless of memory manager.
 - Thread support MUST be enabled where required for foreign JACK callbacks and atomics.
 - C callback functions MUST use the exact CLAP/JACK calling convention and be non-capturing.
