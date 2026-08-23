@@ -44,20 +44,21 @@ Then:
 
 The progress table changes only after human review. A task appearing in the plan does not mean it is implemented. A dirty worktree may contain unreviewed work; inspect it before editing and never discard it without permission.
 
-## Current reviewed snapshot
+## Current project snapshot
 
 As of the latest reviewed state:
 
-- Default/current branch: `main`; inspect `git log` for the exact reviewed commit.
-- Version: `0.0.1-dev` (`pluginhost.nimble` uses numeric `0.0.1` because of Nimble metadata syntax).
-- Increment 0 and Increment 1 review unit 1A are approved; review unit 1B is next.
+- Default/current branch: `main`; inspect `git status` and `git log` before editing.
+- Version: `0.0.2-dev` (`pluginhost.nimble` uses numeric `0.0.2` because of Nimble metadata syntax).
+- Increments 0 and 1 are approved; Increment 2 is not started.
 - The CLI uses exactly pinned `argparse` 4.0.2.
-- Typed parsing exists for implicit/explicit `run`, `list`, and `scan`, including generated scoped help and semantic validation.
 - Valid `run`, `list`, and `scan` requests intentionally return typed `NotImplemented` failures.
 - Official CLAP 1.2.10 headers and MIT license are pinned under `vendor/clap/`.
-- Handwritten policy-free CLAP and JACK declarations are covered by C-versus-Nim size, alignment, offset, constant, and signature checks.
-- The reviewed suite contains 23 unit tests and 14 ABI tests (37 total).
-- There is no CLAP loading, JACK client integration, plugin GUI, state persistence, scanning, or real-time processing yet.
+- Handwritten policy-free CLAP and JACK declarations are covered by C-versus-Nim ABI checks.
+- Linux DSO ownership, function/data symbols, C/Nim callbacks, and a foreign pthread callback are tested.
+- The ARC RT spike checks allocator counters and audits the generated process-shaped callback.
+- The current suite contains 24 unit, 20 ABI, and 4 RT tests (48 total).
+- There is no product CLAP discovery/instance loading, JACK client integration, GUI, state, scanning, or real-time processing yet.
 - No remote repository or project license is currently configured.
 
 Current source responsibilities:
@@ -67,9 +68,12 @@ Current source responsibilities:
 - `src/pluginhost/domain/` — typed results, errors, and lifecycle transitions.
 - `src/pluginhost/clap/ffi.nim` — stable CLAP 1.2.10 raw ABI declarations.
 - `src/pluginhost/jack/ffi.nim` — minimal JACK client raw ABI declarations.
+- `src/pluginhost/platform/linux/dynlib.nim` — checked, move-only DSO ownership.
 - `src/pluginhost/support/diagnostics.nim` — user-facing diagnostics.
-- `src/pluginhost/version.nim` — embedded version information.
-- `c/abi_probe.c` and `tests/abi/` — C-header conformance probes and ABI tests.
+- `src/pluginhost/version.nim` — embedded product/SDK/ABI version information.
+- `c/abi_probe.c` and `tests/abi/` — C-header, loader, and callback conformance tests.
+- `tests/fixtures/ffi/` — independently compiled C boundary fixture.
+- `tests/rt/` — ARC allocator instrumentation and generated-C callback audit.
 - `tests/unit/` — CLI, process, lifecycle, error, and version tests.
 - `docs/adr/` — accepted binding-strategy decisions.
 - `vendor/clap/` — unmodified upstream headers, license, and provenance.
@@ -85,44 +89,41 @@ nimble check
 nimble build
 nimble test
 nimble testAbi
+nimble testRt
 nimble all
 ```
 
 `nimble test` builds a process-test executable and runs the fast unit suite.
-`nimble testAbi` checks raw CLAP/JACK declarations against C headers.
-`nimble all` also performs the source compile and ABI checks. New planned tasks
-such as `testFixtures` and `testRt` should be introduced only when they perform
-real checks; an unavailable task must not report a false pass.
+`nimble testAbi` checks ABI declarations, DSO ownership, and C/Nim callbacks.
+`nimble testRt` runs the current ARC allocation spike and generated-C audit.
+`nimble all` also performs source compile, ABI, and RT checks. New planned tasks
+such as `testFixtures` should be introduced only when they perform real checks;
+an unavailable task must not report a false pass.
 
 For user-visible CLI changes, also exercise the compiled process directly and verify stdout, stderr, and exit codes. Existing stubs are expected to fail with a non-zero status.
 
-## Next planned work: Increment 1 review unit 1B
+## Next planned work: Increment 2
 
-The approved next review unit completes the FFI/ABI foundation planned for
-`0.0.2-dev`. Its scope was included in the approved Increment 1 pre-code package;
-a fresh session may implement it after confirming that `main` is clean and the
-current tests pass. Re-propose before coding only if research requires a scope,
-dependency, or architectural change.
+The next increment is **CLAP catalog, `list`, and discovery**, planned for
+`0.0.3-dev`. Before writing code, present the section 4.1 pre-code review package
+and wait for explicit approval. It must cover:
 
-Review unit 1B includes:
+- Goal, explicit non-goals, exact files, interfaces, and dependency direction.
+- `ClapModule` ownership of the DSO, `clap_entry`, successful entry init/deinit,
+  factory lookup, and cleanup at every partial initialization level.
+- Host-owned copied descriptor values, mandatory-field validation, invalid text
+  handling, and selection by exact ID or zero-based index.
+- Human-readable and JSON `list` behavior without creating a plugin instance.
+- Discovery roots/order, `.clap` candidates, canonical deduplication, recursive
+  traversal, symlink-loop prevention, and per-candidate failure isolation.
+- An independent synthetic CLAP fixture with multiple descriptors, controllable
+  invalid cases, and counters proving matched init/deinit and no instance creation.
+- Unit/fixture tests, exact commands, manual verification, security documentation,
+  dependencies, risks, and any decisions requiring human judgment.
 
-- A checked, move-only Linux dynamic-library wrapper with explicit, idempotent close.
-- Typed library-open and symbol-lookup failures plus partial-load cleanup tests.
-- A tiny C FFI fixture exporting function symbols and a `clap_entry` data symbol.
-- Nim-to-C and C-to-Nim callback round trips.
-- Callback invocation from a C-created pthread with no exception crossing the ABI.
-- A process-callback-shaped POD-only function compiled with ARC and `raises: []`.
-- Allocation/runtime-initialization instrumentation, including the first foreign-thread call.
-- A meaningful `nimble testRt` task integrated into `nimble all`.
-- Transition of `VERSION`, Nimble metadata, version output/tests, and documentation to
-  `0.0.2-dev` when the review unit is complete.
-
-Expected primary files include `src/pluginhost/platform/linux/dynlib.nim`,
-`tests/fixtures/ffi/ffi_fixture.c`, `tests/abi/test_dynlib.nim`,
-`tests/abi/test_foreign_callbacks.nim`, and `tests/rt/test_callback_safety.nim`.
-
-Do not proceed into plugin discovery, descriptor policy, or host lifecycle policy.
-Raw FFI modules remain policy-free. Stop for review after unit 1B.
+Do not create or initialize a plugin instance, open JACK, add lifecycle policy, or
+start Increment 3 behavior. Keep raw pointers inside the CLAP adapter and copy all
+descriptor metadata before a module is unloaded.
 
 ## Non-negotiable engineering rules
 

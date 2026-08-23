@@ -7,7 +7,7 @@ const projectRoot = currentSourcePath.parentDir.parentDir.parentDir
 suite "version information":
   test "the compiled version matches the root VERSION file":
     check Version == readFile(projectRoot / "VERSION").strip()
-    check PackageVersion == "0.0.1"
+    check PackageVersion == "0.0.2"
     let nimbleFile = readFile(projectRoot / "pluginhost.nimble")
     check nimbleFile.contains("version       = \"" & PackageVersion & "\"")
 
@@ -16,4 +16,5 @@ suite "version information":
 
     check text.startsWith("pluginhost " & Version & "\n")
     check text.contains("Nim " & NimVersion)
-    check text.contains("CLAP SDK not integrated")
+    check text.contains("CLAP SDK 1.2.10")
+    check text.contains("JACK ABI libjack.so.0")

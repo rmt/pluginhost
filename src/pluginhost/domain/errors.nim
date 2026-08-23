@@ -3,12 +3,16 @@ type
     hsCli = "CLI"
     hsApplication = "application"
     hsInternal = "internal"
+    hsPlatform = "platform"
 
   HostErrorKind* = enum
     hekUsage
     hekNotImplemented
     hekInvalidTransition
     hekInternal
+    hekLibraryOpen
+    hekSymbolLookup
+    hekLibraryClose
 
   HostError* = object
     subsystem*: HostSubsystem
@@ -43,5 +47,6 @@ proc exitCode*(error: HostError): int =
   case error.kind
   of hekUsage:
     ExitUsage
-  of hekNotImplemented, hekInvalidTransition, hekInternal:
+  of hekNotImplemented, hekInvalidTransition, hekInternal, hekLibraryOpen,
+      hekSymbolLookup, hekLibraryClose:
     ExitFailure

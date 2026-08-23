@@ -774,11 +774,11 @@ Future sandboxing should introduce a process-boundary adapter and real-time IPC 
 
 ## 19. Deliberately deferred decisions
 
-The following require prototypes or product decisions before being fixed:
+The following require prototypes or product decisions before being fixed. The
+CLAP binding strategy and direct minimal JACK FFI choices are resolved by ADRs
+0001 and 0002 respectively:
 
 - Xlib versus XCB for the concrete X11 adapter.
-- Direct minimal JACK bindings versus an audited use/fork of `jacket`.
-- Hand-maintained versus generated CLAP bindings.
 - Exact bounded queue algorithms and capacities beyond the required event minimum.
 - Whether the reactor uses direct `epoll` FFI or a proven Nim wrapper.
 - Port reconnection policy after structural rescans.

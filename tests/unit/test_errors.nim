@@ -29,3 +29,16 @@ suite "typed errors and diagnostics":
 
     check not withoutContext.contains("()")
     check withContext.contains("(operation=start)")
+
+  test "platform loader errors retain their typed subsystem and failure status":
+    let error = hostError(
+      hsPlatform,
+      hekSymbolLookup,
+      "could not resolve dynamic-library symbol",
+      "path=fixture.clap; symbol=clap_entry",
+    )
+    let text = formatDiagnostic(error)
+
+    check error.exitCode() == ExitFailure
+    check text.contains("platform error")
+    check text.contains("symbol=clap_entry")
