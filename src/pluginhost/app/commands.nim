@@ -1,6 +1,7 @@
 import std/strutils
 
-import ./[host_session, run_config]
+import ./[catalog_output, host_session, run_config]
+import ../clap/loader
 import ../domain/[errors, result]
 import ../support/diagnostics
 import ../version
@@ -19,6 +20,18 @@ proc executeRun(config: RunConfig; errorOutput: File): int =
     return closeResult.error.exitCode()
   ExitSuccess
 
+proc executeList(config: ListConfig; output, errorOutput: File): int =
+  var catalog = loadCatalog(config.pluginPath)
+  if not catalog.isOk:
+    errorOutput.writeDiagnostic(catalog.error)
+    return catalog.error.exitCode()
+
+  if config.jsonOutput:
+    output.write(renderCatalogJson(catalog.value))
+  else:
+    output.write(renderCatalogHuman(catalog.value))
+  ExitSuccess
+
 proc execute*(command: Command; output, errorOutput: File): int =
   case command.kind
   of ckHelp:
@@ -30,12 +43,7 @@ proc execute*(command: Command; output, errorOutput: File): int =
   of ckRun:
     executeRun(command.runConfig, errorOutput)
   of ckList:
-    let error = notImplementedError(
-      "plugin listing is not implemented in this development increment",
-      command.listConfig.pluginPath,
-    )
-    errorOutput.writeDiagnostic(error)
-    error.exitCode()
+    executeList(command.listConfig, output, errorOutput)
   of ckScan:
     let context = if command.scanConfig.directories.len == 0:
       "standard CLAP paths"

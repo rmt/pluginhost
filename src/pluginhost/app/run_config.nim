@@ -1,20 +1,9 @@
 import std/options
 
+import ../domain/plugin_catalog
+export plugin_catalog
+
 type
-  PluginSelectorKind* = enum
-    pskImplicitSingle
-    pskId
-    pskIndex
-
-  PluginSelector* = object
-    case kind*: PluginSelectorKind
-    of pskImplicitSingle:
-      discard
-    of pskId:
-      pluginId*: string
-    of pskIndex:
-      pluginIndex*: int
-
   GuiPolicy* = enum
     gpShow
     gpHidden

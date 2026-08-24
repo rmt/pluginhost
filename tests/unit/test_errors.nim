@@ -42,3 +42,22 @@ suite "typed errors and diagnostics":
     check error.exitCode() == ExitFailure
     check text.contains("platform error")
     check text.contains("symbol=clap_entry")
+
+  test "CLAP and selection errors use their dedicated statuses":
+    let loadError = hostError(
+      hsClap, hekClapEntryInit, "entry initialization failed", "bad.clap")
+    let selectionError = hostError(
+      hsClap, hekPluginSelection, "selection required", "multi.clap")
+
+    check loadError.exitCode() == ExitClap
+    check formatDiagnostic(loadError).contains("CLAP error")
+    check selectionError.exitCode() == ExitUsage
+    check formatDiagnostic(selectionError).contains("pluginhost --help")
+
+  test "diagnostic context escapes invalid text and control characters":
+    let malformed = "path=bad\n\x1b\xFF.clap"
+    let text = formatDiagnostic(hostError(
+      hsClap, hekClapEntry, "could not load", malformed))
+
+    check text.contains("path=bad\\u000a\\u001b�.clap")
+    check not text.contains("path=bad\n")

@@ -4,6 +4,7 @@ type
     hsApplication = "application"
     hsInternal = "internal"
     hsPlatform = "platform"
+    hsClap = "CLAP"
 
   HostErrorKind* = enum
     hekUsage
@@ -13,6 +14,14 @@ type
     hekLibraryOpen
     hekSymbolLookup
     hekLibraryClose
+    hekClapPath
+    hekClapEntry
+    hekClapVersion
+    hekClapEntryInit
+    hekClapFactory
+    hekClapDescriptor
+    hekClapUnload
+    hekPluginSelection
 
   HostError* = object
     subsystem*: HostSubsystem
@@ -24,6 +33,7 @@ const
   ExitSuccess* = 0
   ExitFailure* = 1
   ExitUsage* = 2
+  ExitClap* = 3
 
 proc hostError*(subsystem: HostSubsystem; kind: HostErrorKind;
                 message: string; context = ""): HostError =
@@ -45,8 +55,11 @@ proc transitionError*(message: string; context = ""): HostError =
 
 proc exitCode*(error: HostError): int =
   case error.kind
-  of hekUsage:
+  of hekUsage, hekPluginSelection:
     ExitUsage
+  of hekClapPath, hekClapEntry, hekClapVersion, hekClapEntryInit,
+      hekClapFactory, hekClapDescriptor, hekClapUnload:
+    ExitClap
   of hekNotImplemented, hekInvalidTransition, hekInternal, hekLibraryOpen,
       hekSymbolLookup, hekLibraryClose:
     ExitFailure

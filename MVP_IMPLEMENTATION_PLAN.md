@@ -3,7 +3,7 @@
 **Plan version:** 1.0.0  
 **Target product release:** `pluginhost` 0.1.0  
 **Initial development version:** 0.0.1-dev  
-**Status:** Approved; Increment 1 completed and accepted  
+**Status:** Approved; Increment 2 review unit 2A accepted, 2B not started  
 **Companion documents:** [`REQUIREMENTS.md`](REQUIREMENTS.md), [`DESIGN.md`](DESIGN.md)
 
 ## 1. Purpose
@@ -703,7 +703,7 @@ This table is updated only when work is reviewed.
 |---|---|---|---|
 | 0 — Scaffolding | Approved | Iteration 0 review | Includes the `argparse` 4.0.2 CLI |
 | 1 — FFI/ABI | Approved | Review unit 1B | Includes verified ownership, callbacks, and RT spike |
-| 2 — CLAP catalog | Not started | — | — |
+| 2 — CLAP catalog | In progress | Review unit 2A approved | Loader, catalog, and `list` accepted; discovery/`scan` next |
 | 3 — CLAP lifecycle | Not started | — | — |
 | 4 — JACK/RT harness | Not started | — | — |
 | 5 — Audio vertical slice | Not started | — | — |

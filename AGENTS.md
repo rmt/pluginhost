@@ -49,32 +49,36 @@ The progress table changes only after human review. A task appearing in the plan
 As of the latest reviewed state:
 
 - Default/current branch: `main`; inspect `git status` and `git log` before editing.
-- Version: `0.0.2-dev` (`pluginhost.nimble` uses numeric `0.0.2` because of Nimble metadata syntax).
-- Increments 0 and 1 are approved; Increment 2 is not started.
+- Version: `0.0.3-dev` (`pluginhost.nimble` uses numeric `0.0.3` because of Nimble metadata syntax).
+- Increments 0 and 1 are approved.
+- Increment 2 review unit 2A is approved; review unit 2B is not started.
 - The CLI uses exactly pinned `argparse` 4.0.2.
-- Valid `run`, `list`, and `scan` requests intentionally return typed `NotImplemented` failures.
+- `list` now reports copied CLAP descriptors in human or JSON form without creating
+  a plugin instance; valid `run` and `scan` requests remain typed stubs.
 - Official CLAP 1.2.10 headers and MIT license are pinned under `vendor/clap/`.
-- Handwritten policy-free CLAP and JACK declarations are covered by C-versus-Nim ABI checks.
-- Linux DSO ownership, function/data symbols, C/Nim callbacks, and a foreign pthread callback are tested.
-- The ARC RT spike checks allocator counters and audits the generated process-shaped callback.
-- The current suite contains 24 unit, 20 ABI, and 4 RT tests (48 total).
-- There is no product CLAP discovery/instance loading, JACK client integration, GUI, state, scanning, or real-time processing yet.
+- CLAP/JACK declarations, Linux DSO ownership, C/Nim callbacks, and the ARC RT
+  spike retain their ABI, foreign-thread, allocator, and generated-C checks.
+- The current suite contains 37 unit, 20 ABI, 12 fixture, and 4 RT tests (73 total).
+- There is no product discovery, plugin instance, JACK client integration, GUI,
+  state, scanning, or real-time processing yet.
 - No remote repository or project license is currently configured.
 
 Current source responsibilities:
 
 - `src/pluginhost.nim` — process composition root and exit handling.
-- `src/pluginhost/app/` — CLI configuration, dispatch, and explicit operation/session stubs.
-- `src/pluginhost/domain/` — typed results, errors, and lifecycle transitions.
+- `src/pluginhost/app/` — CLI configuration, output rendering, dispatch, and stubs.
+- `src/pluginhost/domain/` — typed results/errors/lifecycle plus host-owned catalog values.
 - `src/pluginhost/clap/ffi.nim` — stable CLAP 1.2.10 raw ABI declarations.
+- `src/pluginhost/clap/loader.nim` — move-only entry/factory ownership and copied catalog extraction.
 - `src/pluginhost/jack/ffi.nim` — minimal JACK client raw ABI declarations.
 - `src/pluginhost/platform/linux/dynlib.nim` — checked, move-only DSO ownership.
-- `src/pluginhost/support/diagnostics.nim` — user-facing diagnostics.
+- `src/pluginhost/support/` — user diagnostics and UTF-8 boundary sanitization.
 - `src/pluginhost/version.nim` — embedded product/SDK/ABI version information.
 - `c/abi_probe.c` and `tests/abi/` — C-header, loader, and callback conformance tests.
-- `tests/fixtures/ffi/` — independently compiled C boundary fixture.
+- `tests/fixtures/clap/` — independently compiled synthetic CLAP libraries.
+- `tests/fixtures/ffi/` — independently compiled callback/DSO fixture.
 - `tests/rt/` — ARC allocator instrumentation and generated-C callback audit.
-- `tests/unit/` — CLI, process, lifecycle, error, and version tests.
+- `tests/unit/` — pure CLI, output, selection, text, lifecycle, error, and version tests.
 - `docs/adr/` — accepted binding-strategy decisions.
 - `vendor/clap/` — unmodified upstream headers, license, and provenance.
 
@@ -89,41 +93,51 @@ nimble check
 nimble build
 nimble test
 nimble testAbi
+nimble testFixtures
 nimble testRt
 nimble all
 ```
 
 `nimble test` builds a process-test executable and runs the fast unit suite.
 `nimble testAbi` checks ABI declarations, DSO ownership, and C/Nim callbacks.
+`nimble testFixtures` builds independent synthetic CLAP DSOs and checks module,
+catalog, cleanup, and process-level `list` behavior.
 `nimble testRt` runs the current ARC allocation spike and generated-C audit.
-`nimble all` also performs source compile, ABI, and RT checks. New planned tasks
-such as `testFixtures` should be introduced only when they perform real checks;
-an unavailable task must not report a false pass.
+`nimble all` performs source compile, unit, ABI, fixture, and RT checks. An
+unavailable task must not report a false pass.
 
 For user-visible CLI changes, also exercise the compiled process directly and verify stdout, stderr, and exit codes. Existing stubs are expected to fail with a non-zero status.
 
-## Next planned work: Increment 2
+## Next planned work: Increment 2 review unit 2B
 
-The next increment is **CLAP catalog, `list`, and discovery**, planned for
-`0.0.3-dev`. Before writing code, present the section 4.1 pre-code review package
-and wait for explicit approval. It must cover:
+Review unit 2B is the approved discovery and `scan` slice. When the user asks to
+continue, implement it without re-proposing unless fresh research requires an
+architecture, dependency, or scope change. Recheck the clean reviewed baseline first.
+The approved behavior is:
 
-- Goal, explicit non-goals, exact files, interfaces, and dependency direction.
-- `ClapModule` ownership of the DSO, `clap_entry`, successful entry init/deinit,
-  factory lookup, and cleanup at every partial initialization level.
-- Host-owned copied descriptor values, mandatory-field validation, invalid text
-  handling, and selection by exact ID or zero-based index.
-- Human-readable and JSON `list` behavior without creating a plugin instance.
-- Discovery roots/order, `.clap` candidates, canonical deduplication, recursive
-  traversal, symlink-loop prevention, and per-candidate failure isolation.
-- An independent synthetic CLAP fixture with multiple descriptors, controllable
-  invalid cases, and counters proving matched init/deinit and no instance creation.
-- Unit/fixture tests, exact commands, manual verification, security documentation,
-  dependencies, risks, and any decisions requiring human judgment.
+- Explicit roots are exclusive and retain CLI order.
+- With no explicit roots, scan `~/.clap`, `/usr/lib/clap`, then non-empty
+  `CLAP_PATH` entries in textual order; empty components are ignored.
+- Missing standard roots are skipped. Missing/unreadable explicit or `CLAP_PATH`
+  roots are reported without stopping later roots.
+- Traverse deterministically in lexical depth-first order. Do not follow nested
+  symlink directories; allow symlinks to files after canonicalization.
+- Accept regular Linux files ending exactly in lowercase `.clap`; deduplicate
+  canonical roots/candidates with first occurrence winning.
+- Return copied `DiscoveredPlugin`, `DiscoveryIssue`, and `ScanReport` values.
+- Continue after candidate failures. Emit successful records, write issues to stderr,
+  and return CLAP status 3 after completion if any issue occurred.
+- JSON stdout remains one valid `{\"plugins\": [...]}` document and never contains
+  diagnostics, including on partial failure.
+- Extend fixture/unit/process tests for precedence, recursion, lexical order,
+  canonical deduplication, symlink loops, failure isolation, JSON cleanliness,
+  matched init/deinit, and zero plugin creation.
+- Update the security documentation to cover scanning third-party native code.
 
-Do not create or initialize a plugin instance, open JACK, add lifecycle policy, or
-start Increment 3 behavior. Keep raw pointers inside the CLAP adapter and copy all
-descriptor metadata before a module is unloaded.
+Expected modules are `src/pluginhost/discovery/paths.nim` and `scanner.nim`, plus
+focused tests and command/output integration. Keep version `0.0.3-dev`. Do not create
+a plugin instance, implement `run`, add a cache, follow directory symlinks, open JACK,
+or begin Increment 3 lifecycle work. Stop for human review when 2B is complete.
 
 ## Non-negotiable engineering rules
 

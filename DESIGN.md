@@ -614,6 +614,7 @@ src/
       errors.nim
       lifecycle.nim
       metrics.nim
+      plugin_catalog.nim
       port_plan.nim
       result.nim
     clap/
