@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <clap/entry.h>
 #include <clap/factory/plugin-factory.h>
@@ -38,6 +39,7 @@
 #define MODE_INCOMPATIBLE_DESCRIPTOR 16
 #define MODE_NULL_ID 17
 #define MODE_ZERO_DESCRIPTORS 18
+#define MODE_CREATE_GUARD 19
 
 #define MAX_TEXT_BYTES (64U * 1024U)
 #define OVERSIZED_TEXT_BYTES (MAX_TEXT_BYTES + 1U)
@@ -246,6 +248,8 @@ static const clap_plugin_t *fixture_create_plugin(
    (void)host;
    (void)plugin_id;
    ++create_count;
+   if (PLUGINHOST_CLAP_FIXTURE_MODE == MODE_CREATE_GUARD)
+      _exit(97);
    return NULL;
 }
 

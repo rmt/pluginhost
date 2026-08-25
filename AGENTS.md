@@ -50,26 +50,27 @@ As of the latest reviewed state:
 
 - Default/current branch: `main`; inspect `git status` and `git log` before editing.
 - Version: `0.0.3-dev` (`pluginhost.nimble` uses numeric `0.0.3` because of Nimble metadata syntax).
-- Increments 0 and 1 are approved.
-- Increment 2 review unit 2A is approved; review unit 2B is not started.
+- Increments 0, 1, and 2 are approved; Increment 2 includes review units 2A and 2B.
 - The CLI uses exactly pinned `argparse` 4.0.2.
-- `list` now reports copied CLAP descriptors in human or JSON form without creating
-  a plugin instance; valid `run` and `scan` requests remain typed stubs.
+- `list` and `scan` report copied CLAP descriptors without creating a plugin
+  instance; `run` remains a typed stub.
 - Official CLAP 1.2.10 headers and MIT license are pinned under `vendor/clap/`.
 - CLAP/JACK declarations, Linux DSO ownership, C/Nim callbacks, and the ARC RT
   spike retain their ABI, foreign-thread, allocator, and generated-C checks.
-- The current suite contains 37 unit, 20 ABI, 12 fixture, and 4 RT tests (73 total).
-- There is no product discovery, plugin instance, JACK client integration, GUI,
-  state, scanning, or real-time processing yet.
+- The current suite contains 41 unit, 20 ABI, 18 fixture, and 4 RT tests (83 total).
+- There is no plugin instance, JACK client integration, GUI, state, or real-time
+  processing yet.
 - No remote repository or project license is currently configured.
 
 Current source responsibilities:
 
 - `src/pluginhost.nim` — process composition root and exit handling.
-- `src/pluginhost/app/` — CLI configuration, output rendering, dispatch, and stubs.
+- `src/pluginhost/app/` — CLI configuration, output rendering, dispatch, and the run stub.
 - `src/pluginhost/domain/` — typed results/errors/lifecycle plus host-owned catalog values.
 - `src/pluginhost/clap/ffi.nim` — stable CLAP 1.2.10 raw ABI declarations.
 - `src/pluginhost/clap/loader.nim` — move-only entry/factory ownership and copied catalog extraction.
+- `src/pluginhost/discovery/paths.nim` and `scanner.nim` — ordered roots, deterministic
+  candidate traversal, canonical deduplication, and scan reports.
 - `src/pluginhost/jack/ffi.nim` — minimal JACK client raw ABI declarations.
 - `src/pluginhost/platform/linux/dynlib.nim` — checked, move-only DSO ownership.
 - `src/pluginhost/support/` — user diagnostics and UTF-8 boundary sanitization.
@@ -78,7 +79,7 @@ Current source responsibilities:
 - `tests/fixtures/clap/` — independently compiled synthetic CLAP libraries.
 - `tests/fixtures/ffi/` — independently compiled callback/DSO fixture.
 - `tests/rt/` — ARC allocator instrumentation and generated-C callback audit.
-- `tests/unit/` — pure CLI, output, selection, text, lifecycle, error, and version tests.
+- `tests/unit/` — pure CLI, output, discovery policy, selection, text, lifecycle, error, and version tests.
 - `docs/adr/` — accepted binding-strategy decisions.
 - `vendor/clap/` — unmodified upstream headers, license, and provenance.
 
@@ -101,43 +102,63 @@ nimble all
 `nimble test` builds a process-test executable and runs the fast unit suite.
 `nimble testAbi` checks ABI declarations, DSO ownership, and C/Nim callbacks.
 `nimble testFixtures` builds independent synthetic CLAP DSOs and checks module,
-catalog, cleanup, and process-level `list` behavior.
+catalog, cleanup, process-level `list`, and discovery/`scan` behavior.
 `nimble testRt` runs the current ARC allocation spike and generated-C audit.
 `nimble all` performs source compile, unit, ABI, fixture, and RT checks. An
 unavailable task must not report a false pass.
 
 For user-visible CLI changes, also exercise the compiled process directly and verify stdout, stderr, and exit codes. Existing stubs are expected to fail with a non-zero status.
 
-## Next planned work: Increment 2 review unit 2B
+## Next planned work: Increment 3 review unit 3A
 
-Review unit 2B is the approved discovery and `scan` slice. When the user asks to
-continue, implement it without re-proposing unless fresh research requires an
-architecture, dependency, or scope change. Recheck the clean reviewed baseline first.
-The approved behavior is:
+Increment 2 is approved. The next fresh session must present the Increment 3A
+pre-code package and obtain approval before editing; do not begin implementation
+merely because this section is prepared. Keep version `0.0.3-dev` until the next
+reviewed increment is complete.
 
-- Explicit roots are exclusive and retain CLI order.
-- With no explicit roots, scan `~/.clap`, `/usr/lib/clap`, then non-empty
-  `CLAP_PATH` entries in textual order; empty components are ignored.
-- Missing standard roots are skipped. Missing/unreadable explicit or `CLAP_PATH`
-  roots are reported without stopping later roots.
-- Traverse deterministically in lexical depth-first order. Do not follow nested
-  symlink directories; allow symlinks to files after canonicalization.
-- Accept regular Linux files ending exactly in lowercase `.clap`; deduplicate
-  canonical roots/candidates with first occurrence winning.
-- Return copied `DiscoveredPlugin`, `DiscoveryIssue`, and `ScanReport` values.
-- Continue after candidate failures. Emit successful records, write issues to stderr,
-  and return CLAP status 3 after completion if any issue occurred.
-- JSON stdout remains one valid `{\"plugins\": [...]}` document and never contains
-  diagnostics, including on partial failure.
-- Extend fixture/unit/process tests for precedence, recursion, lexical order,
-  canonical deduplication, symlink loops, failure isolation, JSON cleanliness,
-  matched init/deinit, and zero plugin creation.
-- Update the security documentation to cover scanning third-party native code.
+### Goal
 
-Expected modules are `src/pluginhost/discovery/paths.nim` and `scanner.nim`, plus
-focused tests and command/output integration. Keep version `0.0.3-dev`. Do not create
-a plugin instance, implement `run`, add a cache, follow directory symlinks, open JACK,
-or begin Increment 3 lifecycle work. Stop for human review when 2B is complete.
+Create, initialize, inspect, and destroy exactly one CLAP plugin instance correctly,
+without JACK processing, GUI, state persistence, or public `run` behavior.
+
+### Recommended review-unit split
+
+- **3A:** stable `ClapHostBridge`, host identity/core callbacks, bounded request/log
+  transport, `ClapInstance` create/init/destroy, extension caching, and partial cleanup.
+- **3B:** deactivated-plugin port inspection, immutable `PortPlan`, and render-mode
+  negotiation. No JACK processing or public `run` behavior.
+
+Implement 3A only, then stop for review before 3B.
+
+### Expected files and interfaces
+
+- `src/pluginhost/clap/host_bridge.nim` — stable host storage, host identity, extension
+  lookup, and tested request/log transport; no raw host pointer escapes its owner.
+- `src/pluginhost/clap/instance.nim` — explicit instance state machine, selected
+  descriptor creation, plugin `init()`/`destroy()`, cached extension pointers, and
+  idempotent cleanup while the `ClapModule` remains alive.
+- Focused domain/request types only where a real ownership or queue boundary requires
+  them; do not create future JACK/GUI/state modules as scaffolding.
+- Extend the independent CLAP fixture and add focused lifecycle/process tests.
+
+The proposed boundary must preserve stable host strings/vtables through plugin destroy,
+keep all C callbacks `cdecl`, `gcsafe`, and `raises: []`, and expose only completely
+implemented host extensions. `run` remains an explicit failure.
+
+### Tests, dependencies, and risks
+
+- Success and every create/init/destroy partial-failure transition, repeated cleanup,
+  no calls after destroy/deinit, and host-storage lifetime.
+- Host identity and extension lookup, main-thread identity, request coalescing, bounded
+  log overflow, callback context, and malformed plugin responses.
+- Port inspection/render negotiation are deferred to 3B; JACK and RT behavior are
+  explicitly out of scope.
+- No new third-party dependency is expected; use existing raw CLAP FFI and ownership.
+- Main risks are callback lifetime, plugin calls after teardown, extension advertisement
+  before implementation, and unbounded callback-thread logging/request behavior.
+
+Stop at the 3A human review gate. Do not implement 3B, JACK, GUI, state, caching,
+or a plugin processing loop.
 
 ## Non-negotiable engineering rules
 

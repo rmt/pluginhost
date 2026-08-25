@@ -57,6 +57,7 @@ proc compileClapFixtures() =
   compileClapFixtureVariant("incompatible_descriptor", 16)
   compileClapFixtureVariant("null_id", 17)
   compileClapFixtureVariant("zero_descriptors", 18)
+  compileClapFixtureVariant("create_guard", 19)
   exec "cc -std=gnu11 -fPIC -shared -fvisibility=hidden " &
        "-Wall -Wextra -Werror -Wl,-z,defs " &
        "tests/fixtures/clap/no_entry_fixture.c " &

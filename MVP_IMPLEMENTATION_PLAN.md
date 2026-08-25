@@ -3,7 +3,7 @@
 **Plan version:** 1.0.0  
 **Target product release:** `pluginhost` 0.1.0  
 **Initial development version:** 0.0.1-dev  
-**Status:** Approved; Increment 2 review unit 2A accepted, 2B not started  
+**Status:** Approved; Increment 2 complete, Increment 3 not started
 **Companion documents:** [`REQUIREMENTS.md`](REQUIREMENTS.md), [`DESIGN.md`](DESIGN.md)
 
 ## 1. Purpose
@@ -303,6 +303,16 @@ Review DSO/entry ownership, untrusted descriptor handling, scan behavior, JSON c
 ### Goal
 
 Create, initialize, inspect, and destroy one CLAP instance correctly without JACK processing.
+
+### Recommended review split
+
+To keep lifecycle and port-model risks separately reviewable:
+
+- **Review unit 3A:** stable `ClapHostBridge`, core host callbacks, bounded request/log
+  transport, `ClapInstance` creation/init/destroy, extension caching, and every partial
+  cleanup path. No port-plan or JACK work.
+- **Review unit 3B:** deactivated-plugin port inspection, immutable `PortPlan`, and
+  render-mode negotiation. No JACK processing or public `run` behavior.
 
 ### Implementation
 
@@ -703,8 +713,8 @@ This table is updated only when work is reviewed.
 |---|---|---|---|
 | 0 — Scaffolding | Approved | Iteration 0 review | Includes the `argparse` 4.0.2 CLI |
 | 1 — FFI/ABI | Approved | Review unit 1B | Includes verified ownership, callbacks, and RT spike |
-| 2 — CLAP catalog | In progress | Review unit 2A approved | Loader, catalog, and `list` accepted; discovery/`scan` next |
-| 3 — CLAP lifecycle | Not started | — | — |
+| 2 — CLAP catalog | Approved | Review unit 2B | Loader, catalog, `list`, discovery, and `scan` accepted |
+| 3 — CLAP lifecycle | Not started | — | Next session: present review-unit-3A pre-code package |
 | 4 — JACK/RT harness | Not started | — | — |
 | 5 — Audio vertical slice | Not started | — | — |
 | 6 — MIDI/events | Not started | — | — |
@@ -751,6 +761,9 @@ These do not enter 0.1.0 unless a requirement is deliberately revised:
 
 Each candidate requires requirements/design updates and, where architectural, an ADR before implementation.
 
-## 23. First action after plan approval
+## 23. First action after each review gate
 
-After the human approves this plan, begin only **Increment 0**. Before generating scaffolding code, present the increment-0 pre-code package required by section 4.1: proposed files, interfaces, tests, commands, and any small deviations from the source layout in `DESIGN.md`.
+After the human approves a completed increment, update the progress table, current
+state, verification counts, and next-session gate. For the current state, the next
+session must present the Increment 3A pre-code package before generating lifecycle
+code, then stop for approval.

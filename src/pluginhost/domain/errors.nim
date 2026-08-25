@@ -5,6 +5,7 @@ type
     hsInternal = "internal"
     hsPlatform = "platform"
     hsClap = "CLAP"
+    hsDiscovery = "discovery"
 
   HostErrorKind* = enum
     hekUsage
@@ -21,6 +22,9 @@ type
     hekClapFactory
     hekClapDescriptor
     hekClapUnload
+    hekDiscoveryRoot
+    hekDiscoveryTraversal
+    hekDiscoveryCandidate
     hekPluginSelection
 
   HostError* = object
@@ -58,7 +62,8 @@ proc exitCode*(error: HostError): int =
   of hekUsage, hekPluginSelection:
     ExitUsage
   of hekClapPath, hekClapEntry, hekClapVersion, hekClapEntryInit,
-      hekClapFactory, hekClapDescriptor, hekClapUnload:
+      hekClapFactory, hekClapDescriptor, hekClapUnload, hekDiscoveryRoot,
+      hekDiscoveryTraversal, hekDiscoveryCandidate:
     ExitClap
   of hekNotImplemented, hekInvalidTransition, hekInternal, hekLibraryOpen,
       hekSymbolLookup, hekLibraryClose:

@@ -610,6 +610,9 @@ src/
       commands.nim
       host_session.nim
       run_config.nim
+    discovery/
+      paths.nim
+      scanner.nim
     domain/
       errors.nim
       lifecycle.nim

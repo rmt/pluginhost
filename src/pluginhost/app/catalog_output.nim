@@ -1,6 +1,7 @@
 import std/json
 
 import ../domain/plugin_catalog
+import ../discovery/scanner
 import ../support/utf8
 
 proc renderDescriptorHuman(descriptor: PluginDescriptor): string =
@@ -40,5 +41,28 @@ proc renderCatalogJson*(catalog: PluginCatalog): string =
 
   var root = newJObject()
   root["path"] = %replaceInvalidUtf8(catalog.canonicalPath)
+  root["plugins"] = plugins
+  $root & "\n"
+
+proc renderScanHuman*(report: ScanReport): string =
+  if report.plugins.len == 0:
+    return "No CLAP plugins found.\n"
+  var lastPath = ""
+  for plugin in report.plugins:
+    if plugin.path != lastPath:
+      if result.len > 0:
+        result.add("\n")
+      result.add("Path: " & escapeControlText(plugin.path) & "\n")
+      lastPath = plugin.path
+    result.add(renderDescriptorHuman(plugin.descriptor))
+
+proc renderScanJson*(report: ScanReport): string =
+  var plugins = newJArray()
+  for plugin in report.plugins:
+    var value = descriptorJson(plugin.descriptor)
+    value["path"] = %replaceInvalidUtf8(plugin.path)
+    plugins.add(value)
+
+  var root = newJObject()
   root["plugins"] = plugins
   $root & "\n"

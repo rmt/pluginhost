@@ -1,6 +1,7 @@
 import std/[json, strutils, unittest]
 
 import pluginhost/app/catalog_output
+import pluginhost/discovery/scanner
 import pluginhost/domain/plugin_catalog
 
 proc exampleCatalog(): PluginCatalog =
@@ -60,3 +61,32 @@ suite "plugin catalog rendering":
 
   test "an empty human catalog reports its state truthfully":
     check renderCatalogHuman(PluginCatalog()).contains("No CLAP")
+
+  test "scan output groups descriptors by canonical library":
+    let report = ScanReport(
+      plugins: @[
+        DiscoveredPlugin(
+          path: "/plugins/example.clap",
+          descriptor: exampleCatalog().descriptors[0],
+        ),
+      ],
+    )
+    let human = renderScanHuman(report)
+    let parsed = parseJson(renderScanJson(report))
+
+    check human.contains("Path: /plugins/example.clap")
+    check human.contains("[0] Example Synth")
+    check parsed.len == 1
+    check parsed["plugins"].len == 1
+    check parsed["plugins"][0]["path"].getStr() ==
+      "/plugins/example.clap"
+    check parsed["plugins"][0]["id"].getStr() == "org.example.synth"
+
+  test "scan JSON is clean and empty when no candidates succeed":
+    let rendered = renderScanJson(ScanReport())
+    let parsed = parseJson(rendered)
+
+    check rendered.endsWith("\n")
+    check parsed.kind == JObject
+    check parsed.len == 1
+    check parsed["plugins"].len == 0

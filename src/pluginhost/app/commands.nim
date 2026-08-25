@@ -1,7 +1,6 @@
-import std/strutils
-
 import ./[catalog_output, host_session, run_config]
 import ../clap/loader
+import ../discovery/scanner
 import ../domain/[errors, result]
 import ../support/diagnostics
 import ../version
@@ -45,16 +44,17 @@ proc execute*(command: Command; output, errorOutput: File): int =
   of ckList:
     executeList(command.listConfig, output, errorOutput)
   of ckScan:
-    let context = if command.scanConfig.directories.len == 0:
-      "standard CLAP paths"
+    let report = scanPlugins(command.scanConfig.directories)
+    if command.scanConfig.jsonOutput:
+      output.write(renderScanJson(report))
     else:
-      command.scanConfig.directories.join(", ")
-    let error = notImplementedError(
-      "plugin scanning is not implemented in this development increment",
-      context,
-    )
-    errorOutput.writeDiagnostic(error)
-    error.exitCode()
+      output.write(renderScanHuman(report))
+    for issue in report.issues:
+      errorOutput.writeDiagnostic(issue.error)
+    if report.issues.len > 0:
+      ExitClap
+    else:
+      ExitSuccess
 
 proc execute*(command: Command): int =
   execute(command, stdout, stderr)
