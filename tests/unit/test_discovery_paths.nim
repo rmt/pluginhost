@@ -1,6 +1,7 @@
-import std/[unittest]
+import std/[os, strutils, unittest]
 
-import pluginhost/discovery/paths
+import pluginhost/discovery/[paths, scanner]
+import pluginhost/domain/errors
 
 suite "CLAP discovery root policy":
   test "explicit roots are exclusive and preserve order":
@@ -24,3 +25,34 @@ suite "CLAP discovery root policy":
     check roots[2].kind == drkEnvironment
     check roots[3].path == "/two"
     check roots[3].kind == drkEnvironment
+
+  test "missing standard roots are skipped":
+    let root = getTempDir() / ("pluginhost-missing-home-" &
+      $getCurrentProcessId()) / ".clap"
+    let report = scanConfiguredRoots(@[
+      DiscoveryRoot(path: root, kind: drkHome),
+    ])
+
+    check report.plugins.len == 0
+    check report.issues.len == 0
+
+  test "inaccessible standard roots are reported":
+    let root = getTempDir() / ("pluginhost-inaccessible-home-" &
+      $getCurrentProcessId())
+    if dirExists(root):
+      setFilePermissions(root, {fpUserExec, fpUserWrite, fpUserRead})
+      removeDir(root)
+    createDir(root)
+    defer: removeDir(root)
+    defer: setFilePermissions(root,
+      {fpUserExec, fpUserWrite, fpUserRead})
+    setFilePermissions(root, {})
+
+    let report = scanConfiguredRoots(@[
+      DiscoveryRoot(path: root / ".clap", kind: drkHome),
+    ])
+
+    check report.plugins.len == 0
+    check report.issues.len == 1
+    check report.issues[0].error.kind == hekDiscoveryRoot
+    check report.issues[0].error.context.contains("source=home")

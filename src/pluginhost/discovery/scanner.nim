@@ -1,4 +1,4 @@
-import std/[algorithm, os, sets, strutils]
+import std/[algorithm, os, posix, sets, strutils]
 
 import ../clap/loader
 import ../domain/[errors, plugin_catalog]
@@ -38,14 +38,8 @@ proc rootFallbackPath(path: string): string =
   except ValueError:
     result = path
 
-proc rootUnavailable(root: DiscoveryRoot): bool =
-  ## A failed lstat means the root is absent. For standard roots this is the
-  ## documented harmless case; explicit and CLAP_PATH roots remain reportable.
-  try:
-    discard getFileInfo(root.path, followSymlink = false)
-    false
-  except OSError:
-    true
+proc missingRootError(code: cint): bool =
+  code == ENOENT or code == ENOTDIR
 
 proc canonicalRoot(root: DiscoveryRoot; report: var ScanReport): string =
   if root.path.len == 0:
@@ -69,7 +63,9 @@ proc canonicalRoot(root: DiscoveryRoot; report: var ScanReport): string =
       return
     result = expandFilename(root.path)
   except OSError as error:
-    if root.kind in {drkHome, drkSystem} and rootUnavailable(root):
+    let errorCode = errno
+    if root.kind in {drkHome, drkSystem} and
+        missingRootError(errorCode):
       return
     report.addIssue(root.path, discoveryError(
       hekDiscoveryRoot,
@@ -159,9 +155,8 @@ proc walkDirectory(directory: string; report: var ScanReport;
       # followed or loaded. A configured root itself was canonicalized above.
       discard
 
-proc scanPlugins*(explicitRoots: openArray[string];
-                  clapPath = getEnv("CLAP_PATH")): ScanReport =
-  let roots = discoveryRoots(explicitRoots, clapPath = clapPath)
+proc scanConfiguredRoots*(roots: openArray[DiscoveryRoot]): ScanReport =
+  ## Scans already ordered roots; useful for deterministic callers and tests.
   var seenRoots = initHashSet[string]()
   var seenCandidates = initHashSet[string]()
 
@@ -178,3 +173,7 @@ proc scanPlugins*(explicitRoots: openArray[string];
       continue
     seenRoots.incl(canonical)
     walkDirectory(canonical, result, seenCandidates)
+
+proc scanPlugins*(explicitRoots: openArray[string];
+                  clapPath = getEnv("CLAP_PATH")): ScanReport =
+  scanConfiguredRoots(discoveryRoots(explicitRoots, clapPath = clapPath))

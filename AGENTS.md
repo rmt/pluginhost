@@ -57,7 +57,7 @@ As of the latest reviewed state:
 - Official CLAP 1.2.10 headers and MIT license are pinned under `vendor/clap/`.
 - CLAP/JACK declarations, Linux DSO ownership, C/Nim callbacks, and the ARC RT
   spike retain their ABI, foreign-thread, allocator, and generated-C checks.
-- The current suite contains 41 unit, 20 ABI, 18 fixture, and 4 RT tests (83 total).
+- The current suite contains 43 unit, 20 ABI, 18 fixture, and 4 RT tests (85 total).
 - There is no plugin instance, JACK client integration, GUI, state, or real-time
   processing yet.
 - No remote repository or project license is currently configured.
