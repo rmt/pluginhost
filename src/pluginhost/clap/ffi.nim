@@ -16,6 +16,8 @@ const
   ClapPluginFactoryId* = "clap.plugin-factory"
   ClapExtAudioPorts* = "clap.audio-ports"
   ClapExtNotePorts* = "clap.note-ports"
+  ClapExtLog* = "clap.log"
+  ClapExtThreadCheck* = "clap.thread-check"
   ClapPortMono* = "mono"
   ClapPortStereo* = "stereo"
 
@@ -80,11 +82,20 @@ const
   ClapNotePortsRescanAll* = 1'u32 shl 0
   ClapNotePortsRescanNames* = 1'u32 shl 1
 
+  ClapLogDebug* = 0'i32
+  ClapLogInfo* = 1'i32
+  ClapLogWarning* = 2'i32
+  ClapLogError* = 3'i32
+  ClapLogFatal* = 4'i32
+  ClapLogHostMisbehaving* = 5'i32
+  ClapLogPluginMisbehaving* = 6'i32
+
 type
   ClapId* = uint32
   ClapBeatTime* = int64
   ClapSecTime* = int64
   ClapProcessStatus* = int32
+  ClapLogSeverity* = int32
   ClapNoteExpression* = int32
 
   ClapVersion* {.bycopy.} = object
@@ -212,6 +223,10 @@ type
     cdecl, gcsafe, raises: [].}
   ClapHostRequestProc* = proc(host: ptr ClapHost) {.
     cdecl, gcsafe, raises: [].}
+  ClapHostLogProc* = proc(host: ptr ClapHost; severity: ClapLogSeverity;
+                           message: cstring) {.cdecl, gcsafe, raises: [].}
+  ClapHostThreadCheckProc* = proc(host: ptr ClapHost): bool {.
+    cdecl, gcsafe, raises: [].}
   ClapHost* {.bycopy.} = object
     clapVersion*: ClapVersion
     hostData*: pointer
@@ -223,6 +238,13 @@ type
     requestRestart*: ClapHostRequestProc
     requestProcess*: ClapHostRequestProc
     requestCallback*: ClapHostRequestProc
+
+  ClapHostLog* {.bycopy.} = object
+    log*: ClapHostLogProc
+
+  ClapHostThreadCheck* {.bycopy.} = object
+    isMainThread*: ClapHostThreadCheckProc
+    isAudioThread*: ClapHostThreadCheckProc
 
   ClapPluginDescriptor* {.bycopy.} = object
     clapVersion*: ClapVersion

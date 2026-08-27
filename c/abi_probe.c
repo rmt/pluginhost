@@ -8,6 +8,8 @@
 #include <clap/ext/note-ports.h>
 #include <clap/factory/plugin-factory.h>
 #include <clap/host.h>
+#include <clap/ext/log.h>
+#include <clap/ext/thread-check.h>
 #include <clap/plugin.h>
 #include <clap/process.h>
 #include <clap/version.h>
@@ -40,6 +42,13 @@ ABI_ASSERT_FIELD(clap_host_t, get_extension,
 ABI_ASSERT_FIELD(clap_host_t, request_restart, void(CLAP_ABI *)(const clap_host_t *));
 ABI_ASSERT_FIELD(clap_host_t, request_process, void(CLAP_ABI *)(const clap_host_t *));
 ABI_ASSERT_FIELD(clap_host_t, request_callback, void(CLAP_ABI *)(const clap_host_t *));
+ABI_ASSERT_FIELD(clap_host_log_t, log,
+                  void(CLAP_ABI *)(const clap_host_t *, clap_log_severity,
+                                   const char *));
+ABI_ASSERT_FIELD(clap_host_thread_check_t, is_main_thread,
+                  bool(CLAP_ABI *)(const clap_host_t *));
+ABI_ASSERT_FIELD(clap_host_thread_check_t, is_audio_thread,
+                  bool(CLAP_ABI *)(const clap_host_t *));
 ABI_ASSERT_FIELD(clap_plugin_t, init, bool(CLAP_ABI *)(const clap_plugin_t *));
 ABI_ASSERT_FIELD(clap_plugin_t, destroy, void(CLAP_ABI *)(const clap_plugin_t *));
 ABI_ASSERT_FIELD(clap_plugin_t, activate,
@@ -183,6 +192,8 @@ uint64_t pluginhost_abi_size(int32_t type_id) {
       ABI_TYPE_CASE(24, clap_note_port_info_t);
       ABI_TYPE_CASE(25, clap_plugin_note_ports_t);
       ABI_TYPE_CASE(26, clap_host_note_ports_t);
+      ABI_TYPE_CASE(33, clap_host_log_t);
+      ABI_TYPE_CASE(34, clap_host_thread_check_t);
       ABI_TYPE_CASE(27, clap_id);
       ABI_TYPE_CASE(28, clap_beattime);
       ABI_TYPE_CASE(29, clap_sectime);
@@ -232,6 +243,8 @@ uint64_t pluginhost_abi_align(int32_t type_id) {
       ABI_ALIGN_CASE(24, clap_note_port_info_t);
       ABI_ALIGN_CASE(25, clap_plugin_note_ports_t);
       ABI_ALIGN_CASE(26, clap_host_note_ports_t);
+      ABI_ALIGN_CASE(33, clap_host_log_t);
+      ABI_ALIGN_CASE(34, clap_host_thread_check_t);
       ABI_ALIGN_CASE(27, clap_id);
       ABI_ALIGN_CASE(28, clap_beattime);
       ABI_ALIGN_CASE(29, clap_sectime);
@@ -394,6 +407,9 @@ uint64_t pluginhost_abi_offset(int32_t field_id) {
       ABI_FIELD_CASE(25, 2, clap_plugin_note_ports_t, get);
       ABI_FIELD_CASE(26, 1, clap_host_note_ports_t, supported_dialects);
       ABI_FIELD_CASE(26, 2, clap_host_note_ports_t, rescan);
+      ABI_FIELD_CASE(33, 1, clap_host_log_t, log);
+      ABI_FIELD_CASE(34, 1, clap_host_thread_check_t, is_main_thread);
+      ABI_FIELD_CASE(34, 2, clap_host_thread_check_t, is_audio_thread);
       ABI_FIELD_CASE(109, 1, jack_latency_range_t, min);
       ABI_FIELD_CASE(109, 2, jack_latency_range_t, max);
       ABI_FIELD_CASE(110, 1, jack_midi_event_t, time);
@@ -465,6 +481,13 @@ int64_t pluginhost_abi_constant(int32_t constant_id) {
       case 58: return CLAP_NOTE_DIALECT_MIDI2;
       case 59: return CLAP_NOTE_PORTS_RESCAN_ALL;
       case 60: return CLAP_NOTE_PORTS_RESCAN_NAMES;
+      case 61: return CLAP_LOG_DEBUG;
+      case 62: return CLAP_LOG_INFO;
+      case 63: return CLAP_LOG_WARNING;
+      case 64: return CLAP_LOG_ERROR;
+      case 65: return CLAP_LOG_FATAL;
+      case 66: return CLAP_LOG_HOST_MISBEHAVING;
+      case 67: return CLAP_LOG_PLUGIN_MISBEHAVING;
       case 101: return JACK_MAX_FRAMES;
       case 102: return JackNullOption;
       case 103: return JackNoStartServer;
@@ -503,6 +526,8 @@ const char *pluginhost_abi_string(int32_t string_id) {
       case 3: return CLAP_EXT_NOTE_PORTS;
       case 4: return CLAP_PORT_MONO;
       case 5: return CLAP_PORT_STEREO;
+      case 6: return CLAP_EXT_LOG;
+      case 7: return CLAP_EXT_THREAD_CHECK;
       case 101: return JACK_DEFAULT_AUDIO_TYPE;
       case 102: return JACK_DEFAULT_MIDI_TYPE;
       default: return NULL;

@@ -196,6 +196,39 @@ proc openClapModule*(path: string): Result[ClapModule] =
 
   success(move(module))
 
+proc createPlugin*(module: ClapModule; host: ptr ClapHost;
+                   pluginId: string): Result[ptr ClapPlugin] =
+  if not module.entryInitialized or module.factory == nil or
+      not module.library.isOpen:
+    return failure[ptr ClapPlugin](clapError(
+      hekClapFactory,
+      "CLAP module is not ready for plugin creation",
+      module.path,
+    ))
+  if host == nil:
+    return failure[ptr ClapPlugin](clapError(
+      hekClapPluginCreate,
+      "CLAP host pointer must not be null",
+      module.path,
+    ))
+  if pluginId.strip().len == 0:
+    return failure[ptr ClapPlugin](clapError(
+      hekClapPluginCreate,
+      "CLAP plugin ID must not be blank",
+      module.path,
+    ))
+
+  let plugin = module.factory.createPlugin(
+    module.factory, host, pluginId.cstring)
+  if plugin == nil:
+    return failure[ptr ClapPlugin](clapError(
+      hekClapPluginCreate,
+      "CLAP factory could not create plugin",
+      module.path,
+      "id=" & pluginId,
+    ))
+  success(plugin)
+
 proc descriptorError(path, field, detail: string; index: int): HostError =
   clapError(
     hekClapDescriptor,

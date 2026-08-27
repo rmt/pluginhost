@@ -49,17 +49,17 @@ The progress table changes only after human review. A task appearing in the plan
 As of the latest reviewed state:
 
 - Default/current branch: `main`; inspect `git status` and `git log` before editing.
-- Version: `0.0.3-dev` (`pluginhost.nimble` uses numeric `0.0.3` because of Nimble metadata syntax).
-- Increments 0, 1, and 2 are approved; Increment 2 includes review units 2A and 2B.
+- Version: `0.0.4-dev` (`pluginhost.nimble` uses numeric `0.0.4` because of Nimble metadata syntax).
+- Increments 0, 1, and 2 plus review unit 3A are approved; review unit 3B is not started.
 - The CLI uses exactly pinned `argparse` 4.0.2.
 - `list` and `scan` report copied CLAP descriptors without creating a plugin
   instance; `run` remains a typed stub.
 - Official CLAP 1.2.10 headers and MIT license are pinned under `vendor/clap/`.
 - CLAP/JACK declarations, Linux DSO ownership, C/Nim callbacks, and the ARC RT
   spike retain their ABI, foreign-thread, allocator, and generated-C checks.
-- The current suite contains 43 unit, 20 ABI, 18 fixture, and 4 RT tests (85 total).
-- There is no plugin instance, JACK client integration, GUI, state, or real-time
-  processing yet.
+- The current suite contains 47 unit, 20 ABI, 21 fixture, and 6 RT tests (94 total).
+- The CLAP host bridge and instance lifecycle core are implemented; there is no JACK
+  client integration, GUI, state, or real-time processing yet.
 - No remote repository or project license is currently configured.
 
 Current source responsibilities:
@@ -68,7 +68,8 @@ Current source responsibilities:
 - `src/pluginhost/app/` — CLI configuration, output rendering, dispatch, and the run stub.
 - `src/pluginhost/domain/` — typed results/errors/lifecycle plus host-owned catalog values.
 - `src/pluginhost/clap/ffi.nim` — stable CLAP 1.2.10 raw ABI declarations.
-- `src/pluginhost/clap/loader.nim` — move-only entry/factory ownership and copied catalog extraction.
+- `src/pluginhost/clap/loader.nim` — move-only entry/factory ownership, copied catalog extraction, and checked plugin creation.
+- `src/pluginhost/clap/host_bridge.nim` and `instance.nim` — stable host callbacks, bounded request/log transport, and one-instance lifecycle ownership.
 - `src/pluginhost/discovery/paths.nim` and `scanner.nim` — ordered roots, deterministic
   candidate traversal, canonical deduplication, and scan reports.
 - `src/pluginhost/jack/ffi.nim` — minimal JACK client raw ABI declarations.
@@ -79,7 +80,7 @@ Current source responsibilities:
 - `tests/fixtures/clap/` — independently compiled synthetic CLAP libraries.
 - `tests/fixtures/ffi/` — independently compiled callback/DSO fixture.
 - `tests/rt/` — ARC allocator instrumentation and generated-C callback audit.
-- `tests/unit/` — pure CLI, output, discovery policy, selection, text, lifecycle, error, and version tests.
+- `tests/unit/` — pure CLI, output, discovery policy, selection, text, host bridge, lifecycle, error, and version tests.
 - `docs/adr/` — accepted binding-strategy decisions.
 - `vendor/clap/` — unmodified upstream headers, license, and provenance.
 
@@ -102,63 +103,63 @@ nimble all
 `nimble test` builds a process-test executable and runs the fast unit suite.
 `nimble testAbi` checks ABI declarations, DSO ownership, and C/Nim callbacks.
 `nimble testFixtures` builds independent synthetic CLAP DSOs and checks module,
-catalog, cleanup, process-level `list`, and discovery/`scan` behavior.
-`nimble testRt` runs the current ARC allocation spike and generated-C audit.
+catalog, instance lifecycle, cleanup, process-level `list`, and discovery/`scan` behavior.
+`nimble testRt` runs the current ARC allocation spike, foreign-thread host-callback checks, and generated-C audits.
 `nimble all` performs source compile, unit, ABI, fixture, and RT checks. An
 unavailable task must not report a false pass.
 
 For user-visible CLI changes, also exercise the compiled process directly and verify stdout, stderr, and exit codes. Existing stubs are expected to fail with a non-zero status.
 
-## Next planned work: Increment 3 review unit 3A
+## Next planned work: Increment 3 review unit 3B
 
-Increment 2 is approved. The next fresh session must present the Increment 3A
+Increment 3A is approved. The next fresh session must present the Increment 3B
 pre-code package and obtain approval before editing; do not begin implementation
-merely because this section is prepared. Keep version `0.0.3-dev` until the next
-reviewed increment is complete.
+merely because this section is prepared. Keep version `0.0.4-dev` throughout 3B.
 
 ### Goal
 
-Create, initialize, inspect, and destroy exactly one CLAP plugin instance correctly,
-without JACK processing, GUI, state persistence, or public `run` behavior.
+Inspect the initialized, deactivated plugin and build a host-owned immutable
+`PortPlan` for every audio and note group, then negotiate real-time render mode.
+Do not activate or process the plugin and do not add JACK or public `run` behavior.
 
-### Recommended review-unit split
+### Required pre-code package
 
-- **3A:** stable `ClapHostBridge`, host identity/core callbacks, bounded request/log
-  transport, `ClapInstance` create/init/destroy, extension caching, and partial cleanup.
-- **3B:** deactivated-plugin port inspection, immutable `PortPlan`, and render-mode
-  negotiation. No JACK processing or public `run` behavior.
+Before any edit, re-read the official audio-ports, note-ports, and render headers
+plus the port-model sections of `DESIGN.md` and `REQUIREMENTS.md`, then present:
 
-Implement 3A only, then stop for review before 3B.
+- Exact files and interfaces for domain-only port-plan values, CLAP port inspection,
+  minimal render FFI/ABI additions, instance integration, fixtures, and tests.
+- Explicit bounds and validation for plugin-provided counts, channel totals, IDs,
+  names, flags, in-place pairs, and note dialect combinations.
+- Audio-group/channel flattening and deterministic provisional names without
+  creating JACK ports or depending on JACK runtime limits.
+- Main-thread/deactivated-state enforcement, immutable host ownership, extension
+  pointer lifetime, and typed cleanup/error behavior.
+- Render policy for absent extensions, hard real-time requirements, successful
+  `CLAP_RENDER_REALTIME`, and rejection of the requested mode.
+- Focused tests, dependency impact, risks, exclusions, and exact verification commands.
 
-### Expected files and interfaces
+The package should consider `src/pluginhost/domain/port_plan.nim` and a focused
+CLAP inspector module, but file names and public interfaces are not approved until
+the pre-code review. Extend only the raw render ABI needed by the accepted design.
+Do not advertise host audio/note rescan extensions in 3B.
 
-- `src/pluginhost/clap/host_bridge.nim` — stable host storage, host identity, extension
-  lookup, and tested request/log transport; no raw host pointer escapes its owner.
-- `src/pluginhost/clap/instance.nim` — explicit instance state machine, selected
-  descriptor creation, plugin `init()`/`destroy()`, cached extension pointers, and
-  idempotent cleanup while the `ClapModule` remains alive.
-- Focused domain/request types only where a real ownership or queue boundary requires
-  them; do not create future JACK/GUI/state modules as scaffolding.
-- Extend the independent CLAP fixture and add focused lifecycle/process tests.
+### Expected tests and boundaries
 
-The proposed boundary must preserve stable host strings/vtables through plugin destroy,
-keep all C callbacks `cdecl`, `gcsafe`, and `raises: []`, and expose only completely
-implemented host extensions. `run` remains an explicit failure.
+- Missing port extensions produce valid empty groups; valid fixtures cover multiple
+  input/output audio groups, flattened channels, and multiple note ports.
+- Preserve direction, index, stable ID, bounded name, audio metadata, supported and
+  preferred note dialects, and deterministic ordering in host-owned values.
+- Reject missing callbacks, failed `get()`, impossible counts/totals, duplicate IDs
+  where invalid, unterminated text, invalid dialects, and inconsistent port metadata.
+- Cover render-extension absence, real-time success/failure, hard-requirement reporting,
+  repeated inspection where allowed, and cleanup without calls after destruction.
+- Keep domain modules free of raw CLAP/JACK types and add C-header ABI probes for
+  every new render declaration.
+- No new third-party dependency or version change is expected.
 
-### Tests, dependencies, and risks
-
-- Success and every create/init/destroy partial-failure transition, repeated cleanup,
-  no calls after destroy/deinit, and host-storage lifetime.
-- Host identity and extension lookup, main-thread identity, request coalescing, bounded
-  log overflow, callback context, and malformed plugin responses.
-- Port inspection/render negotiation are deferred to 3B; JACK and RT behavior are
-  explicitly out of scope.
-- No new third-party dependency is expected; use existing raw CLAP FFI and ownership.
-- Main risks are callback lifetime, plugin calls after teardown, extension advertisement
-  before implementation, and unbounded callback-thread logging/request behavior.
-
-Stop at the 3A human review gate. Do not implement 3B, JACK, GUI, state, caching,
-or a plugin processing loop.
+Stop after implementing approved 3B for human review. Do not begin JACK, activation,
+processing, GUI, state, reactor, rescan-host-extension, or public `run` work.
 
 ## Non-negotiable engineering rules
 

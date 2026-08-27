@@ -2,11 +2,11 @@
 
 `pluginhost` is an in-progress standalone Linux JACK host for native CLAP plugins, implemented in Nim. Its intended role is similar to `carla-single`, with one plugin instance and one JACK client per process.
 
-The current development version is **0.0.3-dev**. The implementation adds
+The current development version is **0.0.4-dev**. The implementation adds
 checked CLAP entry/factory ownership, copied descriptor catalogs, selection policy,
 human/JSON `list`, and recursive human/JSON `scan` output to the previously reviewed
-scaffold, raw CLAP/JACK FFI, loader, callback probes, and ABI/RT tests. Plugin
-instances and JACK runtime integration are not implemented yet.
+scaffold, raw CLAP/JACK FFI, loader, callback probes, and ABI/RT tests. The CLAP host bridge and
+instance lifecycle core are implemented, but JACK runtime integration is not implemented yet.
 
 ## Build
 

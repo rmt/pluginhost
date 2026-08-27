@@ -1,11 +1,25 @@
 #!/usr/bin/env python3
-"""Reject prohibited runtime calls in the generated RT probe callback."""
+"""Reject prohibited runtime calls in generated real-time callback paths."""
 
 from pathlib import Path
 import re
 import sys
 
-MARKER = "pluginhost_rt_probe_process"
+MARKERS = (
+    "pluginhost_rt_probe_process",
+    "pluginhost_host_callbacks_probe",
+    "pluginhost_clap_host_cstring_equals",
+    "pluginhost_clap_host_log_try_push",
+    "pluginhost_clap_host_callback_data",
+    "pluginhost_clap_host_record_request",
+    "pluginhost_clap_host_get_extension",
+    "pluginhost_clap_host_request_restart",
+    "pluginhost_clap_host_request_process",
+    "pluginhost_clap_host_request_callback",
+    "pluginhost_clap_host_log",
+    "pluginhost_clap_host_is_main_thread",
+    "pluginhost_clap_host_is_audio_thread",
+)
 FORBIDDEN = {
     r"\b(?:alloc|alloc0|allocShared|allocShared0|dealloc|deallocShared)\w*\s*\(":
         "Nim allocation",
@@ -14,13 +28,14 @@ FORBIDDEN = {
     r"\b(?:malloc|calloc|realloc|free)\w*\s*\(": "C allocation",
     r"\b(?:raise|nimRaise|reraise)\w*\s*\(": "exception runtime",
     r"\b(?:printf|fprintf|fwrite|puts|write)\w*\s*\(": "diagnostic I/O",
-    r"\b(?:pthread_mutex|pthread_rwlock|pthread_cond)\w*\s*\(": "blocking lock",
+    r"\b(?:pthread_(?:mutex|rwlock|cond|create|join)|sleep|usleep|nanosleep)\w*\s*\(":
+        "blocking or thread-management call",
     r"\b(?:dlopen|dlclose|dlsym)\w*\s*\(": "dynamic-library operation",
 }
 
 
-def extract_definition(source: str) -> str | None:
-    for occurrence in re.finditer(rf"\b{MARKER}\b", source):
+def extract_definition(source: str, marker: str) -> str | None:
+    for occurrence in re.finditer(rf"\b{re.escape(marker)}\b", source):
         tail = source[occurrence.end():]
         brace_offset = tail.find("{")
         semicolon_offset = tail.find(";")
@@ -49,35 +64,53 @@ def main() -> int:
         return 2
 
     nimcache = Path(sys.argv[1])
-    definitions: list[tuple[Path, str]] = []
+    definitions: dict[str, list[tuple[Path, str]]] = {
+        marker: [] for marker in MARKERS
+    }
     for candidate in nimcache.rglob("*.c"):
         source = candidate.read_text(errors="replace")
-        definition = extract_definition(source)
-        if definition is not None:
-            definitions.append((candidate, definition))
+        for marker in MARKERS:
+            definition = extract_definition(source, marker)
+            if definition is not None:
+                definitions[marker].append((candidate, definition))
 
-    if len(definitions) != 1:
-        print(
-            f"expected one generated {MARKER} definition, found {len(definitions)}",
-            file=sys.stderr,
-        )
+    invalid_counts = False
+    for marker, matches in definitions.items():
+        if len(matches) != 1:
+            print(
+                f"expected one generated {marker} definition, found {len(matches)}",
+                file=sys.stderr,
+            )
+            invalid_counts = True
+    if invalid_counts:
         return 1
 
-    source_path, definition = definitions[0]
-    failures: list[str] = []
-    for pattern, description in FORBIDDEN.items():
-        if re.search(pattern, definition):
-            failures.append(description)
-    if "nimfr_" in definition or "NimFrame" in definition:
-        failures.append("stack-trace frame setup")
+    failed = False
+    audited_paths: set[Path] = set()
+    for marker, matches in definitions.items():
+        source_path, definition = matches[0]
+        audited_paths.add(source_path)
+        failures: list[str] = []
+        for pattern, description in FORBIDDEN.items():
+            if re.search(pattern, definition):
+                failures.append(description)
+        if "nimfr_" in definition or "NimFrame" in definition:
+            failures.append("stack-trace frame setup")
 
-    if failures:
-        print(f"prohibited generated callback operations in {source_path}:", file=sys.stderr)
-        for failure in failures:
-            print(f"- {failure}", file=sys.stderr)
+        if failures:
+            failed = True
+            print(
+                f"prohibited generated operations in {marker} ({source_path}):",
+                file=sys.stderr,
+            )
+            for failure in failures:
+                print(f"- {failure}", file=sys.stderr)
+
+    if failed:
         return 1
 
-    print(f"Generated callback audit passed: {source_path}")
+    paths = ", ".join(str(path) for path in sorted(audited_paths))
+    print(f"Generated callback audit passed: {paths}")
     return 0
 
 

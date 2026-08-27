@@ -1,10 +1,16 @@
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #include <clap/entry.h>
+#include <clap/ext/audio-ports.h>
+#include <clap/ext/log.h>
+#include <clap/ext/note-ports.h>
+#include <clap/ext/thread-check.h>
 #include <clap/factory/plugin-factory.h>
 #include <clap/plugin-features.h>
 
@@ -40,6 +46,11 @@
 #define MODE_NULL_ID 17
 #define MODE_ZERO_DESCRIPTORS 18
 #define MODE_CREATE_GUARD 19
+#define MODE_PLUGIN_INIT_FAIL 20
+#define MODE_CREATE_FAIL 21
+#define MODE_MISSING_PLUGIN_DESTROY 22
+#define MODE_PLUGIN_WRONG_ID 23
+#define MODE_PLUGIN_INCOMPATIBLE_DESCRIPTOR 24
 
 #define MAX_TEXT_BYTES (64U * 1024U)
 #define OVERSIZED_TEXT_BYTES (MAX_TEXT_BYTES + 1U)
@@ -51,6 +62,11 @@ static uint32_t init_call_count;
 static uint32_t successful_init_count;
 static uint32_t deinit_count;
 static uint32_t create_count;
+static uint32_t plugin_init_count;
+static uint32_t plugin_destroy_count;
+static uint32_t plugin_main_thread_count;
+static _Atomic uint32_t host_contract_failures;
+static const clap_host_t *fixture_host;
 static char last_init_path[4096];
 static char oversized_id[OVERSIZED_TEXT_BYTES + 1U];
 static const char *oversized_features[TOO_MANY_FEATURES + 1U];
@@ -240,17 +256,272 @@ fixture_get_plugin_descriptor(
    return NULL;
 }
 
+static uint32_t fixture_audio_count(const clap_plugin_t *plugin,
+                                    bool is_input) {
+   (void)plugin;
+   (void)is_input;
+   return 0U;
+}
+
+static bool fixture_audio_get(const clap_plugin_t *plugin,
+                              uint32_t index,
+                              bool is_input,
+                              clap_audio_port_info_t *info) {
+   (void)plugin;
+   (void)index;
+   (void)is_input;
+   (void)info;
+   return false;
+}
+
+static const clap_plugin_audio_ports_t fixture_audio_ports = {
+   .count = fixture_audio_count,
+   .get = fixture_audio_get,
+};
+
+static uint32_t fixture_note_count(const clap_plugin_t *plugin,
+                                   bool is_input) {
+   (void)plugin;
+   (void)is_input;
+   return 0U;
+}
+
+static bool fixture_note_get(const clap_plugin_t *plugin,
+                             uint32_t index,
+                             bool is_input,
+                             clap_note_port_info_t *info) {
+   (void)plugin;
+   (void)index;
+   (void)is_input;
+   (void)info;
+   return false;
+}
+
+static const clap_plugin_note_ports_t fixture_note_ports = {
+   .count = fixture_note_count,
+   .get = fixture_note_get,
+};
+
+static void *fixture_host_thread(void *opaque) {
+   const clap_host_t *host = (const clap_host_t *)opaque;
+   const clap_host_thread_check_t *thread_check =
+      (const clap_host_thread_check_t *)host->get_extension(
+         host, CLAP_EXT_THREAD_CHECK);
+   if (thread_check == NULL || thread_check->is_main_thread(host) ||
+       thread_check->is_audio_thread(host))
+      atomic_fetch_add(&host_contract_failures, 1U);
+
+   host->request_restart(host);
+   host->request_process(host);
+   host->request_callback(host);
+
+   const clap_host_log_t *log =
+      (const clap_host_log_t *)host->get_extension(host, CLAP_EXT_LOG);
+   if (log == NULL)
+      atomic_fetch_add(&host_contract_failures, 1U);
+   else
+      log->log(host, CLAP_LOG_INFO, "fixture worker");
+   return NULL;
+}
+
+static bool fixture_plugin_init(const clap_plugin_t *plugin) {
+   (void)plugin;
+   ++plugin_init_count;
+   if (PLUGINHOST_CLAP_FIXTURE_MODE == MODE_PLUGIN_INIT_FAIL)
+      return false;
+
+   if (fixture_host == NULL) {
+      atomic_fetch_add(&host_contract_failures, 1U);
+      return true;
+   }
+
+   const clap_host_thread_check_t *thread_check =
+      (const clap_host_thread_check_t *)fixture_host->get_extension(
+         fixture_host, CLAP_EXT_THREAD_CHECK);
+   if (thread_check == NULL || !thread_check->is_main_thread(fixture_host) ||
+       thread_check->is_audio_thread(fixture_host))
+      atomic_fetch_add(&host_contract_failures, 1U);
+
+   const clap_host_log_t *log =
+      (const clap_host_log_t *)fixture_host->get_extension(
+         fixture_host, CLAP_EXT_LOG);
+   if (log == NULL)
+      atomic_fetch_add(&host_contract_failures, 1U);
+   else
+      log->log(fixture_host, CLAP_LOG_INFO, "fixture init");
+
+   pthread_t workers[2];
+   bool created[2] = {false, false};
+   for (size_t index = 0; index < 2U; ++index) {
+      if (pthread_create(&workers[index], NULL, fixture_host_thread,
+                         (void *)fixture_host) != 0)
+         atomic_fetch_add(&host_contract_failures, 1U);
+      else
+         created[index] = true;
+   }
+   for (size_t index = 0; index < 2U; ++index) {
+      if (created[index] && pthread_join(workers[index], NULL) != 0)
+         atomic_fetch_add(&host_contract_failures, 1U);
+   }
+   return true;
+}
+
+static void fixture_plugin_destroy(const clap_plugin_t *plugin) {
+   (void)plugin;
+   ++plugin_destroy_count;
+   if (fixture_host == NULL || fixture_host->name == NULL ||
+       strcmp(fixture_host->name, "pluginhost") != 0 ||
+       fixture_host->version == NULL ||
+       strcmp(fixture_host->version, "0.0.4-dev") != 0 ||
+       fixture_host->host_data == NULL)
+      atomic_fetch_add(&host_contract_failures, 1U);
+   if (fixture_host == NULL)
+      return;
+   const clap_host_thread_check_t *thread_check =
+      (const clap_host_thread_check_t *)fixture_host->get_extension(
+         fixture_host, CLAP_EXT_THREAD_CHECK);
+   if (thread_check == NULL || !thread_check->is_main_thread(fixture_host) ||
+       thread_check->is_audio_thread(fixture_host))
+      atomic_fetch_add(&host_contract_failures, 1U);
+   const clap_host_log_t *log =
+      (const clap_host_log_t *)fixture_host->get_extension(
+         fixture_host, CLAP_EXT_LOG);
+   if (log != NULL)
+      log->log(fixture_host, CLAP_LOG_INFO, "fixture destroy");
+}
+
+static bool fixture_plugin_activate(const clap_plugin_t *plugin,
+                                    double sample_rate,
+                                    uint32_t min_frames_count,
+                                    uint32_t max_frames_count) {
+   (void)plugin;
+   (void)sample_rate;
+   (void)min_frames_count;
+   (void)max_frames_count;
+   return true;
+}
+
+static void fixture_plugin_deactivate(const clap_plugin_t *plugin) {
+   (void)plugin;
+}
+
+static bool fixture_plugin_start_processing(const clap_plugin_t *plugin) {
+   (void)plugin;
+   return true;
+}
+
+static void fixture_plugin_stop_processing(const clap_plugin_t *plugin) {
+   (void)plugin;
+}
+
+static void fixture_plugin_reset(const clap_plugin_t *plugin) {
+   (void)plugin;
+}
+
+static clap_process_status fixture_plugin_process(
+   const clap_plugin_t *plugin,
+   const clap_process_t *process) {
+   (void)plugin;
+   (void)process;
+   return CLAP_PROCESS_CONTINUE;
+}
+
+static const void *fixture_plugin_get_extension(const clap_plugin_t *plugin,
+                                                const char *extension_id) {
+   (void)plugin;
+   if (extension_id == NULL)
+      return NULL;
+   if (strcmp(extension_id, CLAP_EXT_AUDIO_PORTS) == 0)
+      return &fixture_audio_ports;
+   if (strcmp(extension_id, CLAP_EXT_NOTE_PORTS) == 0)
+      return &fixture_note_ports;
+   return NULL;
+}
+
+static void fixture_plugin_on_main_thread(const clap_plugin_t *plugin) {
+   (void)plugin;
+   ++plugin_main_thread_count;
+}
+
+static const clap_plugin_t fixture_plugin = {
+   .desc = &synth_descriptor,
+   .plugin_data = NULL,
+   .init = fixture_plugin_init,
+   .destroy = fixture_plugin_destroy,
+   .activate = fixture_plugin_activate,
+   .deactivate = fixture_plugin_deactivate,
+   .start_processing = fixture_plugin_start_processing,
+   .stop_processing = fixture_plugin_stop_processing,
+   .reset = fixture_plugin_reset,
+   .process = fixture_plugin_process,
+   .get_extension = fixture_plugin_get_extension,
+   .on_main_thread = fixture_plugin_on_main_thread,
+};
+
+static const clap_plugin_t missing_destroy_plugin = {
+   .desc = &synth_descriptor,
+   .plugin_data = NULL,
+   .init = fixture_plugin_init,
+   .destroy = NULL,
+   .activate = fixture_plugin_activate,
+   .deactivate = fixture_plugin_deactivate,
+   .start_processing = fixture_plugin_start_processing,
+   .stop_processing = fixture_plugin_stop_processing,
+   .reset = fixture_plugin_reset,
+   .process = fixture_plugin_process,
+   .get_extension = fixture_plugin_get_extension,
+   .on_main_thread = fixture_plugin_on_main_thread,
+};
+
+static const clap_plugin_t wrong_id_plugin = {
+   .desc = &effect_descriptor,
+   .plugin_data = NULL,
+   .init = fixture_plugin_init,
+   .destroy = fixture_plugin_destroy,
+   .activate = fixture_plugin_activate,
+   .deactivate = fixture_plugin_deactivate,
+   .start_processing = fixture_plugin_start_processing,
+   .stop_processing = fixture_plugin_stop_processing,
+   .reset = fixture_plugin_reset,
+   .process = fixture_plugin_process,
+   .get_extension = fixture_plugin_get_extension,
+   .on_main_thread = fixture_plugin_on_main_thread,
+};
+
+static const clap_plugin_t incompatible_created_descriptor_plugin = {
+   .desc = &incompatible_descriptor,
+   .plugin_data = NULL,
+   .init = fixture_plugin_init,
+   .destroy = fixture_plugin_destroy,
+   .activate = fixture_plugin_activate,
+   .deactivate = fixture_plugin_deactivate,
+   .start_processing = fixture_plugin_start_processing,
+   .stop_processing = fixture_plugin_stop_processing,
+   .reset = fixture_plugin_reset,
+   .process = fixture_plugin_process,
+   .get_extension = fixture_plugin_get_extension,
+   .on_main_thread = fixture_plugin_on_main_thread,
+};
+
 static const clap_plugin_t *fixture_create_plugin(
    const clap_plugin_factory_t *factory,
    const clap_host_t *host,
    const char *plugin_id) {
    (void)factory;
-   (void)host;
    (void)plugin_id;
    ++create_count;
    if (PLUGINHOST_CLAP_FIXTURE_MODE == MODE_CREATE_GUARD)
       _exit(97);
-   return NULL;
+   if (PLUGINHOST_CLAP_FIXTURE_MODE == MODE_CREATE_FAIL)
+      return NULL;
+   fixture_host = host;
+   if (PLUGINHOST_CLAP_FIXTURE_MODE == MODE_MISSING_PLUGIN_DESTROY)
+      return &missing_destroy_plugin;
+   if (PLUGINHOST_CLAP_FIXTURE_MODE == MODE_PLUGIN_WRONG_ID)
+      return &wrong_id_plugin;
+   if (PLUGINHOST_CLAP_FIXTURE_MODE == MODE_PLUGIN_INCOMPATIBLE_DESCRIPTOR)
+      return &incompatible_created_descriptor_plugin;
+   return &fixture_plugin;
 }
 
 static const clap_plugin_factory_t fixture_factory = {
@@ -291,6 +562,11 @@ PLUGINHOST_FIXTURE_EXPORT void pluginhost_clap_fixture_reset(void) {
    successful_init_count = 0U;
    deinit_count = 0U;
    create_count = 0U;
+   plugin_init_count = 0U;
+   plugin_destroy_count = 0U;
+   plugin_main_thread_count = 0U;
+   atomic_store(&host_contract_failures, 0U);
+   fixture_host = NULL;
    last_init_path[0] = '\0';
 }
 
@@ -308,6 +584,22 @@ PLUGINHOST_FIXTURE_EXPORT uint32_t pluginhost_clap_fixture_deinit_calls(void) {
 
 PLUGINHOST_FIXTURE_EXPORT uint32_t pluginhost_clap_fixture_create_calls(void) {
    return create_count;
+}
+
+PLUGINHOST_FIXTURE_EXPORT uint32_t pluginhost_clap_fixture_plugin_init_calls(void) {
+   return plugin_init_count;
+}
+
+PLUGINHOST_FIXTURE_EXPORT uint32_t pluginhost_clap_fixture_plugin_destroy_calls(void) {
+   return plugin_destroy_count;
+}
+
+PLUGINHOST_FIXTURE_EXPORT uint32_t pluginhost_clap_fixture_plugin_main_thread_calls(void) {
+   return plugin_main_thread_count;
+}
+
+PLUGINHOST_FIXTURE_EXPORT uint32_t pluginhost_clap_fixture_host_contract_failures(void) {
+   return atomic_load(&host_contract_failures);
 }
 
 PLUGINHOST_FIXTURE_EXPORT const char *pluginhost_clap_fixture_last_init_path(void) {

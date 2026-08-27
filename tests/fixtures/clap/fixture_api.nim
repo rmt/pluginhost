@@ -13,6 +13,10 @@ type
     successfulInits*: FixtureCounterProc
     deinitCalls*: FixtureCounterProc
     createCalls*: FixtureCounterProc
+    pluginInitCalls*: FixtureCounterProc
+    pluginDestroyCalls*: FixtureCounterProc
+    pluginMainThreadCalls*: FixtureCounterProc
+    hostContractFailures*: FixtureCounterProc
     lastInitPath*: FixtureLastPathProc
 
 proc clapFixtureDirectory*(): string =
@@ -34,6 +38,14 @@ proc fixtureApi*(library: DynamicLibrary): FixtureApi =
     "pluginhost_clap_fixture_deinit_calls")
   let createCalls = resolveSymbol[FixtureCounterProc](library,
     "pluginhost_clap_fixture_create_calls")
+  let pluginInitCalls = resolveSymbol[FixtureCounterProc](library,
+    "pluginhost_clap_fixture_plugin_init_calls")
+  let pluginDestroyCalls = resolveSymbol[FixtureCounterProc](library,
+    "pluginhost_clap_fixture_plugin_destroy_calls")
+  let pluginMainThreadCalls = resolveSymbol[FixtureCounterProc](library,
+    "pluginhost_clap_fixture_plugin_main_thread_calls")
+  let hostContractFailures = resolveSymbol[FixtureCounterProc](library,
+    "pluginhost_clap_fixture_host_contract_failures")
   let lastInitPath = resolveSymbol[FixtureLastPathProc](library,
     "pluginhost_clap_fixture_last_init_path")
 
@@ -42,6 +54,10 @@ proc fixtureApi*(library: DynamicLibrary): FixtureApi =
   doAssert successfulInits.isOk
   doAssert deinitCalls.isOk
   doAssert createCalls.isOk
+  doAssert pluginInitCalls.isOk
+  doAssert pluginDestroyCalls.isOk
+  doAssert pluginMainThreadCalls.isOk
+  doAssert hostContractFailures.isOk
   doAssert lastInitPath.isOk
 
   FixtureApi(
@@ -50,5 +66,9 @@ proc fixtureApi*(library: DynamicLibrary): FixtureApi =
     successfulInits: successfulInits.value,
     deinitCalls: deinitCalls.value,
     createCalls: createCalls.value,
+    pluginInitCalls: pluginInitCalls.value,
+    pluginDestroyCalls: pluginDestroyCalls.value,
+    pluginMainThreadCalls: pluginMainThreadCalls.value,
+    hostContractFailures: hostContractFailures.value,
     lastInitPath: lastInitPath.value,
   )

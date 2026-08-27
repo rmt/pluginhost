@@ -74,6 +74,10 @@ suite "CLAP raw ABI":
       int64(ClapNoteDialectMidi), int64(ClapNoteDialectMidiMpe),
       int64(ClapNoteDialectMidi2), int64(ClapNotePortsRescanAll),
       int64(ClapNotePortsRescanNames),
+      int64(ClapLogDebug), int64(ClapLogInfo),
+      int64(ClapLogWarning), int64(ClapLogError),
+      int64(ClapLogFatal), int64(ClapLogHostMisbehaving),
+      int64(ClapLogPluginMisbehaving),
     ]
     for index, value in expected:
       check value == abiConstant(int32(index + 1))
@@ -83,6 +87,8 @@ suite "CLAP raw ABI":
     check $abiString(3) == ClapExtNotePorts
     check $abiString(4) == ClapPortMono
     check $abiString(5) == ClapPortStereo
+    check $abiString(6) == ClapExtLog
+    check $abiString(7) == ClapExtThreadCheck
 
   test "structure sizes and alignments match the official headers":
     checkLayout(ClapVersion, 1)
@@ -111,6 +117,8 @@ suite "CLAP raw ABI":
     checkLayout(ClapNotePortInfo, 24)
     checkLayout(ClapPluginNotePorts, 25)
     checkLayout(ClapHostNotePorts, 26)
+    checkLayout(ClapHostLog, 33)
+    checkLayout(ClapHostThreadCheck, 34)
 
   test "event field offsets match the official headers":
     checkField(ClapVersion, major, 1, 1)
@@ -258,6 +266,9 @@ suite "CLAP raw ABI":
     checkField(ClapPluginNotePorts, get, 25, 2)
     checkField(ClapHostNotePorts, supportedDialects, 26, 1)
     checkField(ClapHostNotePorts, rescan, 26, 2)
+    checkField(ClapHostLog, log, 33, 1)
+    checkField(ClapHostThreadCheck, isMainThread, 34, 1)
+    checkField(ClapHostThreadCheck, isAudioThread, 34, 2)
 
   test "all bound CLAP callbacks use pointer-sized C function values":
     checkFunctionPointer(ClapInputEventsSizeProc)
@@ -265,6 +276,8 @@ suite "CLAP raw ABI":
     checkFunctionPointer(ClapOutputEventsTryPushProc)
     checkFunctionPointer(ClapHostGetExtensionProc)
     checkFunctionPointer(ClapHostRequestProc)
+    checkFunctionPointer(ClapHostLogProc)
+    checkFunctionPointer(ClapHostThreadCheckProc)
     checkFunctionPointer(ClapPluginInitProc)
     checkFunctionPointer(ClapPluginDestroyProc)
     checkFunctionPointer(ClapPluginActivateProc)

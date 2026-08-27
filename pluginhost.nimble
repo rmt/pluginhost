@@ -1,7 +1,7 @@
 # Nimble 0.20 accepts only dotted numeric package versions and requires a
 # literal assignment. tests/unit/test_version.nim verifies this value against
 # the numeric core of VERSION.
-version       = "0.0.3"
+version       = "0.0.4"
 author        = "pluginhost contributors"
 description   = "A standalone Linux JACK host for CLAP plugins"
 license       = "UNLICENSED"
@@ -31,7 +31,7 @@ proc compileFfiFixture() =
 
 proc compileClapFixtureVariant(name: string; mode: int) =
   exec "cc -std=gnu11 -fPIC -shared -fvisibility=hidden " &
-       "-Wall -Wextra -Werror -Wl,-z,defs -Ivendor/clap/include " &
+       "-Wall -Wextra -Werror -pthread -Wl,-z,defs -Ivendor/clap/include " &
        "-DPLUGINHOST_CLAP_FIXTURE_MODE=" & $mode & " " &
        "tests/fixtures/clap/clap_fixture.c " &
        "-o build/fixtures/clap/" & name & ".clap"
@@ -58,6 +58,11 @@ proc compileClapFixtures() =
   compileClapFixtureVariant("null_id", 17)
   compileClapFixtureVariant("zero_descriptors", 18)
   compileClapFixtureVariant("create_guard", 19)
+  compileClapFixtureVariant("plugin_init_fail", 20)
+  compileClapFixtureVariant("create_fail", 21)
+  compileClapFixtureVariant("missing_plugin_destroy", 22)
+  compileClapFixtureVariant("plugin_wrong_id", 23)
+  compileClapFixtureVariant("plugin_incompatible_descriptor", 24)
   exec "cc -std=gnu11 -fPIC -shared -fvisibility=hidden " &
        "-Wall -Wextra -Werror -Wl,-z,defs " &
        "tests/fixtures/clap/no_entry_fixture.c " &
