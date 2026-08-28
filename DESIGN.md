@@ -174,16 +174,19 @@ Raw CLAP pointers do not escape this package except for a prevalidated real-time
 
 Responsibilities:
 
+- Explicitly open a checked, move-only `JackApi` DSO/procedure-table owner only for JACK-backed work.
+- Keep every borrowed JACK function pointer valid until the client is closed and callbacks are quiescent.
 - Open and close a JACK client.
-- Register callbacks before activation.
-- Query sample rate, maximum/current block size, and name limits.
-- Materialize a `PortPlan` as JACK audio and MIDI ports.
-- Activate, deactivate, and quiesce callbacks.
+- Register process, shutdown, buffer-size, sample-rate, xrun, freewheel, and required latency callbacks before activation.
+- Query sample rate, maximum/current block size, actual client name, and name limits.
+- Materialize a `PortPlan` as JACK audio and MIDI ports transactionally.
+- Activate, deactivate, and prove callback quiescence.
 - Supply current JACK buffers to `RtEngine` in the process trampoline.
 - Reflect CLAP latency in JACK ranges.
 - Convert JACK status and callback notifications into typed control-plane events.
 
-Only this package imports the raw JACK FFI.
+Only this package imports the raw JACK FFI/API layers. Importing those layers has no
+module-initialization side effect; `openJackApi` is the explicit runtime load point.
 
 ### 5.5 `RtEngine`
 
@@ -226,8 +229,13 @@ The Linux implementation multiplexes:
 - X11 connection readiness.
 - CLAP POSIX FD registrations.
 - CLAP monotonic timers.
-- Signal self-pipe/eventfd notifications.
+- A Linux `signalfd` created after handled signals are blocked process-wide.
 - Pending main-thread callbacks and control-plane work.
+
+Production builds disable Nim's implicit signal handlers. The composition root blocks
+`SIGINT`, `SIGTERM`, `SIGUSR1`, and `SIGUSR2` with `pthread_sigmask` before
+`jack_client_open`, so all JACK-created threads inherit the mask. The main reactor alone
+consumes those signals; no signal handler performs wakeup I/O on an RT thread.
 
 The initial implementation should use `epoll` behind a small `Reactor` interface. A portable `poll` implementation may be added later.
 
@@ -277,11 +285,11 @@ Configuration values are validated before any plugin code executes.
 `PortPlan` is a host-owned, immutable description built while the plugin is deactivated:
 
 - `AudioGroup`: CLAP index/ID, direction, name, channel count, type, flags, and flattened-channel range.
-- `AudioChannelPlan`: group/channel indices, canonical JACK short name, optional alias, and direction.
-- `NotePortPlan`: CLAP index/ID, name, supported/preferred dialect, JACK name, and direction.
+- `AudioChannelPlan`: group/channel indices, provisional canonical JACK short name, optional alias, and direction.
+- `NotePortPlan`: CLAP index/ID, name, supported/preferred dialect, provisional JACK name, and direction.
 - `PortPlanVersion`: monotonically increasing generation for diagnostics and restart validation.
 
-`JackBackend` realizes the plan and returns `RtPortMap`, which replaces names and metadata with stable JACK port handles and array indices suitable for real-time use.
+The CLAP inspector applies the strict stable consistency rules also enforced by the official validator. `JackBackend` realizes the plan only after it knows JACK's actual client name and limits: it validates canonical full names, bounds/truncates aliases on UTF-8 boundaries, registers ports transactionally, and returns an `RtPortMap` containing handles and array indices rather than metadata.
 
 A structural rescan creates a new plan and map only after JACK callbacks are quiescent. Live mutation or atomic replacement of a map is not needed initially.
 
@@ -297,7 +305,7 @@ Control-plane functions return a typed result rather than using exceptions as no
 
 FFI callbacks cannot return `HostError`. They record a compact `RtErrorCode`, counters, and bounded context values. The main thread converts these to diagnostics.
 
-All exported C callbacks have `raises: []`; no exception crosses an ABI boundary.
+All exported C callbacks have `raises: []`, but that effect does not track Defects. The shared build uses panic mode as the final no-unwind barrier; callback modules additionally disable checks/trace setup after validating inputs explicitly. No exception or Defect may unwind across an ABI boundary.
 
 ## 7. Dependency rules
 
@@ -355,6 +363,13 @@ During a JACK process callback, that OS thread is the symbolic CLAP audio thread
 
 No other plugin instance operation runs concurrently in an audio-thread role.
 
+Every other JACK-invoked callback follows the same no-allocation, no-cleanup,
+no-blocking, and no-diagnostic-I/O constraints, even when a JACK implementation
+normally dispatches it from a non-real-time notification thread. Notification callbacks
+write only bounded POD/atomic state. The latency callback may invoke JACK latency-range
+operations but never `jack_recompute_total_latencies`; the control plane requests
+recomputation after observing a change.
+
 ### 8.3 Plugin-created threads
 
 A plugin may call thread-safe host methods from its own threads. Host callback implementations must therefore avoid assuming caller identity. They may:
@@ -380,7 +395,7 @@ This avoids depending on another JACK callback during startup or shutdown.
 | Arbitrary/plugin thread to main | Atomic request bitset/counters | restart, process, callback, flush, GUI request |
 | Audio thread to main | Bounded SPSC records plus atomics | parameter changes, process error, MIDI drop count |
 | Multiple threads to main | Bounded lock-free MPSC queue | plugin log records |
-| Signal handler to main | Atomic flags plus self-pipe/eventfd | show, hide, terminate |
+| Blocked signal source to main | `signalfd` readiness through reactor | show, hide, terminate |
 | Main to audio | Immutable snapshots published before activation; atomics for wake/error state | port map, process-enabled flag |
 
 The main reactor uses a bounded service deadline while active so an audio-thread host callback only needs an atomic store; it does not need to write an eventfd or perform another system call.
@@ -521,11 +536,13 @@ The CLAP `try_push()` callback is valid only during `process()` or `flush()` and
 
 The sink never stores a plugin-owned SysEx pointer after `try_push()` returns.
 
-### 11.4 Sleeping and wake policy
+### 11.4 Sleeping, tail, and wake policy
 
 `RtEngine` tracks CLAP process status. It may skip plugin processing after `CLAP_PROCESS_SLEEP` when there are no connected audio inputs, incoming MIDI events, pending parameter flushes, or `request_process()` flag. Skipped cycles produce deterministic silence.
 
-The conservative initial behavior may keep processing whenever audio input is connected, avoiding an O(samples) silence scan.
+The conservative initial behavior keeps processing for `CLAP_PROCESS_TAIL` and `CLAP_PROCESS_CONTINUE_IF_NOT_QUIET`, and may keep processing whenever audio input is connected, avoiding tail-extension consumption and O(samples) silence scans.
+
+JACK freewheel transitions are recorded for the control plane but do not change CLAP render mode: the host remains in `CLAP_RENDER_REALTIME` and uses the same RT-safe process path because offline rendering is outside the MVP.
 
 ### 11.5 Metrics
 
@@ -546,12 +563,11 @@ The main thread periodically snapshots and reports deltas. Metrics are diagnosti
 
 Raw modules mirror official C names and layout closely. They contain:
 
-- Imported functions and exported callback signatures.
-- Structs, unions, constants, enums with explicit widths, and opaque pointer types.
+- Structs, unions, constants, enums with explicit widths, exported callback signatures, and typed procedure pointers.
 - No strings converted to Nim `string` in the real-time path.
 - No convenience wrappers that obscure ownership or thread restrictions.
 
-Higher-level adapters provide safe wrappers and convert C return values into typed results.
+The JACK raw module has no `{.dynlib.}` imports. `JackApi` resolves the complete required procedure table through the checked Linux DSO owner before any client is opened; partial resolution closes the DSO and returns a typed JACK error. Higher-level adapters convert C return values into typed results.
 
 ### 12.2 Stable host callback memory
 
@@ -589,6 +605,7 @@ Plugin callbacks may request changes while the main thread is already inside a p
 | CLAP DSO and entry init | `ClapModule` | Load/list/scan | After instance destruction / scan item |
 | CLAP plugin instance | `ClapInstance` | Main-thread startup | Main-thread shutdown |
 | `clap_host` and vtables | `ClapHostBridge` | Before plugin creation | After plugin destruction |
+| JACK DSO and procedure table | `JackBackend` (`JackApi`) | Explicit backend open | After client close and callback quiescence |
 | JACK client and ports | `JackBackend` | Session configuration | After callbacks quiesce |
 | Frozen RT map/arena | `HostSession`, borrowed by `RtEngine` | Before JACK activation | After JACK deactivation |
 | X11 display/window | `X11WindowHost` | GUI creation | GUI destruction |
@@ -633,6 +650,7 @@ src/
       state_codec.nim
     jack/
       ffi.nim
+      api.nim
       backend.nim
       ports.nim
       callbacks.nim
@@ -720,13 +738,15 @@ nimble testRt
 nimble sanitize
 ```
 
-Release profile:
+Shared product/test profile:
 
 - Nim 2.x reference compiler pinned in CI.
-- `--threads:on` as required by foreign callbacks.
-- `--mm:arc` initially.
-- RT modules and C callbacks annotated with `raises: []` and `gcsafe` where applicable.
-- Compiler checks enabled in tests; release-mode RT performance and safety are verified separately.
+- `--threads:on` for foreign callbacks and atomics.
+- `--mm:arc`.
+- `--panics:on` so a missed Defect cannot unwind through C.
+- `-d:noSignalHandler`; the host owns explicit signal policy.
+- Compiler checks enabled in control-plane tests.
+- RT modules and every foreign callback locally disable checks/stack/line traces after explicit validation and use `raises: []` plus `gcsafe` where applicable.
 - No captured closures or dynamically dispatched Nim methods in the process callback.
 
 Quality gates:
@@ -779,8 +799,8 @@ Future sandboxing should introduce a process-boundary adapter and real-time IPC 
 ## 19. Deliberately deferred decisions
 
 The following require prototypes or product decisions before being fixed. The
-CLAP binding strategy and direct minimal JACK FFI choices are resolved by ADRs
-0001 and 0002 respectively:
+CLAP binding, direct minimal JACK FFI, shared Nim safety profile, and checked JACK
+loading choices are resolved by ADRs 0001 through 0004:
 
 - Xlib versus XCB for the concrete X11 adapter.
 - Exact bounded queue algorithms and capacities beyond the required event minimum.
@@ -803,7 +823,7 @@ Initial ADR candidates:
 4. JACK-driven zero-copy float32 processing.
 5. Main-thread Linux reactor for GUI/timer/FD integration.
 6. X11/XEmbed as the initial embedded GUI path.
-7. ARC with an allocation-free unmanaged RT data model.
+7. ARC with an allocation-free unmanaged RT data model (resolved by ADR 0003).
 8. Atomic requests plus bounded queues for cross-thread communication.
 
 An ADR is required when changing an architectural invariant, adding a substantial dependency, exposing a public API, or choosing an option listed in the deferred decisions.
@@ -829,11 +849,12 @@ An ADR is required when changing an architectural invariant, adding a substantia
 Implementation reviews must verify:
 
 - [ ] The same OS thread remains the CLAP main thread for the plugin lifetime.
-- [ ] JACK is quiescent before an RT snapshot or plugin processing resource is replaced/freed.
+- [ ] JACK is quiescent before an RT snapshot, borrowed function pointer, DSO, or plugin processing resource is replaced/freed.
 - [ ] Exactly one symbolic CLAP audio thread exists for an instance at a time.
-- [ ] No allocation, deallocation, blocking lock, exception, or diagnostic I/O occurs in the process path.
+- [ ] No allocation, deallocation, blocking lock, exception, cleanup, or diagnostic I/O occurs in any JACK callback path.
 - [ ] All C callback storage and C strings outlive their foreign users.
-- [ ] No exception crosses a C ABI boundary.
+- [ ] No exception or Defect unwinds across a C ABI boundary; callback checks are disabled only behind explicit validation.
+- [ ] JACK is loaded only by the checked owned procedure table, never by eager module initialization.
 - [ ] Every successful CLAP entry init, plugin init, GUI create, JACK open, and file transaction has a matching cleanup action.
 - [ ] GUI state changes do not alter audio activation.
 - [ ] Input events are globally sample-sorted and output timestamps are validated.

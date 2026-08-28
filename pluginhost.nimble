@@ -15,11 +15,22 @@ proc dependencyPathsClause(): string =
   if result == "--path:":
     result = ""
 
+proc verifyNoEagerJackDependency(path: string) =
+  exec "command -v readelf >/dev/null 2>&1 || { " &
+       "echo 'readelf is required for ELF dependency verification' >&2; " &
+       "exit 1; }; dependencies=$(readelf -d " & path & ") || { " &
+       "echo 'could not inspect ELF dependencies: " & path & "' >&2; " &
+       "exit 1; }; if printf '%s\n' \"$dependencies\" | " &
+       "grep -Fq 'libjack.so.0'; then " &
+       "echo 'unexpected eager libjack dependency: " & path & "' >&2; " &
+       "exit 1; fi"
+
 proc compileTestBinary() =
   exec "mkdir -p build/test build/nimcache/test-app"
   exec "nim c --hints:off --path:src " & dependencyPathsClause() &
        " --nimcache:build/nimcache/test-app " &
        "--out:build/test/pluginhost src/pluginhost.nim"
+  verifyNoEagerJackDependency("build/test/pluginhost")
 
 proc compileFfiFixture() =
   exec "mkdir -p build/fixtures"
@@ -28,6 +39,13 @@ proc compileFfiFixture() =
        "-Ivendor/clap/include " &
        "tests/fixtures/ffi/ffi_fixture.c " &
        "-o build/fixtures/libpluginhost_ffi_fixture.so"
+
+proc compilePartialJackFixture() =
+  exec "mkdir -p build/fixtures"
+  exec "cc -std=gnu11 -fPIC -shared -fvisibility=hidden " &
+       "-Wall -Wextra -Werror -Wl,-z,defs " &
+       "tests/fixtures/jack/partial_jack_fixture.c " &
+       "-o build/fixtures/libpluginhost_jack_partial_fixture.so"
 
 proc compileClapFixtureVariant(name: string; mode: int) =
   exec "cc -std=gnu11 -fPIC -shared -fvisibility=hidden " &
@@ -118,19 +136,23 @@ proc runAbiTests() =
        "$(pkg-config --cflags jack) -c c/abi_probe.c " &
        "-o build/abi/abi_probe.o"
   compileFfiFixture()
+  compilePartialJackFixture()
   exec "PLUGINHOST_FFI_FIXTURE=$PWD/build/fixtures/" &
        "libpluginhost_ffi_fixture.so " &
-       "nim c -r --hints:off --mm:arc --threads:on --path:src --path:tests " &
+       "PLUGINHOST_JACK_PARTIAL_FIXTURE=$PWD/build/fixtures/" &
+       "libpluginhost_jack_partial_fixture.so " &
+       "nim c -r --hints:off --path:src --path:tests " &
        dependencyPathsClause() & " --nimcache:build/nimcache/abi " &
        "--passL:build/abi/abi_probe.o --out:build/test/all_abi_tests " &
        "tests/abi/all_abi_tests.nim"
+  verifyNoEagerJackDependency("build/test/all_abi_tests")
 
 proc runRtTests() =
   exec "mkdir -p build/nimcache/rt build/test"
   compileFfiFixture()
   exec "PLUGINHOST_FFI_FIXTURE=$PWD/build/fixtures/" &
        "libpluginhost_ffi_fixture.so " &
-       "nim c -r --hints:off --mm:arc --threads:on -d:nimAllocStats " &
+       "nim c -r --hints:off -d:nimAllocStats " &
        "--path:src --path:tests " & dependencyPathsClause() &
        " --nimcache:build/nimcache/rt --out:build/test/all_rt_tests " &
        "tests/rt/all_rt_tests.nim"
@@ -141,7 +163,7 @@ proc runClapFixtureTests() =
   exec "mkdir -p build/nimcache/fixtures build/test"
   exec "PLUGINHOST_TEST_BIN=$PWD/build/test/pluginhost " &
        "PLUGINHOST_CLAP_FIXTURE_DIR=$PWD/build/fixtures/clap " &
-       "nim c -r --hints:off --mm:arc --threads:on --path:src --path:tests " &
+       "nim c -r --hints:off --path:src --path:tests " &
        dependencyPathsClause() & " --nimcache:build/nimcache/fixtures " &
        "--out:build/test/all_fixture_tests tests/fixtures/all_fixture_tests.nim"
 
@@ -156,7 +178,7 @@ task testFixtures, "Build and test the synthetic CLAP fixtures":
   compileTestBinary()
   runClapFixtureTests()
 
-task testRt, "Run the ARC callback allocation and generated-code checks":
+task testRt, "Run callback allocation and generated-code safety checks":
   runRtTests()
 
 task all, "Run compile checks, build the executable, and run tests":

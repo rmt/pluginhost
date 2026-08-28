@@ -2,12 +2,12 @@
 
 `pluginhost` is an in-progress standalone Linux JACK host for native CLAP plugins, implemented in Nim. Its intended role is similar to `carla-single`, with one plugin instance and one JACK client per process.
 
-The current development version is **0.0.5-dev**. The implementation adds
-checked CLAP entry/factory ownership, copied descriptor catalogs, selection policy,
-human/JSON `list`, and recursive human/JSON `scan` output to the previously reviewed
-scaffold, raw CLAP/JACK FFI, loader, callback probes, and ABI/RT tests. The CLAP host bridge,
-instance lifecycle, bounded immutable audio/note port planning, and real-time render-mode
-negotiation are implemented, but JACK runtime integration is not implemented yet.
+The current development version is **0.0.5-dev**. The implementation includes
+checked CLAP ownership/catalog/lifecycle, human/JSON `list` and recursive `scan`,
+a stable CLAP host bridge, bounded immutable audio/note port planning, and real-time
+render negotiation. Increment 4A adds one ARC/panic callback-safety build profile and
+checked, move-only runtime ownership of the JACK DSO/procedure table. JACK client,
+port, callback, activation, and processing integration are not implemented yet.
 
 ## Build
 
@@ -16,7 +16,7 @@ Requirements:
 - Nim 2.2 or later
 - Nimble
 - `argparse` 4.0.2 (installed by Nimble)
-- A GNU-compatible C11 compiler (GCC or Clang) and `pkg-config` for ABI tests
+- A GNU-compatible C11 compiler (GCC or Clang), `pkg-config`, and Binutils `readelf` for verification
 - JACK development headers and `libjack.so.0` for ABI tests
 - Python 3 for the generated real-time callback audit
 
@@ -45,30 +45,37 @@ has no transitive package dependencies, and is used only in the non-real-time
 control plane.
 
 `nimble testAbi` verifies the handwritten raw bindings against the vendored
-official CLAP 1.2.10 headers and the installed JACK development headers. The
-complete CLAP header tree is preserved under `vendor/clap/` with its MIT license
-and exact upstream provenance. Draft headers are vendored unchanged but are not
-part of pluginhost's bound or supported ABI surface.
+official CLAP 1.2.10 headers and the installed JACK development headers. It also
+checks missing-library/symbol rollback and runtime calls through the owned JACK
+procedure table. The complete CLAP header tree is preserved under `vendor/clap/`
+with its MIT license and exact upstream provenance. Draft headers are vendored
+unchanged but are not part of pluginhost's bound or supported ABI surface.
 
 `nimble testFixtures` independently compiles synthetic CLAP libraries and checks
 entry/factory ownership, descriptor validation, instance cleanup, deactivated audio/note
 port inspection, render negotiation, process-level `list`, and recursive `scan` behavior.
 
-`nimble testRt` compiles a process-shaped callback with ARC and thread support,
-checks Nim allocator counters over repeated and first-foreign-thread calls, and
-audits the generated C callback body for prohibited operations. This is the
-initial FFI-boundary spike, not yet proof of a complete JACK process path.
+All builds share `--mm:arc --threads:on --panics:on -d:noSignalHandler` through
+`config.nims`. Foreign callbacks additionally disable checks and trace setup locally
+after explicit input validation; `raises: []` alone is not treated as a Defect barrier.
 
-The checked Linux loader uses the platform `dlopen`/`dlsym`/`dlclose` API and
-adds no Nim package dependency. Its owner is move-only and requires explicit,
-checked, idempotent close.
+`nimble testRt` checks Nim allocator counters over repeated and first-foreign-thread
+calls and audits generated C callback bodies for prohibited operations. This remains
+an FFI-boundary spike until Increment 4C adds module-level audits, a negative canary,
+and C allocation/lock/I/O instrumentation around a live JACK callback.
+
+The checked Linux loader uses `dlopen`/`dlsym`/`dlclose` without another Nim package.
+Both its generic owner and `JackApi` are move-only and require explicit, checked,
+idempotent close. Importing JACK declarations does not load `libjack.so.0`; information
+commands remain independent of JACK, and a future backend will load it explicitly.
 
 ## Security
 
-`list` and `scan` load CLAP libraries and execute their entry initialization and
-factory/descriptor code in-process with the current user's permissions. A malformed
-or hostile plugin can crash or compromise the host; validation and cleanup do not
-provide sandboxing. Inspect only plugins you trust.
+`list` and `scan` load and unload CLAP libraries and execute their entry, factory,
+and descriptor code in-process with the current user's permissions. A malformed or
+hostile plugin can crash or compromise the host; plugin-created threads, TLS, or exit
+handlers can also make unload unsafe. Validation and cleanup do not provide
+sandboxing. Inspect only plugins you trust.
 
 Descriptor inspection is bounded to 4,096 descriptors, 64 KiB per descriptor
 string, 256 features of 4 KiB each, and 16 MiB total copied metadata per library.
@@ -87,8 +94,10 @@ pluginhost scan [--json] [DIRECTORY ...]
 `list` reports index, ID, name, vendor, version, and features without creating a
 plugin instance. `scan` recursively discovers canonical `.clap` files, continues
 past per-root and per-candidate failures, reports successful descriptors, and uses
-exit status 3 when any issue occurred. `run` remains an explicit not-implemented
-failure until its runtime increments are complete.
+exit status 3 when any issue occurred. Relative explicit/`CLAP_PATH` roots resolve
+from the current working directory; environment values do not expand `~`. `run`
+remains an explicit not-implemented failure until orderly signal/reactor control is
+implemented.
 
 ## Project documents
 

@@ -60,6 +60,17 @@ suite "typed errors and diagnostics":
     check selectionError.exitCode() == ExitUsage
     check formatDiagnostic(selectionError).contains("pluginhost --help")
 
+  test "JACK errors use the dedicated subsystem and exit status":
+    let error = hostError(
+      hsJack, hekJackSymbol, "required JACK symbol is unavailable",
+      "library=libjack.so.0; symbol=jack_activate",
+    )
+    let text = formatDiagnostic(error)
+
+    check error.exitCode() == ExitJack
+    check text.contains("JACK error")
+    check text.contains("symbol=jack_activate")
+
   test "diagnostic context escapes invalid text and control characters":
     let malformed = "path=bad\n\x1b\xFF.clap"
     let text = formatDiagnostic(hostError(

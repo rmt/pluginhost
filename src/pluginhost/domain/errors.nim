@@ -5,6 +5,7 @@ type
     hsInternal = "internal"
     hsPlatform = "platform"
     hsClap = "CLAP"
+    hsJack = "JACK"
     hsDiscovery = "discovery"
 
   HostErrorKind* = enum
@@ -27,6 +28,9 @@ type
     hekClapPluginInit
     hekClapPorts
     hekClapRender
+    hekJackLibraryOpen
+    hekJackSymbol
+    hekJackLibraryClose
     hekDiscoveryRoot
     hekDiscoveryTraversal
     hekDiscoveryCandidate
@@ -43,6 +47,7 @@ const
   ExitFailure* = 1
   ExitUsage* = 2
   ExitClap* = 3
+  ExitJack* = 4
 
 proc hostError*(subsystem: HostSubsystem; kind: HostErrorKind;
                 message: string; context = ""): HostError =
@@ -63,15 +68,18 @@ proc transitionError*(message: string; context = ""): HostError =
   hostError(hsInternal, hekInvalidTransition, message, context)
 
 proc exitCode*(error: HostError): int =
+  if error.subsystem == hsJack:
+    return ExitJack
+
   case error.kind
   of hekUsage, hekPluginSelection:
     ExitUsage
   of hekClapPath, hekClapEntry, hekClapVersion, hekClapEntryInit,
       hekClapFactory, hekClapDescriptor, hekClapUnload, hekClapPlugin,
       hekClapPluginCreate, hekClapPluginInit, hekClapPorts, hekClapRender,
-      hekDiscoveryRoot,
-      hekDiscoveryTraversal, hekDiscoveryCandidate:
+      hekDiscoveryRoot, hekDiscoveryTraversal, hekDiscoveryCandidate:
     ExitClap
   of hekNotImplemented, hekInvalidTransition, hekInternal, hekLibraryOpen,
-      hekSymbolLookup, hekLibraryClose:
+      hekSymbolLookup, hekLibraryClose, hekJackLibraryOpen, hekJackSymbol,
+      hekJackLibraryClose:
     ExitFailure

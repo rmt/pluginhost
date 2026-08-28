@@ -1,4 +1,4 @@
-import std/[strutils, unittest]
+import std/unittest
 
 import pluginhost/jack/ffi
 import ./abi_probe
@@ -14,17 +14,6 @@ template checkField(typeName: typedesc; fieldName: untyped;
 
 template checkFunctionPointer(typeName: typedesc) =
   check sizeof(typeName) == sizeof(pointer)
-proc compileRtCallEffects(port: JackPort; portBuffer: pointer; nframes: JackNFrames) {.
-    cdecl, gcsafe, raises: [].} =
-  discard jackPortGetBuffer(port, nframes)
-  discard jackMidiGetEventCount(portBuffer)
-  var event: JackMidiEvent
-  discard jackMidiEventGet(addr event, portBuffer, 0)
-  jackMidiClearBuffer(portBuffer)
-  discard jackMidiMaxEventSize(portBuffer)
-  discard jackMidiEventReserve(portBuffer, 0, 3)
-  discard jackMidiEventWrite(portBuffer, 0, nil, 0)
-
 
 suite "JACK raw ABI":
   test "fundamental scalar widths and alignments match the JACK headers":
@@ -77,16 +66,41 @@ suite "JACK raw ABI":
     checkFunctionPointer(JackBufferSizeCallback)
     checkFunctionPointer(JackSampleRateCallback)
     checkFunctionPointer(JackXrunCallback)
+    checkFunctionPointer(JackFreewheelCallback)
     checkFunctionPointer(JackLatencyCallback)
 
-  test "the runtime library call boundary returns version information":
-    var major, minor, micro, protocol: cint
-    jackGetVersion(addr major, addr minor, addr micro, addr protocol)
-    let versionText = jackGetVersionString()
-
-    check major >= 0
-    check minor >= 0
-    check micro >= 0
-    check protocol >= 0
-    check versionText != nil
-    check ($versionText).strip().len > 0
+  test "runtime procedure aliases use the C function-pointer representation":
+    checkFunctionPointer(JackGetVersionProc)
+    checkFunctionPointer(JackGetVersionStringProc)
+    checkFunctionPointer(JackClientOpenProc)
+    checkFunctionPointer(JackClientCloseProc)
+    checkFunctionPointer(JackClientNameSizeProc)
+    checkFunctionPointer(JackGetClientNameProc)
+    checkFunctionPointer(JackActivateProc)
+    checkFunctionPointer(JackDeactivateProc)
+    checkFunctionPointer(JackOnShutdownProc)
+    checkFunctionPointer(JackOnInfoShutdownProc)
+    checkFunctionPointer(JackSetProcessCallbackProc)
+    checkFunctionPointer(JackSetBufferSizeCallbackProc)
+    checkFunctionPointer(JackSetSampleRateCallbackProc)
+    checkFunctionPointer(JackSetXrunCallbackProc)
+    checkFunctionPointer(JackSetFreewheelCallbackProc)
+    checkFunctionPointer(JackSetLatencyCallbackProc)
+    checkFunctionPointer(JackGetSampleRateProc)
+    checkFunctionPointer(JackGetBufferSizeProc)
+    checkFunctionPointer(JackPortRegisterProc)
+    checkFunctionPointer(JackPortUnregisterProc)
+    checkFunctionPointer(JackPortGetBufferProc)
+    checkFunctionPointer(JackPortNameProc)
+    checkFunctionPointer(JackPortFlagsProc)
+    checkFunctionPointer(JackPortSetAliasProc)
+    checkFunctionPointer(JackPortNameSizeProc)
+    checkFunctionPointer(JackPortGetLatencyRangeProc)
+    checkFunctionPointer(JackPortSetLatencyRangeProc)
+    checkFunctionPointer(JackRecomputeTotalLatenciesProc)
+    checkFunctionPointer(JackMidiGetEventCountProc)
+    checkFunctionPointer(JackMidiEventGetProc)
+    checkFunctionPointer(JackMidiClearBufferProc)
+    checkFunctionPointer(JackMidiMaxEventSizeProc)
+    checkFunctionPointer(JackMidiEventReserveProc)
+    checkFunctionPointer(JackMidiEventWriteProc)

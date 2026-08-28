@@ -136,6 +136,8 @@ Scanning requirements:
 - Explicit directories take precedence; otherwise standard paths and `CLAP_PATH` are used.
 - Duplicate canonical paths and symlink directory loops MUST be avoided.
 - A failure in one candidate MUST be reported and MUST NOT prevent remaining candidates from being scanned.
+- A scan with any reported root/candidate issue MUST retain successful results and exit with status 3.
+- Relative explicit or `CLAP_PATH` entries resolve from the process working directory; `~` in an environment value is literal and is not shell-expanded.
 - Each successfully initialized entry MUST receive a matching `deinit()` before unloading.
 - Scanning runs plugin-provided native code. This security and stability fact MUST be documented.
 
@@ -147,7 +149,10 @@ A persistent plugin cache is not required initially.
 - `SIGUSR1` MUST request that the GUI be shown.
 - `SIGUSR2` MUST request that the GUI be hidden.
 - Show and hide operations MUST be idempotent.
-- POSIX signal handlers MUST only perform async-signal-safe notification, such as setting an atomic flag and waking the main loop through a self-pipe/eventfd. They MUST NOT call CLAP, JACK, X11, memory allocation, or logging APIs directly.
+- Production builds MUST disable Nim's implicit signal handlers.
+- Handled signals MUST be blocked with `pthread_sigmask` before `jack_client_open` so JACK-created threads inherit the mask.
+- The main control plane MUST consume handled signals through `signalfd` or an equivalent dedicated mechanism; no handled signal may run host policy or wakeup I/O on the JACK process thread.
+- Any POSIX signal handler used by a fallback implementation MUST only perform async-signal-safe notification and MUST NOT call CLAP, JACK, X11, allocation, or logging APIs.
 - Closing the GUI window MUST hide/destroy the GUI as required by the plugin, but MUST NOT stop audio or terminate the host.
 - A request to show a GUI after it was closed MUST recreate it when the plugin permits recreation.
 - `SIGUSR1` under `--no-gui` MUST be ignored with a rate-limited warning.
@@ -168,10 +173,11 @@ The host MUST:
 8. Call `plugin.init()` on the main thread.
 9. Query plugin extensions only after or during successful `plugin.init()`.
 10. Load requested state while on the main thread and before audio activation.
-11. Discover audio and note ports while the plugin is deactivated.
+11. Discover audio and note ports while the plugin is deactivated and reject metadata that violates the stable CLAP consistency rules enforced by the official validator.
 12. Set `CLAP_RENDER_REALTIME` when the plugin implements the render extension.
-13. Activate using JACK's sample rate and a frame range that includes every JACK process block the host will deliver.
-14. Call `start_processing()` in the symbolic CLAP audio-thread context before the first `process()` call.
+13. Observe JACK freewheel transitions without switching to offline rendering; continue using the real-time-safe path.
+14. Activate using JACK's sample rate and a frame range that includes every JACK process block the host will deliver.
+15. Call `start_processing()` in the symbolic CLAP audio-thread context before the first `process()` call.
 
 ### 7.2 Shutdown order
 
@@ -209,9 +215,10 @@ Requirements:
 
 - `CLAP_PROCESS_ERROR` MUST discard/zero that cycle's output and schedule an orderly non-zero termination.
 - The host SHOULD honor `CLAP_PROCESS_SLEEP`, waking for incoming events, relevant audio input, or `request_process()`.
+- `CLAP_PROCESS_TAIL` and `CLAP_PROCESS_CONTINUE_IF_NOT_QUIET` MUST initially be treated conservatively as continued processing without consuming `clap.tail` or scanning buffers for silence.
 - The host MAY continue processing when audio inputs are connected rather than scan buffers to prove silence.
 - `steady_time` MUST begin at a non-negative value and advance by at least the processed frame count on every call.
-- The initial release MUST pass `transport = nil`.
+- The initial release MUST pass `transport = nil`; this permitted CLAP behavior remains a documented compatibility risk for non-conforming plugins.
 
 ## 8. Required CLAP extension support
 
@@ -266,6 +273,8 @@ Even though there is no generic parameter UI, the host MUST:
 ### 9.1 Compatibility
 
 - The host MUST use the JACK client API exposed by `libjack.so.0`.
+- JACK MUST be loaded only by an explicit checked backend operation; missing libraries or required symbols MUST produce a typed JACK error and complete partial-load rollback.
+- `--help`, `--version`, `list`, and `scan` MUST remain usable without `libjack.so.0`.
 - It MUST work with JACK1, JACK2, and PipeWire's JACK-compatible implementation where they provide the standard client ABI.
 - A JACK server is required at run time unless libjack successfully starts one.
 - Failure to connect MUST identify the requested client/server and summarize the JACK status flags.
@@ -279,7 +288,11 @@ Before activating the JACK client, the host MUST register:
 - Shutdown/info-shutdown callback
 - Buffer-size callback
 - Sample-rate callback
+- Xrun callback
+- Freewheel callback
 - Latency callback when needed for plugin latency reporting
+
+The freewheel callback MUST record transitions for control-plane diagnostics while processing continues through the real-time-safe path in `CLAP_RENDER_REALTIME`; offline rendering remains unsupported.
 
 The host MUST query the initial sample rate and buffer size before CLAP activation.
 
@@ -289,10 +302,11 @@ The host MUST query the initial sample rate and buffer size before CLAP activati
 - CLAP port grouping and channel order MUST be preserved internally in the `clap_audio_buffer` arrays.
 - JACK buffers MUST be passed to the plugin as float32 channel pointers without a full-buffer copy whenever possible.
 - `data64` MUST be null in the initial release. CLAP requires plugins to support float32 processing.
-- Port names MUST be deterministic, unique within the client, legal for JACK, and short enough for the server's reported name limit.
+- Port names MUST be deterministic, unique within the client, legal for JACK, and short enough for the limit calculated from JACK's actual client name and reported name size.
 - Canonical short names SHOULD follow `audio_in_N` and `audio_out_N`, using one-based flattened channel numbers.
-- CLAP port/channel names SHOULD be exposed as JACK aliases or metadata when supported.
-- If registration of any required port fails, startup MUST fail and unregister already-created ports.
+- CLAP port/channel names SHOULD be exposed as JACK aliases or metadata when supported; aliases MUST be bounded and truncated on a valid UTF-8 boundary when required.
+- If registration of any required port fails, startup MUST report the failing flattened count/name and unregister every already-created port.
+- The CLAP-side port bound is a metadata safety limit, not a promise that the current JACK server can realize that many ports.
 - Before each call to `process()`, output buffers MUST be in a defined state. When processing is skipped or fails, all JACK audio output buffers MUST contain zeroes.
 - The host MUST provide correct CLAP audio-buffer counts, channel counts, and pointer lifetimes for the duration of `process()`.
 - The host SHOULD set input `constant_mask` bits for known disconnected zero-filled channels; it MUST NOT claim a connected buffer is constant without proving it.
@@ -309,6 +323,7 @@ The host MUST query the initial sample rate and buffer size before CLAP activati
 
 - When the plugin implements `clap.latency`, its reported processing latency MUST be reflected in JACK latency ranges.
 - `clap_host_latency.changed()` MUST schedule a safe latency refresh/restart as required by CLAP.
+- The latency callback MAY call only JACK's documented latency-range APIs and MUST NOT call `jack_recompute_total_latencies`; recomputation is initiated from the control plane.
 - Latency updates MUST not occur through unsafe operations in the process callback.
 
 ## 10. MIDI and note event requirements
@@ -397,9 +412,9 @@ The host MUST query the initial sample rate and buffer size before CLAP activati
 - A plugin instance MUST never have two simultaneous symbolic audio threads.
 - Main/audio communication MUST use bounded lock-free queues or atomics with documented ownership.
 
-### 13.2 Prohibited process-callback operations
+### 13.2 Prohibited foreign-callback operations
 
-The JACK process callback and every host callback reachable from plugin `process()` MUST NOT perform:
+Every JACK-invoked callback and every host callback reachable from plugin `process()` MUST NOT perform:
 
 - Heap allocation or deallocation
 - Nim GC activity
@@ -411,13 +426,15 @@ The JACK process callback and every host callback reachable from plugin `process
 - Dynamic library operations
 - Plugin activation, deactivation, destruction, GUI operations, or state serialization
 - Direct logging to stdout/stderr
+- Resource cleanup or ownership release
 
-Allowed operations must be bounded and deterministic. JACK's documented real-time-safe buffer and MIDI functions may be used.
+Allowed operations must be bounded and deterministic. JACK's documented real-time-safe buffer and MIDI functions may be used by process code. A latency callback may use only the latency APIs required by section 9.5; no callback may trigger latency recomputation.
 
 ### 13.3 Fault handling in callbacks
 
-- No Nim or foreign exception may cross a C callback boundary.
-- Callback inputs, port indices, event sizes, and timestamps MUST be validated without unbounded work.
+- No Nim exception, Defect, or foreign exception may unwind across a C callback boundary.
+- `raises: []` is necessary but is not a Defect barrier; builds MUST use panic mode and callback code MUST disable runtime checks after explicit validation.
+- Callback inputs, port indices, event sizes, and timestamps MUST be validated without unbounded work before entering unchecked access.
 - Host callbacks such as logging and restart requests MUST use bounded preallocated storage or lock-free flags.
 - Real-time log queue overflow MUST increment a counter rather than block or allocate.
 - Errors collected in real time MUST be rendered by the main thread later.
@@ -428,14 +445,15 @@ Allowed operations must be bounded and deterministic. JACK's documented real-tim
 - Small C files MAY be used only for ABI assertions, build probes, or functionality that cannot be expressed safely through Nim's FFI; they MUST NOT become an alternate host implementation.
 - The project MUST build through Nimble with a documented release command.
 - CI and release builds MUST use a supported Nim 2.x compiler; Nim 2.2.10 is the initial reference compiler.
-- Release builds SHOULD use ARC (`--mm:arc`) unless measurement demonstrates another memory manager is equally safe. No managed allocation is permitted on the audio thread regardless of memory manager.
-- Thread support MUST be enabled where required for foreign JACK callbacks and atomics.
+- Product, unit, fixture, ABI, and RT builds MUST share `--mm:arc --threads:on --panics:on -d:noSignalHandler`.
+- Compiler checks remain enabled for control-plane tests; foreign callbacks and RT modules MUST disable checks, stack traces, and line traces locally after explicit validation.
+- No managed allocation is permitted on the audio thread regardless of memory manager.
 - C callback functions MUST use the exact CLAP/JACK calling convention and be non-capturing.
-- Every CLAP/JACK struct used across the FFI MUST have automated size, alignment, field-offset, enum-width, and function-pointer ABI checks against the official C headers on each supported architecture.
+- Every CLAP/JACK struct and procedure signature used across the FFI MUST have automated size, alignment, field-offset, enum-width, and function-pointer ABI checks against the official C headers on each supported architecture.
 - The stable CLAP 1.2.10 headers SHOULD be vendored or pinned reproducibly under their MIT license. Draft extensions MUST not be included in the initial host ABI surface.
 - Existing `nim-clap` bindings are incomplete and identify CLAP 1.2.0 as their tested baseline. They MUST NOT be adopted without an ABI/API audit and completion of required host extensions.
 - The `jacket` package is a beta dynamic wrapper around libjack. It MAY be used after an API/real-time audit; otherwise the project SHOULD maintain a minimal, pinned JACK FFI for only the required client API.
-- Runtime dependencies and their licenses MUST be documented. At minimum, the host expects `libjack.so.0`; GUI builds may require X11/Xlib or XCB libraries.
+- Runtime dependencies and their licenses MUST be documented. A JACK-backed run expects `libjack.so.0`; information commands do not require it. GUI builds may require X11/Xlib or XCB libraries.
 - The initial source build MUST support Linux x86_64. Linux aarch64 SHOULD be supported once ABI CI is available.
 
 ## 15. Reliability, diagnostics, and security
@@ -448,7 +466,7 @@ Allowed operations must be bounded and deterministic. JACK's documented real-tim
 - Repeated real-time warnings MUST be rate-limited and include a suppressed/dropped count.
 - The host MUST never silently select the wrong descriptor from a multi-plugin library.
 - Invalid UTF-8 from a misbehaving plugin MUST be escaped or replaced safely for display and port naming.
-- The documentation MUST warn that loading or scanning a CLAP plugin executes third-party native code with the user's permissions.
+- The documentation MUST warn that loading, scanning, and unloading a CLAP plugin executes third-party native code and that misbehaving plugin threads, TLS, or exit handlers can make `dlclose` unsafe.
 - The host MUST not claim crash isolation or sandboxing.
 
 Suggested exit statuses:
@@ -479,13 +497,14 @@ Exact values may change before the CLI is declared stable, but they MUST be docu
 The project MUST include:
 
 - Unit tests for CLI parsing, descriptor selection, path discovery, name sanitization, state streams, event conversion, ordering, overflow, and lifecycle state transitions.
-- C-vs-Nim ABI conformance tests for every imported CLAP and JACK type used by the host.
+- C-vs-Nim ABI conformance tests for every CLAP and JACK type and procedure signature used by the host.
 - A purpose-built test CLAP library with multiple descriptors and controllable audio, MIDI, state, parameter, restart, timer, FD, and GUI behavior.
 - Integration tests against a disposable JACK server/dummy backend.
 - Tests with PipeWire's JACK implementation in CI or a documented pre-release test matrix.
 - Debug builds with bounds/overflow checks where compatible, and sanitizer runs over generated C code where practical.
-- A test or instrumentation mode proving the host itself does not allocate, lock, print, or perform prohibited I/O in the process path.
-- Repeated load/start/show/hide/stop/unload tests to detect lifecycle and resource leaks.
+- RT generated-C auditing MUST cover complete RT-only modules/call paths under product flags and include a negative canary that the audit is required to reject.
+- Instrumentation MUST prove the host itself performs no Nim/C allocation, lock, print, or prohibited I/O in the live process path.
+- Repeated load/start/show/hide/stop/unload tests MUST detect lifecycle and resource leaks, including repeated opens of the same DSO.
 
 ### 17.2 Release acceptance scenarios
 

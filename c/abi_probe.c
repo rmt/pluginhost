@@ -116,6 +116,9 @@ _Static_assert(__builtin_types_compatible_p(
 _Static_assert(__builtin_types_compatible_p(JackXRunCallback, int (*)(void *)),
                "unexpected JackXRunCallback");
 _Static_assert(__builtin_types_compatible_p(
+                  JackFreewheelCallback, void (*)(int, void *)),
+               "unexpected JackFreewheelCallback");
+_Static_assert(__builtin_types_compatible_p(
                   JackLatencyCallback, void (*)(jack_latency_callback_mode_t, void *)),
                "unexpected JackLatencyCallback");
 
@@ -140,6 +143,8 @@ ABI_ASSERT_SYMBOL(jack_set_sample_rate_callback,
                   int (*)(jack_client_t *, JackSampleRateCallback, void *));
 ABI_ASSERT_SYMBOL(jack_set_xrun_callback,
                   int (*)(jack_client_t *, JackXRunCallback, void *));
+ABI_ASSERT_SYMBOL(jack_set_freewheel_callback,
+                  int (*)(jack_client_t *, JackFreewheelCallback, void *));
 ABI_ASSERT_SYMBOL(jack_set_latency_callback,
                   int (*)(jack_client_t *, JackLatencyCallback, void *));
 ABI_ASSERT_SYMBOL(jack_get_sample_rate, jack_nframes_t (*)(jack_client_t *));

@@ -3,7 +3,7 @@
 **Plan version:** 1.0.0  
 **Target product release:** `pluginhost` 0.1.0  
 **Initial development version:** 0.0.1-dev  
-**Status:** Approved through Increment 3; Increment 4 not started
+**Status:** Approved through Increment 4A; Increment 4B not started
 **Companion documents:** [`REQUIREMENTS.md`](REQUIREMENTS.md), [`DESIGN.md`](DESIGN.md)
 
 ## 1. Purpose
@@ -133,9 +133,9 @@ An increment may be split into smaller review units if its diff becomes difficul
 ### 5.3 Real-time code
 
 - All real-time data is preallocated before JACK activation.
-- No managed strings, sequences, tables, closures, exceptions, logging, filesystem calls, GUI calls, or blocking locks enter the process path.
-- C callbacks use exact calling conventions and `raises: []`.
-- Every change to `src/pluginhost/rt/`, JACK process callbacks, or CLAP output-event callbacks runs the real-time safety test task.
+- No managed strings, sequences, tables, closures, exceptions, logging, filesystem calls, GUI calls, cleanup, or blocking locks enter any JACK callback path.
+- C callbacks use exact calling conventions, `raises: []`, and `gcsafe`; because `raises: []` does not track Defects, callbacks also run under the shared panic profile with local checks/trace setup disabled after explicit validation.
+- Every change to `src/pluginhost/rt/`, any JACK callback, or CLAP output-event callback runs the real-time safety test task.
 - Performance optimization does not bypass correctness tests or introduce unmeasured complexity.
 
 ### 5.4 Dependencies
@@ -346,41 +346,44 @@ Review lifecycle state machine, stable callback storage, raw-pointer lifetimes, 
 ## 11. Increment 4 — JACK backend and real-time harness
 
 **Planned version:** 0.0.5-dev
+**Review split:** 4A approved; 4B and 4C require their own review gates
 
 ### Goal
 
-Implement and test JACK client/port/callback mechanics independently of CLAP DSP, using a minimal fake process endpoint.
+Implement and test JACK client/port/callback mechanics independently of CLAP DSP, using a minimal fake process endpoint. Public `run` remains disabled.
 
-### Implementation
+### Increment 4A — build profile, checked JACK loading, and ABI
 
-- Add `JackBackend` with open/configure/activate/deactivate/close states.
-- Register process, shutdown, sample-rate, buffer-size, and latency callbacks before activation.
-- Realize an immutable synthetic `PortPlan` as JACK ports with deterministic naming.
-- Add `RtEngine` fixed-layout skeleton and static process trampoline.
-- Add `AudioRoleGuard`, request/metric atomics, and callback quiescence rules.
-- Use a test processor that writes silence, copies input, or emits a deterministic signal without allocation.
-- Add a disposable JACK dummy-server test harness.
-- Add initial RT instrumentation hooks.
-- Convert JACK notifications to compact main-thread-visible events; callbacks perform no cleanup.
+**Status:** Approved in review unit 4A.
 
-### Tests
+- Pin one ARC/thread/panic/signal profile for product and every test task.
+- Record the callback Defect barrier and checked JACK loading decisions in ADRs.
+- Convert raw JACK imported procedures to declaration-only typed procedure pointers.
+- Add a move-only checked `JackApi` DSO/procedure-table owner with complete partial-resolution rollback.
+- Add typed JACK loader/symbol/close errors and exit status 4.
+- Add freewheel ABI declarations while retaining the already declared xrun API; later connection and MIDI-loss APIs remain deferred.
+- Prove information-command binaries have no eager `libjack.so.0` dependency.
+- Test missing library, missing symbol, rollback, runtime version calls, move-only ownership, and repeated close.
 
-- JACK unavailable/status diagnostics.
-- Port registration names, direction, type, cleanup, and partial registration failure.
-- Sample rate and buffer size capture.
-- Process callback buffer access and deterministic output.
-- No callback after backend deactivation returns.
-- JACK shutdown schedules but does not execute cleanup in callback context.
-- Repeated open/activate/deactivate/close cycles.
-- Process path performs no host allocation, logging, blocking lock, or exception.
+### Increment 4B — backend, ports, callbacks, and fake endpoint
 
-### Manual verification
+- Add move-only `JackBackend` open/configure/activate/deactivate/close states.
+- Register every callback before activation and convert notifications to compact POD/atomic state without callback-side cleanup.
+- Realize immutable synthetic plans transactionally using actual JACK client/name limits and complete rollback.
+- Add stable fixed-layout `RtPortMap`, `RtEngine` skeleton, `AudioRoleGuard`, and callback quiescence rules.
+- Use a fake processor that writes silence, copies input, or emits deterministic samples without allocation.
+- Test statuses, registration boundaries, failure rollback, notifications, deterministic buffers, role exclusivity, and repeated lifecycle.
 
-Start a dummy JACK server, launch the integration fixture, inspect ports with JACK tools, connect input/output, and verify deterministic samples.
+### Increment 4C — live integration and strengthened RT evidence
 
-### Human review gate 4
+- Add a disposable isolated PipeWire-JACK Dummy-Driver harness.
+- Verify live ports, process cycles, deterministic samples, deactivation quiescence, and repeated stress.
+- Audit complete RT-only generated modules under product flags and require a deliberately failing negative canary.
+- Add C allocation/lock/I/O instrumentation around live callbacks in addition to Nim allocator counters.
 
-Review callback boundary, RT structure contents, quiescence proof, fake processor, port ownership, JACK diagnostics, and instrumentation credibility.
+### Human review gates
+
+Review 4A's compile/ABI/DSO boundary before 4B. Review 4B's callback and ownership boundary before 4C. Final Increment 4 review covers live quiescence and instrumentation credibility before any CLAP DSP integration.
 
 ## 12. Increment 5 — First end-to-end CLAP audio host
 
@@ -388,21 +391,23 @@ Review callback boundary, RT structure contents, quiescence proof, fake processo
 
 ### Goal
 
-Produce the first meaningful vertical slice: run a CLAP instrument/effect headlessly with JACK float32 audio.
+Produce the first internal end-to-end CLAP/JACK float32 audio slice without exposing a public run loop before orderly signal control exists.
 
 ### Implementation
 
-- Connect `HostSession`, `ClapInstance`, `JackBackend`, and `RtEngine`.
+- Connect `HostSession`, `ClapInstance`, `JackBackend`, and `RtEngine` in a test/internal harness.
 - Map every CLAP audio group/channel to flattened JACK ports while preserving CLAP grouping internally.
 - Preallocate CLAP audio descriptors and channel-pointer arrays.
 - Pass JACK buffers directly as CLAP float32 pointers with no full-buffer copy.
 - Execute activate/start/process/stop/deactivate in correct states and thread roles.
-- Supply monotonic CLAP `steady_time` and null transport.
+- Supply monotonic CLAP `steady_time` and null transport, retaining the documented non-conforming-plugin compatibility risk.
 - Implement output zeroing for inactive, skipped, restart-pending, and error states.
 - Treat `CLAP_PROCESS_ERROR` as a compact RT failure followed by main-thread shutdown.
+- Treat `CLAP_PROCESS_TAIL` and `CLAP_PROCESS_CONTINUE_IF_NOT_QUIET` as continued processing.
 - Schedule safe reactivation for sample-rate or larger-buffer changes.
 - Extend the fixture with a tone generator and gain effect.
-- Enable the canonical `pluginhost [options] PLUGIN_PATH` command for headless audio plugins.
+- Smoke-test at least one independently implemented headless CLAP plugin when available.
+- Keep the canonical public `pluginhost [options] PLUGIN_PATH` command as an explicit stub until Increment 7 installs orderly signal/reactor control.
 
 ### Tests
 
@@ -470,13 +475,13 @@ Review event layout/alignment, sorting algorithm, pointer lifetimes, SysEx copie
 
 ### Goal
 
-Replace any temporary run loop with the event-driven Linux control plane needed for prompt callbacks, runtime signals, and later GUI services.
+Add the event-driven Linux control plane required for public `run`, prompt callbacks, runtime signals, and later GUI services.
 
 ### Implementation
 
 - Add a narrow reactor capability and Linux `epoll` implementation.
 - Add monotonic timer scheduling with registration generations.
-- Add signal self-pipe/eventfd handling.
+- Before any public-run JACK open, block handled signals with `pthread_sigmask`, create `signalfd`, and register it with the reactor.
 - Implement `SIGINT`/`SIGTERM` orderly shutdown requests.
 - Reserve `SIGUSR1`/`SIGUSR2` show/hide requests even though GUI is not implemented yet; they return a controlled warning.
 - Implement PID-file atomic create/remove behavior.
@@ -484,6 +489,7 @@ Replace any temporary run loop with the event-driven Linux control plane needed 
 - Implement bounded/fair request dispatch and shutdown priority.
 - Add fake deterministic reactor/clock for unit tests.
 - Remove temporary sleeps/poll loops from production main.
+- Enable the canonical public `pluginhost [options] PLUGIN_PATH` command only after the signal/reactor service is installed before `JackBackend`.
 
 ### Tests
 
@@ -715,7 +721,7 @@ This table is updated only when work is reviewed.
 | 1 — FFI/ABI | Approved | Review unit 1B | Includes verified ownership, callbacks, and RT spike |
 | 2 — CLAP catalog | Approved | Review unit 2B | Loader, catalog, `list`, discovery, and `scan` accepted |
 | 3 — CLAP lifecycle | Approved | Review unit 3B | Host bridge, instance lifecycle, immutable port plans, and render negotiation accepted |
-| 4 — JACK/RT harness | Not started | — | Next session must present the Increment 4 pre-code package |
+| 4 — JACK/RT harness | In progress | Review unit 4A | Build/JACK loading foundation approved; 4B and 4C remain gated |
 | 5 — Audio vertical slice | Not started | — | — |
 | 6 — MIDI/events | Not started | — | — |
 | 7 — Reactor/signals | Not started | — | — |
@@ -732,8 +738,10 @@ Allowed statuses: `Not started`, `In progress`, `Changes requested`, `Approved`,
 | Risk | Earliest mitigation | Release evidence |
 |---|---|---|
 | Nim/C ABI mismatch | Increment 1 probes and ABI tests | ABI CI on supported architectures |
-| Nim runtime activity on JACK foreign thread | Increments 1 and 4 instrumentation | Sustained `testRt` report |
-| Incorrect CLAP lifecycle/thread role | Increment 3 state machine, increment 5 vertical slice | Fixture and independent-plugin tests |
+| Nim runtime activity on JACK foreign thread | Shared ARC/panic profile plus Increments 1 and 4 instrumentation | Sustained `testRt` report |
+| Defect or runtime check unwinds through C | Increment 4A profile plus callback-local checks policy | Generated-C/module audit and negative canary |
+| Eager or partial JACK DSO loading | Increment 4A checked `JackApi` ownership | Missing-library/symbol/rollback tests and ELF dependency check |
+| Incorrect CLAP lifecycle/thread role | Increment 3 state machine, Increment 5 vertical slice | Fixture and independent-plugin tests |
 | MIDI event ordering/capacity corruption | Increment 6 fixed arena and k-way merge tests | Boundary/stress/sanitizer results |
 | Plugin callback reentrancy | Increments 7–8 deferred request dispatch | Reentrant fixture tests |
 | Restart races/use-after-free | Increments 4, 5, and 8 quiescence tests | Repeated restart stress |
@@ -741,6 +749,8 @@ Allowed statuses: `Not started`, `In progress`, `Changes requested`, `Approved`,
 | GUI timer/FD leaks | Increments 8 and 10 | Repeated GUI lifecycle checks |
 | State-file corruption | Increment 9 transaction design | Failure-injection tests |
 | Scope growth obscures review | Review-size rule and per-increment non-goals | Progress/review record |
+| Null CLAP transport crashes a non-conforming plugin | Increment 5 fixture/independent-plugin smoke tests; retain approved null policy | Compatibility matrix and documented limitation |
+| DSO unload after misbehaving plugin threads/TLS | Increment 11 trust documentation and double-load hardening | Security/limitations documentation |
 | Third-party plugin crash during scan/run | Documented trust model and cleanup where possible | Security/limitations documentation |
 
 ## 22. Post-MVP backlog candidates
@@ -763,7 +773,4 @@ Each candidate requires requirements/design updates and, where architectural, an
 
 ## 23. First action after each review gate
 
-After the human approves a completed increment, update the progress table, current
-state, verification counts, and next-session gate. For the current state, the next
-session must triage the applicable `REVIEW_ISSUES.md` findings and present the
-Increment 4 pre-code package before generating JACK/backend code, then stop for approval.
+After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 4A is approved. The next session must present the Increment 4B pre-code package before generating backend, port-realization, callback, or RT-skeleton code; do not begin Increment 4B implementation without explicit approval.

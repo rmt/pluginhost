@@ -1,6 +1,9 @@
 ## Policy-free raw declarations for the stable JACK client ABI used by
-## pluginhost. Layout, constants, and signatures are verified against system
-## JACK development headers by tests/abi.
+## pluginhost. Layout, constants, callbacks, and procedure-pointer signatures
+## are verified against system JACK development headers by tests/abi.
+##
+## This module deliberately has no {.dynlib.} imports. Runtime symbols are
+## resolved by jack/api.nim so importing JACK-facing code never loads libjack.
 
 const
   JackLibrary* = "libjack.so.0"
@@ -55,7 +58,6 @@ type
   JackPortObject = distinct object
   JackPort* = ptr JackPortObject
 
-
   JackMidiEvent* {.bycopy.} = object
     time*: JackNFrames
     size*: csize_t
@@ -76,6 +78,8 @@ type
     cdecl, gcsafe, raises: [].}
   JackXrunCallback* = proc(argument: pointer): cint {.
     cdecl, gcsafe, raises: [].}
+  JackFreewheelCallback* = proc(starting: cint; argument: pointer) {.
+    cdecl, gcsafe, raises: [].}
   JackLatencyCallback* = proc(mode: JackLatencyCallbackMode;
                                argument: pointer) {.
     cdecl, gcsafe, raises: [].}
@@ -91,84 +95,101 @@ else:
     min*: JackNFrames
     max*: JackNFrames
 
-{.push cdecl, dynlib: JackLibrary, gcsafe, raises: [].}
+type
+  JackGetVersionProc* = proc(major, minor, micro,
+                              protocol: ptr cint) {.
+    cdecl, gcsafe, raises: [].}
+  JackGetVersionStringProc* = proc(): cstring {.
+    cdecl, gcsafe, raises: [].}
 
-proc jackGetVersion*(major, minor, micro, protocol: ptr cint) {.
-  importc: "jack_get_version".}
-proc jackGetVersionString*(): cstring {.importc: "jack_get_version_string".}
+  JackClientOpenProc* = proc(clientName: cstring; options: JackOptions;
+                              status: ptr JackStatus): JackClient {.
+    cdecl, gcsafe, raises: [], varargs.}
+  JackClientCloseProc* = proc(client: JackClient): cint {.
+    cdecl, gcsafe, raises: [].}
+  JackClientNameSizeProc* = proc(): cint {.
+    cdecl, gcsafe, raises: [].}
+  JackGetClientNameProc* = proc(client: JackClient): cstring {.
+    cdecl, gcsafe, raises: [].}
+  JackActivateProc* = proc(client: JackClient): cint {.
+    cdecl, gcsafe, raises: [].}
+  JackDeactivateProc* = proc(client: JackClient): cint {.
+    cdecl, gcsafe, raises: [].}
 
-proc jackClientOpen*(clientName: cstring; options: JackOptions;
-                     status: ptr JackStatus): JackClient {.
-  importc: "jack_client_open", varargs.}
-proc jackClientClose*(client: JackClient): cint {.importc: "jack_client_close".}
-proc jackClientNameSize*(): cint {.importc: "jack_client_name_size".}
-proc jackGetClientName*(client: JackClient): cstring {.
-  importc: "jack_get_client_name".}
-proc jackActivate*(client: JackClient): cint {.importc: "jack_activate".}
-proc jackDeactivate*(client: JackClient): cint {.importc: "jack_deactivate".}
+  JackOnShutdownProc* = proc(client: JackClient;
+                              callback: JackShutdownCallback;
+                              argument: pointer) {.
+    cdecl, gcsafe, raises: [].}
+  JackOnInfoShutdownProc* = proc(client: JackClient;
+                                  callback: JackInfoShutdownCallback;
+                                  argument: pointer) {.
+    cdecl, gcsafe, raises: [].}
+  JackSetProcessCallbackProc* = proc(client: JackClient;
+                                      callback: JackProcessCallback;
+                                      argument: pointer): cint {.
+    cdecl, gcsafe, raises: [].}
+  JackSetBufferSizeCallbackProc* = proc(client: JackClient;
+      callback: JackBufferSizeCallback; argument: pointer): cint {.
+    cdecl, gcsafe, raises: [].}
+  JackSetSampleRateCallbackProc* = proc(client: JackClient;
+      callback: JackSampleRateCallback; argument: pointer): cint {.
+    cdecl, gcsafe, raises: [].}
+  JackSetXrunCallbackProc* = proc(client: JackClient;
+                                  callback: JackXrunCallback;
+                                  argument: pointer): cint {.
+    cdecl, gcsafe, raises: [].}
+  JackSetFreewheelCallbackProc* = proc(client: JackClient;
+      callback: JackFreewheelCallback; argument: pointer): cint {.
+    cdecl, gcsafe, raises: [].}
+  JackSetLatencyCallbackProc* = proc(client: JackClient;
+                                      callback: JackLatencyCallback;
+                                      argument: pointer): cint {.
+    cdecl, gcsafe, raises: [].}
 
-proc jackOnShutdown*(client: JackClient; callback: JackShutdownCallback;
-                     argument: pointer) {.importc: "jack_on_shutdown".}
-proc jackOnInfoShutdown*(client: JackClient; callback: JackInfoShutdownCallback;
-                         argument: pointer) {.
-  importc: "jack_on_info_shutdown".}
-proc jackSetProcessCallback*(client: JackClient; callback: JackProcessCallback;
-                             argument: pointer): cint {.
-  importc: "jack_set_process_callback".}
-proc jackSetBufferSizeCallback*(client: JackClient;
-    callback: JackBufferSizeCallback; argument: pointer): cint {.
-  importc: "jack_set_buffer_size_callback".}
-proc jackSetSampleRateCallback*(client: JackClient;
-    callback: JackSampleRateCallback; argument: pointer): cint {.
-  importc: "jack_set_sample_rate_callback".}
-proc jackSetXrunCallback*(client: JackClient; callback: JackXrunCallback;
-                          argument: pointer): cint {.
-  importc: "jack_set_xrun_callback".}
-proc jackSetLatencyCallback*(client: JackClient; callback: JackLatencyCallback;
-                             argument: pointer): cint {.
-  importc: "jack_set_latency_callback".}
+  JackGetSampleRateProc* = proc(client: JackClient): JackNFrames {.
+    cdecl, gcsafe, raises: [].}
+  JackGetBufferSizeProc* = proc(client: JackClient): JackNFrames {.
+    cdecl, gcsafe, raises: [].}
 
-proc jackGetSampleRate*(client: JackClient): JackNFrames {.
-  importc: "jack_get_sample_rate".}
-proc jackGetBufferSize*(client: JackClient): JackNFrames {.
-  importc: "jack_get_buffer_size".}
+  JackPortRegisterProc* = proc(client: JackClient;
+      portName, portType: cstring; flags: JackPortFlags;
+      bufferSize: culong): JackPort {.
+    cdecl, gcsafe, raises: [].}
+  JackPortUnregisterProc* = proc(client: JackClient; port: JackPort): cint {.
+    cdecl, gcsafe, raises: [].}
+  JackPortGetBufferProc* = proc(port: JackPort;
+                                 nframes: JackNFrames): pointer {.
+    cdecl, gcsafe, raises: [].}
+  JackPortNameProc* = proc(port: JackPort): cstring {.
+    cdecl, gcsafe, raises: [].}
+  JackPortFlagsProc* = proc(port: JackPort): cint {.
+    cdecl, gcsafe, raises: [].}
+  JackPortSetAliasProc* = proc(port: JackPort; alias: cstring): cint {.
+    cdecl, gcsafe, raises: [].}
+  JackPortNameSizeProc* = proc(): cint {.
+    cdecl, gcsafe, raises: [].}
 
-proc jackPortRegister*(client: JackClient; portName, portType: cstring;
-                       flags: JackPortFlags; bufferSize: culong): JackPort {.
-  importc: "jack_port_register".}
-proc jackPortUnregister*(client: JackClient; port: JackPort): cint {.
-  importc: "jack_port_unregister".}
-proc jackPortGetBuffer*(port: JackPort; nframes: JackNFrames): pointer {.
-  importc: "jack_port_get_buffer".}
-proc jackPortName*(port: JackPort): cstring {.importc: "jack_port_name".}
-proc jackPortFlags*(port: JackPort): cint {.importc: "jack_port_flags".}
-proc jackPortSetAlias*(port: JackPort; alias: cstring): cint {.
-  importc: "jack_port_set_alias".}
-proc jackPortNameSize*(): cint {.importc: "jack_port_name_size".}
+  JackPortGetLatencyRangeProc* = proc(port: JackPort;
+      mode: JackLatencyCallbackMode; latencyRange: ptr JackLatencyRange) {.
+    cdecl, gcsafe, raises: [].}
+  JackPortSetLatencyRangeProc* = proc(port: JackPort;
+      mode: JackLatencyCallbackMode; latencyRange: ptr JackLatencyRange) {.
+    cdecl, gcsafe, raises: [].}
+  JackRecomputeTotalLatenciesProc* = proc(client: JackClient): cint {.
+    cdecl, gcsafe, raises: [].}
 
-proc jackPortGetLatencyRange*(port: JackPort; mode: JackLatencyCallbackMode;
-                              range: ptr JackLatencyRange) {.
-  importc: "jack_port_get_latency_range".}
-proc jackPortSetLatencyRange*(port: JackPort; mode: JackLatencyCallbackMode;
-                              range: ptr JackLatencyRange) {.
-  importc: "jack_port_set_latency_range".}
-proc jackRecomputeTotalLatencies*(client: JackClient): cint {.
-  importc: "jack_recompute_total_latencies".}
-
-proc jackMidiGetEventCount*(portBuffer: pointer): uint32 {.
-  importc: "jack_midi_get_event_count".}
-proc jackMidiEventGet*(event: ptr JackMidiEvent; portBuffer: pointer;
-                       eventIndex: uint32): cint {.
-  importc: "jack_midi_event_get".}
-proc jackMidiClearBuffer*(portBuffer: pointer) {.
-  importc: "jack_midi_clear_buffer".}
-proc jackMidiMaxEventSize*(portBuffer: pointer): csize_t {.
-  importc: "jack_midi_max_event_size".}
-proc jackMidiEventReserve*(portBuffer: pointer; time: JackNFrames;
-                           dataSize: csize_t): ptr JackMidiData {.
-  importc: "jack_midi_event_reserve".}
-proc jackMidiEventWrite*(portBuffer: pointer; time: JackNFrames;
-                         data: ptr JackMidiData; dataSize: csize_t): cint {.
-  importc: "jack_midi_event_write".}
-
-{.pop.}
+  JackMidiGetEventCountProc* = proc(portBuffer: pointer): uint32 {.
+    cdecl, gcsafe, raises: [].}
+  JackMidiEventGetProc* = proc(event: ptr JackMidiEvent; portBuffer: pointer;
+                                eventIndex: uint32): cint {.
+    cdecl, gcsafe, raises: [].}
+  JackMidiClearBufferProc* = proc(portBuffer: pointer) {.
+    cdecl, gcsafe, raises: [].}
+  JackMidiMaxEventSizeProc* = proc(portBuffer: pointer): csize_t {.
+    cdecl, gcsafe, raises: [].}
+  JackMidiEventReserveProc* = proc(portBuffer: pointer; time: JackNFrames;
+      dataSize: csize_t): ptr JackMidiData {.
+    cdecl, gcsafe, raises: [].}
+  JackMidiEventWriteProc* = proc(portBuffer: pointer; time: JackNFrames;
+      data: ptr JackMidiData; dataSize: csize_t): cint {.
+    cdecl, gcsafe, raises: [].}

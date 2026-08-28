@@ -17,7 +17,9 @@ audit.
 
 Maintain a policy-free JACK declaration module in
 `src/pluginhost/jack/ffi.nim` for only the client, callback, port, audio, MIDI,
-buffer-size, sample-rate, and latency APIs required by the MVP.
+buffer-size, sample-rate, and latency APIs required by the MVP. The module
+declares typed procedure pointers rather than eager imported procedures; ADR
+0004 defines checked runtime symbol ownership.
 
 Use `libjack.so.0`, preserving compatibility with JACK1, JACK2, and
 PipeWire-JACK implementations exposing the standard ABI. Verify declarations
@@ -39,5 +41,6 @@ signatures use `cdecl`, `gcsafe`, and `raises: []`.
 - No additional Nim package dependency is introduced.
 - The project owns maintenance of a small set of declarations.
 - ABI tests require a C compiler, `pkg-config`, and JACK development headers.
-- Runtime JACK access remains through the standard `libjack.so.0` ABI.
+- Runtime JACK access remains through the standard `libjack.so.0` ABI and the
+  checked procedure table specified by ADR 0004.
 - Adding another JACK API requires declaration, ABI-probe, and thread/RT review.
