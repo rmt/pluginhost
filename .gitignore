@@ -12,3 +12,5 @@ nimcache/
 *~
 *.swp
 .DS_Store
+nimble.paths
+nimbledeps

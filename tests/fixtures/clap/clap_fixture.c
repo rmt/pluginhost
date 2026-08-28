@@ -372,7 +372,7 @@ static void fixture_plugin_destroy(const clap_plugin_t *plugin) {
    if (fixture_host == NULL || fixture_host->name == NULL ||
        strcmp(fixture_host->name, "pluginhost") != 0 ||
        fixture_host->version == NULL ||
-       strcmp(fixture_host->version, "0.0.4-dev") != 0 ||
+       strcmp(fixture_host->version, "0.0.5-dev") != 0 ||
        fixture_host->host_data == NULL)
       atomic_fetch_add(&host_contract_failures, 1U);
    if (fixture_host == NULL)

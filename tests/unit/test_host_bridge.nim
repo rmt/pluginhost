@@ -12,7 +12,7 @@ suite "CLAP host bridge":
     check host.clapVersion == ClapVersionCurrent
     check $host.name == "pluginhost"
     check $host.vendor == "pluginhost"
-    check $host.version == "0.0.4-dev"
+    check $host.version == "0.0.5-dev"
     check host.getExtension(host, ClapExtLog.cstring) != nil
     check host.getExtension(host, ClapExtThreadCheck.cstring) != nil
     check host.getExtension(host, "clap.unsupported") == nil

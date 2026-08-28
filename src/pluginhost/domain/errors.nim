@@ -25,6 +25,8 @@ type
     hekClapPlugin
     hekClapPluginCreate
     hekClapPluginInit
+    hekClapPorts
+    hekClapRender
     hekDiscoveryRoot
     hekDiscoveryTraversal
     hekDiscoveryCandidate
@@ -66,7 +68,8 @@ proc exitCode*(error: HostError): int =
     ExitUsage
   of hekClapPath, hekClapEntry, hekClapVersion, hekClapEntryInit,
       hekClapFactory, hekClapDescriptor, hekClapUnload, hekClapPlugin,
-      hekClapPluginCreate, hekClapPluginInit, hekDiscoveryRoot,
+      hekClapPluginCreate, hekClapPluginInit, hekClapPorts, hekClapRender,
+      hekDiscoveryRoot,
       hekDiscoveryTraversal, hekDiscoveryCandidate:
     ExitClap
   of hekNotImplemented, hekInvalidTransition, hekInternal, hekLibraryOpen,

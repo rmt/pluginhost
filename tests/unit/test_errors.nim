@@ -46,11 +46,17 @@ suite "typed errors and diagnostics":
   test "CLAP and selection errors use their dedicated statuses":
     let loadError = hostError(
       hsClap, hekClapEntryInit, "entry initialization failed", "bad.clap")
+    let portsError = hostError(
+      hsClap, hekClapPorts, "port inspection failed", "bad.clap")
+    let renderError = hostError(
+      hsClap, hekClapRender, "render mode rejected", "bad.clap")
     let selectionError = hostError(
       hsClap, hekPluginSelection, "selection required", "multi.clap")
 
     check loadError.exitCode() == ExitClap
     check formatDiagnostic(loadError).contains("CLAP error")
+    check portsError.exitCode() == ExitClap
+    check renderError.exitCode() == ExitClap
     check selectionError.exitCode() == ExitUsage
     check formatDiagnostic(selectionError).contains("pluginhost --help")
 

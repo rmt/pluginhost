@@ -2,11 +2,12 @@
 
 `pluginhost` is an in-progress standalone Linux JACK host for native CLAP plugins, implemented in Nim. Its intended role is similar to `carla-single`, with one plugin instance and one JACK client per process.
 
-The current development version is **0.0.4-dev**. The implementation adds
+The current development version is **0.0.5-dev**. The implementation adds
 checked CLAP entry/factory ownership, copied descriptor catalogs, selection policy,
 human/JSON `list`, and recursive human/JSON `scan` output to the previously reviewed
-scaffold, raw CLAP/JACK FFI, loader, callback probes, and ABI/RT tests. The CLAP host bridge and
-instance lifecycle core are implemented, but JACK runtime integration is not implemented yet.
+scaffold, raw CLAP/JACK FFI, loader, callback probes, and ABI/RT tests. The CLAP host bridge,
+instance lifecycle, bounded immutable audio/note port planning, and real-time render-mode
+negotiation are implemented, but JACK runtime integration is not implemented yet.
 
 ## Build
 
@@ -50,8 +51,8 @@ and exact upstream provenance. Draft headers are vendored unchanged but are not
 part of pluginhost's bound or supported ABI surface.
 
 `nimble testFixtures` independently compiles synthetic CLAP libraries and checks
-entry/factory ownership, descriptor validation, cleanup counters, process-level
-`list`, and recursive `scan` behavior without creating a plugin instance.
+entry/factory ownership, descriptor validation, instance cleanup, deactivated audio/note
+port inspection, render negotiation, process-level `list`, and recursive `scan` behavior.
 
 `nimble testRt` compiles a process-shaped callback with ARC and thread support,
 checks Nim allocator counters over repeated and first-foreign-thread calls, and

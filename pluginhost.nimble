@@ -1,7 +1,7 @@
 # Nimble 0.20 accepts only dotted numeric package versions and requires a
 # literal assignment. tests/unit/test_version.nim verifies this value against
 # the numeric core of VERSION.
-version       = "0.0.4"
+version       = "0.0.5"
 author        = "pluginhost contributors"
 description   = "A standalone Linux JACK host for CLAP plugins"
 license       = "UNLICENSED"
@@ -36,6 +36,13 @@ proc compileClapFixtureVariant(name: string; mode: int) =
        "tests/fixtures/clap/clap_fixture.c " &
        "-o build/fixtures/clap/" & name & ".clap"
 
+proc compilePortFixtureVariant(name: string; mode: int) =
+  exec "cc -std=gnu11 -fPIC -shared -fvisibility=hidden " &
+       "-Wall -Wextra -Werror -Wl,-z,defs -Ivendor/clap/include " &
+       "-DPLUGINHOST_PORT_FIXTURE_MODE=" & $mode & " " &
+       "tests/fixtures/clap/port_fixture.c " &
+       "-o build/fixtures/clap/" & name & ".clap"
+
 proc compileClapFixtures() =
   exec "mkdir -p build/fixtures/clap"
   compileClapFixtureVariant("valid", 0)
@@ -63,6 +70,36 @@ proc compileClapFixtures() =
   compileClapFixtureVariant("missing_plugin_destroy", 22)
   compileClapFixtureVariant("plugin_wrong_id", 23)
   compileClapFixtureVariant("plugin_incompatible_descriptor", 24)
+  compilePortFixtureVariant("ports_valid", 0)
+  compilePortFixtureVariant("ports_none", 1)
+  compilePortFixtureVariant("audio_missing_count", 2)
+  compilePortFixtureVariant("audio_missing_get", 3)
+  compilePortFixtureVariant("audio_too_many", 4)
+  compilePortFixtureVariant("audio_get_fail", 5)
+  compilePortFixtureVariant("audio_invalid_id", 6)
+  compilePortFixtureVariant("audio_duplicate_id", 7)
+  compilePortFixtureVariant("audio_zero_channels", 8)
+  compilePortFixtureVariant("audio_unterminated_name", 9)
+  compilePortFixtureVariant("audio_oversized_type", 10)
+  compilePortFixtureVariant("audio_inconsistent", 11)
+  compilePortFixtureVariant("audio_bad_pair", 12)
+  compilePortFixtureVariant("audio_too_many_channels", 13)
+  compilePortFixtureVariant("note_missing_count", 14)
+  compilePortFixtureVariant("note_missing_get", 15)
+  compilePortFixtureVariant("note_too_many", 16)
+  compilePortFixtureVariant("note_get_fail", 17)
+  compilePortFixtureVariant("note_invalid_id", 18)
+  compilePortFixtureVariant("note_duplicate_id", 19)
+  compilePortFixtureVariant("note_unterminated_name", 20)
+  compilePortFixtureVariant("note_bad_supported", 21)
+  compilePortFixtureVariant("note_bad_preferred", 22)
+  compilePortFixtureVariant("render_missing_set", 23)
+  compilePortFixtureVariant("render_reject", 24)
+  compilePortFixtureVariant("render_hard", 25)
+  compilePortFixtureVariant("audio_bad_type", 26)
+  compilePortFixtureVariant("audio_bad_preference", 27)
+  compilePortFixtureVariant("render_missing_requirement", 28)
+  compilePortFixtureVariant("ports_exact_limits", 29)
   exec "cc -std=gnu11 -fPIC -shared -fvisibility=hidden " &
        "-Wall -Wextra -Werror -Wl,-z,defs " &
        "tests/fixtures/clap/no_entry_fixture.c " &

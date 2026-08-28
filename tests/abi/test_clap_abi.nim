@@ -38,6 +38,7 @@ suite "CLAP raw ABI":
     checkLayout(ClapProcessStatus, 30)
     checkLayout(ClapNoteExpression, 31)
     checkLayout(bool, 32)
+    checkLayout(ClapPluginRenderMode, 36)
 
   test "constants match the official headers":
     let expected = [
@@ -78,6 +79,7 @@ suite "CLAP raw ABI":
       int64(ClapLogWarning), int64(ClapLogError),
       int64(ClapLogFatal), int64(ClapLogHostMisbehaving),
       int64(ClapLogPluginMisbehaving),
+      int64(ClapRenderRealtime), int64(ClapRenderOffline),
     ]
     for index, value in expected:
       check value == abiConstant(int32(index + 1))
@@ -89,6 +91,7 @@ suite "CLAP raw ABI":
     check $abiString(5) == ClapPortStereo
     check $abiString(6) == ClapExtLog
     check $abiString(7) == ClapExtThreadCheck
+    check $abiString(8) == ClapExtRender
 
   test "structure sizes and alignments match the official headers":
     checkLayout(ClapVersion, 1)
@@ -119,6 +122,7 @@ suite "CLAP raw ABI":
     checkLayout(ClapHostNotePorts, 26)
     checkLayout(ClapHostLog, 33)
     checkLayout(ClapHostThreadCheck, 34)
+    checkLayout(ClapPluginRender, 35)
 
   test "event field offsets match the official headers":
     checkField(ClapVersion, major, 1, 1)
@@ -247,7 +251,7 @@ suite "CLAP raw ABI":
     checkField(ClapPluginFactory, getPluginDescriptor, 20, 2)
     checkField(ClapPluginFactory, createPlugin, 20, 3)
 
-  test "audio and note port extension offsets match the official headers":
+  test "audio note and render extension offsets match the official headers":
     checkField(ClapAudioPortInfo, id, 21, 1)
     checkField(ClapAudioPortInfo, name, 21, 2)
     checkField(ClapAudioPortInfo, flags, 21, 3)
@@ -269,6 +273,8 @@ suite "CLAP raw ABI":
     checkField(ClapHostLog, log, 33, 1)
     checkField(ClapHostThreadCheck, isMainThread, 34, 1)
     checkField(ClapHostThreadCheck, isAudioThread, 34, 2)
+    checkField(ClapPluginRender, hasHardRealtimeRequirement, 35, 1)
+    checkField(ClapPluginRender, set, 35, 2)
 
   test "all bound CLAP callbacks use pointer-sized C function values":
     checkFunctionPointer(ClapInputEventsSizeProc)
@@ -302,3 +308,5 @@ suite "CLAP raw ABI":
     checkFunctionPointer(ClapPluginNotePortsGetProc)
     checkFunctionPointer(ClapHostNotePortsSupportedDialectsProc)
     checkFunctionPointer(ClapHostNotePortsRescanProc)
+    checkFunctionPointer(ClapPluginRenderHasHardRealtimeRequirementProc)
+    checkFunctionPointer(ClapPluginRenderSetProc)

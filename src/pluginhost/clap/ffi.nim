@@ -16,6 +16,7 @@ const
   ClapPluginFactoryId* = "clap.plugin-factory"
   ClapExtAudioPorts* = "clap.audio-ports"
   ClapExtNotePorts* = "clap.note-ports"
+  ClapExtRender* = "clap.render"
   ClapExtLog* = "clap.log"
   ClapExtThreadCheck* = "clap.thread-check"
   ClapPortMono* = "mono"
@@ -82,6 +83,9 @@ const
   ClapNotePortsRescanAll* = 1'u32 shl 0
   ClapNotePortsRescanNames* = 1'u32 shl 1
 
+  ClapRenderRealtime* = 0'i32
+  ClapRenderOffline* = 1'i32
+
   ClapLogDebug* = 0'i32
   ClapLogInfo* = 1'i32
   ClapLogWarning* = 2'i32
@@ -97,6 +101,7 @@ type
   ClapProcessStatus* = int32
   ClapLogSeverity* = int32
   ClapNoteExpression* = int32
+  ClapPluginRenderMode* = int32
 
   ClapVersion* {.bycopy.} = object
     major*: uint32
@@ -360,6 +365,14 @@ type
   ClapPluginNotePorts* {.bycopy.} = object
     count*: ClapPluginNotePortsCountProc
     get*: ClapPluginNotePortsGetProc
+
+  ClapPluginRenderHasHardRealtimeRequirementProc* = proc(
+      plugin: ptr ClapPlugin): bool {.cdecl, gcsafe, raises: [].}
+  ClapPluginRenderSetProc* = proc(plugin: ptr ClapPlugin;
+      mode: ClapPluginRenderMode): bool {.cdecl, gcsafe, raises: [].}
+  ClapPluginRender* {.bycopy.} = object
+    hasHardRealtimeRequirement*: ClapPluginRenderHasHardRealtimeRequirementProc
+    set*: ClapPluginRenderSetProc
 
   ClapHostNotePortsSupportedDialectsProc* = proc(host: ptr ClapHost): uint32 {.
     cdecl, gcsafe, raises: [].}

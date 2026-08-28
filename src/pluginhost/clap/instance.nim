@@ -1,5 +1,5 @@
-import ./[ffi, host_bridge, loader]
-import ../domain/[errors, plugin_catalog, result]
+import ./[ffi, host_bridge, loader, port_inspector]
+import ../domain/[errors, plugin_catalog, port_plan, result]
 
 type
   ClapInstanceState* = enum
@@ -11,6 +11,7 @@ type
   ClapPluginExtensions* = object
     audioPorts*: ptr ClapPluginAudioPorts
     notePorts*: ptr ClapPluginNotePorts
+    render*: ptr ClapPluginRender
 
   ClapInstance* = object
     module: ClapModule
@@ -19,6 +20,7 @@ type
     descriptor: PluginDescriptor
     extensions: ClapPluginExtensions
     state: ClapInstanceState
+    nextPortPlanVersion: uint64
 
 proc `=destroy`*(instance: var ClapInstance) =
   doAssert instance.plugin == nil,
@@ -41,6 +43,7 @@ proc `=sink`*(destination: var ClapInstance; source: ClapInstance) =
   destination.plugin = source.plugin
   destination.extensions = source.extensions
   destination.state = source.state
+  destination.nextPortPlanVersion = source.nextPortPlanVersion
 
 proc instanceError(kind: HostErrorKind; message, path: string;
                    detail = ""): HostError =
@@ -155,6 +158,8 @@ proc createClapInstance*(module: sink ClapModule;
       plugin.getExtension(plugin, ClapExtAudioPorts.cstring)),
     notePorts: cast[ptr ClapPluginNotePorts](
       plugin.getExtension(plugin, ClapExtNotePorts.cstring)),
+    render: cast[ptr ClapPluginRender](
+      plugin.getExtension(plugin, ClapExtRender.cstring)),
   )
 
   success(ClapInstance(
@@ -164,6 +169,7 @@ proc createClapInstance*(module: sink ClapModule;
     descriptor: move(descriptor),
     extensions: extensions,
     state: cisInitialized,
+    nextPortPlanVersion: 1'u64,
   ))
 
 proc state*(instance: ClapInstance): ClapInstanceState {.inline, gcsafe,
@@ -178,6 +184,65 @@ proc selectedDescriptor*(instance: ClapInstance): PluginDescriptor =
 
 proc pluginExtensions*(instance: ClapInstance): ClapPluginExtensions =
   instance.extensions
+
+proc inspectPortPlan*(instance: var ClapInstance): Result[PortPlan] =
+  if instance.state != cisInitialized:
+    return failure[PortPlan](instanceError(
+      hekClapPorts,
+      "CLAP port inspection requires an initialized, deactivated plugin",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id & "; state=" & $instance.state,
+    ))
+  if not instance.bridge.isMainThread:
+    return failure[PortPlan](instanceError(
+      hekClapPorts,
+      "CLAP port inspection must run on the host main thread",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id,
+    ))
+  if instance.nextPortPlanVersion == high(uint64):
+    return failure[PortPlan](instanceError(
+      hekClapPorts,
+      "CLAP port-plan generation is exhausted",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id,
+    ))
+
+  var inspected = port_inspector.inspectClapPorts(
+    instance.plugin,
+    instance.extensions.audioPorts,
+    instance.extensions.notePorts,
+    portPlanVersion(instance.nextPortPlanVersion),
+    instance.module.modulePath,
+    instance.descriptor.id,
+  )
+  if not inspected.isOk:
+    return failure[PortPlan](move(inspected.error))
+  inc instance.nextPortPlanVersion
+  success(move(inspected.value))
+
+proc negotiateRealtimeRender*(instance: var ClapInstance):
+    Result[ClapRenderNegotiation] =
+  if instance.state != cisInitialized:
+    return failure[ClapRenderNegotiation](instanceError(
+      hekClapRender,
+      "CLAP render negotiation requires an initialized, deactivated plugin",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id & "; state=" & $instance.state,
+    ))
+  if not instance.bridge.isMainThread:
+    return failure[ClapRenderNegotiation](instanceError(
+      hekClapRender,
+      "CLAP render negotiation must run on the host main thread",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id,
+    ))
+  port_inspector.negotiateClapRealtimeRender(
+    instance.plugin,
+    instance.extensions.render,
+    instance.module.modulePath,
+    instance.descriptor.id,
+  )
 
 proc hostBridge*(instance: ClapInstance): ClapHostBridge {.inline.} =
   instance.bridge

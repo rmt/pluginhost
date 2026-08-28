@@ -3,7 +3,7 @@
 **Plan version:** 1.0.0  
 **Target product release:** `pluginhost` 0.1.0  
 **Initial development version:** 0.0.1-dev  
-**Status:** Approved; Increment 3 review unit 3A complete, review unit 3B not started
+**Status:** Approved through Increment 3; Increment 4 not started
 **Companion documents:** [`REQUIREMENTS.md`](REQUIREMENTS.md), [`DESIGN.md`](DESIGN.md)
 
 ## 1. Purpose
@@ -714,8 +714,8 @@ This table is updated only when work is reviewed.
 | 0 — Scaffolding | Approved | Iteration 0 review | Includes the `argparse` 4.0.2 CLI |
 | 1 — FFI/ABI | Approved | Review unit 1B | Includes verified ownership, callbacks, and RT spike |
 | 2 — CLAP catalog | Approved | Review unit 2B | Loader, catalog, `list`, discovery, and `scan` accepted |
-| 3 — CLAP lifecycle | In progress | Review unit 3A | 3A approved; next session must present the 3B pre-code package |
-| 4 — JACK/RT harness | Not started | — | — |
+| 3 — CLAP lifecycle | Approved | Review unit 3B | Host bridge, instance lifecycle, immutable port plans, and render negotiation accepted |
+| 4 — JACK/RT harness | Not started | — | Next session must present the Increment 4 pre-code package |
 | 5 — Audio vertical slice | Not started | — | — |
 | 6 — MIDI/events | Not started | — | — |
 | 7 — Reactor/signals | Not started | — | — |
@@ -765,5 +765,5 @@ Each candidate requires requirements/design updates and, where architectural, an
 
 After the human approves a completed increment, update the progress table, current
 state, verification counts, and next-session gate. For the current state, the next
-session must present the Increment 3A pre-code package before generating lifecycle
-code, then stop for approval.
+session must triage the applicable `REVIEW_ISSUES.md` findings and present the
+Increment 4 pre-code package before generating JACK/backend code, then stop for approval.
