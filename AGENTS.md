@@ -50,7 +50,7 @@ As of the latest reviewed state:
 
 - Default/current branch: `main`; inspect `git status` and `git log` before editing.
 - Version: `0.0.5-dev` (`pluginhost.nimble` uses numeric `0.0.5` because of Nimble metadata syntax).
-- Increments 0 through 4A are approved. Increments 4B and 4C have not started.
+- Increments 0 through 4B are approved. Increment 4C has not started.
 - The CLI uses exactly pinned `argparse` 4.0.2.
 - `list` and `scan` report copied CLAP descriptors without creating a plugin
   instance; `run` remains a typed stub.
@@ -58,11 +58,11 @@ As of the latest reviewed state:
 - CLAP/JACK declarations, Linux DSO ownership, C/Nim callbacks, and the ARC RT
   spike retain their ABI, foreign-thread, allocator, and generated-C checks.
 - The shared build profile is ARC, threads on, panics on, and Nim signal handlers disabled.
-- The current suite contains 47 unit, 23 ABI, 27 fixture, and 6 RT tests (103 total).
+- The current suite contains 73 unit, 23 ABI, 27 fixture, and 8 RT tests (131 total).
 - The CLAP host bridge, instance lifecycle, bounded immutable audio/note port plans,
-  real-time render negotiation, and checked move-only JACK DSO/procedure-table owner
-  are implemented; there is no JACK client, port realization, callback registration,
-  activation, GUI, state, or real-time processing integration yet.
+  render negotiation, checked JACK loading, and an internal fake-backed JACK client/port/
+  callback harness are implemented. Public `run`, CLAP activation/DSP, live JACK
+  integration, GUI, state, and reactor behavior remain unimplemented.
 - Remote `origin` is configured; no project license is currently configured.
 
 Current source responsibilities:
@@ -78,14 +78,17 @@ Current source responsibilities:
   candidate traversal, canonical deduplication, and scan reports.
 - `src/pluginhost/jack/ffi.nim` — declaration-only minimal JACK ABI types, callbacks, and procedure-pointer signatures.
 - `src/pluginhost/jack/api.nim` — checked move-only JACK DSO and all-or-nothing procedure-table ownership.
+- `src/pluginhost/jack/backend.nim`, `callbacks.nim`, and `ports.nim` — internal move-only client state machine, stable callbacks, transactional realization, and fixed RT port map.
+- `src/pluginhost/rt/engine.nim` and `role_guard.nim` — CLAP-free fixed-layout fake endpoint and exclusive symbolic audio role.
 - `src/pluginhost/platform/linux/dynlib.nim` — checked, move-only DSO ownership.
 - `src/pluginhost/support/` — user diagnostics and UTF-8 boundary sanitization.
 - `src/pluginhost/version.nim` — embedded product/SDK/ABI version information.
 - `c/abi_probe.c` and `tests/abi/` — C-header, loader, and callback conformance tests.
 - `tests/fixtures/clap/` — independently compiled catalog, lifecycle, port, and render CLAP libraries.
 - `tests/fixtures/ffi/` — independently compiled callback/DSO fixture.
-- `tests/rt/` — ARC allocator instrumentation and generated-C callback audit.
-- `tests/unit/` — pure CLI, output, discovery policy, selection, text, host bridge, port-plan, lifecycle, error, and version tests.
+- `tests/fixtures/jack/` — partial-symbol and complete controllable fake JACK DSOs.
+- `tests/rt/` — ARC allocator instrumentation and generated-C callback audit, including the fake JACK process path.
+- `tests/unit/` — control-plane, ownership, naming, rollback, quiescence, fake-processing, role, CLI, CLAP, and support tests.
 - `docs/adr/` — accepted binding-strategy decisions.
 - `REVIEW_ISSUES.md` — preserved findings plus owner-approved dispositions and named targets.
 - `config.nims` — shared ARC/thread/panic/signal profile plus optional local Nimble paths.
@@ -108,50 +111,48 @@ nimble testRt
 nimble all
 ```
 
-`nimble test` builds a process-test executable, rejects an eager JACK ELF dependency, and runs the fast unit suite.
+`nimble test` builds a process-test executable and fake JACK DSO, rejects an eager JACK ELF dependency, and runs the fast unit suite.
 `nimble testAbi` checks ABI declarations, generic and JACK-specific DSO ownership, complete JACK symbol resolution, and C/Nim callbacks.
 `nimble testFixtures` builds independent synthetic CLAP DSOs and checks module,
 catalog, instance lifecycle, deactivated port planning, render negotiation, cleanup,
 process-level `list`, and discovery/`scan` behavior.
-`nimble testRt` runs allocation, foreign-thread host-callback, and generated-C audits under the shared product profile.
+`nimble testRt` runs allocation, foreign-thread CLAP/JACK callback, and generated-C audits under the shared product profile.
 `nimble all` performs source compile, unit, ABI, fixture, and RT checks. An
 unavailable task must not report a false pass.
 
 For user-visible CLI changes, also exercise the compiled process directly and verify stdout, stderr, and exit codes. Existing stubs are expected to fail with a non-zero status.
 
-## Next planned work: Increment 4B — backend, ports, callbacks, and fake endpoint
+## Next planned work: Increment 4C — live integration and strengthened RT evidence
 
-Increment 4A is approved. The next fresh session must inspect the current state, read
-the authoritative documents, and present an Increment 4B pre-code package before
-editing backend or RT code. Do not begin implementation merely because this section is
-prepared. Keep version `0.0.5-dev` throughout Increment 4.
+Increment 4B is approved. The next fresh session must inspect the current state, read
+the authoritative documents, and present an Increment 4C pre-code package before
+editing integration harnesses or RT audits. Do not begin implementation merely because
+this section is prepared. Keep version `0.0.5-dev` throughout Increment 4.
 
 ### Goal
 
-Implement the first checked JACK backend state machine and allocation-free fake RT
-callback mechanics without CLAP DSP. The work is still internal/test-only: public
-`run` remains disabled.
+Prove the approved JACK backend against a disposable isolated PipeWire-JACK server and
+strengthen RT evidence beyond function-body/Nim-allocation checks. The work remains
+internal/test-only: public `run` and CLAP DSP stay disabled.
 
 ### Mandatory pre-code focus
 
 The package must explicitly cover:
 
-- `JackBackend` ownership of `JackApi`, JACK client handles, realized ports, and stable callback context.
-- Open/configure/activate/deactivate/close states, idempotent teardown, and callback quiescence proof.
-- Registration of process, shutdown/info-shutdown, buffer-size, sample-rate, xrun, freewheel, and latency callbacks before activation.
-- Transactional synthetic `PortPlan` realization using the actual JACK client name and server name limits, including alias truncation and complete rollback.
-- Stable fixed-layout `RtPortMap`/RT skeleton contents and pointer lifetimes.
-- POD/atomic notification fields for shutdown, xrun, freewheel, buffer-size, sample-rate, and process metrics; callbacks must not perform cleanup.
-- `AudioRoleGuard` exclusivity and how it remains disconnected from `clap.thread-check` until Increment 5.
-- Fake endpoint behavior for silence/copy/deterministic samples and how it stays allocation-free.
-- Focused tests for missing JACK server/status diagnostics, port registration failure/rollback, callback registration failures, repeated lifecycle, and quiescence.
+- Exact PipeWire-JACK Dummy-Driver processes/tools, availability checks, isolated runtime/server naming, startup readiness, and deterministic teardown without touching the user's audio graph.
+- Whether `testIntegration` is introduced, its missing-prerequisite policy, and how an unavailable task avoids a false pass.
+- Live realization of synthetic audio/MIDI ports and observation of deterministic fake-process cycles without CLAP.
+- Live deactivation/client-close quiescence and bounded repeated lifecycle/stress evidence.
+- Complete generated-C auditing of RT modules and transitive callback helpers, including resolution of any trace-frame/runtime helper findings.
+- A deliberately prohibited negative canary that the generated-C audit must reject.
+- C-side allocation, deallocation, lock, print, and prohibited-I/O instrumentation around live callbacks, including interception scope and false-positive controls.
+- Separation of live integration from fast unit tests and preservation of all fake-backend failure injection coverage.
 
-Increment 4C remains a later gate for isolated PipeWire-JACK integration, live quiescence,
-module-level generated-C auditing with a negative canary, and C allocation/lock/I/O
-instrumentation. Neither 4B nor 4C activates or processes CLAP, enables public `run`,
-or adds GUI, state, reactor, restart, or later-increment behavior.
+Increment 5 remains a later gate for the first CLAP audio vertical slice. Increment 4C
+must not activate/process CLAP, enable public `run`, or add MIDI translation, GUI, state,
+reactor, signal handling, restart, or later-increment behavior.
 
-Stop after the Increment 4B pre-code package unless the owner explicitly approves implementation.
+Stop after the Increment 4C pre-code package unless the owner explicitly approves implementation.
 
 ## Non-negotiable engineering rules
 

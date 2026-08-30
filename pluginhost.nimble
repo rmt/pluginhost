@@ -47,6 +47,14 @@ proc compilePartialJackFixture() =
        "tests/fixtures/jack/partial_jack_fixture.c " &
        "-o build/fixtures/libpluginhost_jack_partial_fixture.so"
 
+proc compileFakeJackFixture() =
+  exec "mkdir -p build/fixtures"
+  exec "cc -std=gnu11 -fPIC -shared -fvisibility=hidden " &
+       "-Wall -Wextra -Werror -pthread -Wl,-z,defs " &
+       "$(pkg-config --cflags jack) " &
+       "tests/fixtures/jack/fake_jack_fixture.c " &
+       "-o build/fixtures/libpluginhost_jack_fake_fixture.so"
+
 proc compileClapFixtureVariant(name: string; mode: int) =
   exec "cc -std=gnu11 -fPIC -shared -fvisibility=hidden " &
        "-Wall -Wextra -Werror -pthread -Wl,-z,defs -Ivendor/clap/include " &
@@ -124,8 +132,11 @@ proc compileClapFixtures() =
        "-o build/fixtures/clap/no_entry.clap"
 
 proc runUnitTests() =
+  compileFakeJackFixture()
   exec "mkdir -p build/nimcache/tests"
   exec "PLUGINHOST_TEST_BIN=build/test/pluginhost " &
+       "PLUGINHOST_JACK_FAKE_FIXTURE=$PWD/build/fixtures/" &
+       "libpluginhost_jack_fake_fixture.so " &
        "nim c -r --hints:off --path:src --path:tests " & dependencyPathsClause() &
        " --nimcache:build/nimcache/tests --out:build/test/all_tests " &
        "tests/all_tests.nim"
@@ -150,8 +161,11 @@ proc runAbiTests() =
 proc runRtTests() =
   exec "mkdir -p build/nimcache/rt build/test"
   compileFfiFixture()
+  compileFakeJackFixture()
   exec "PLUGINHOST_FFI_FIXTURE=$PWD/build/fixtures/" &
        "libpluginhost_ffi_fixture.so " &
+       "PLUGINHOST_JACK_FAKE_FIXTURE=$PWD/build/fixtures/" &
+       "libpluginhost_jack_fake_fixture.so " &
        "nim c -r --hints:off -d:nimAllocStats " &
        "--path:src --path:tests " & dependencyPathsClause() &
        " --nimcache:build/nimcache/rt --out:build/test/all_rt_tests " &

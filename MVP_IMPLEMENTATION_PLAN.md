@@ -3,7 +3,7 @@
 **Plan version:** 1.0.0  
 **Target product release:** `pluginhost` 0.1.0  
 **Initial development version:** 0.0.1-dev  
-**Status:** Approved through Increment 4A; Increment 4B not started
+**Status:** Approved through Increment 4B; Increment 4C not started
 **Companion documents:** [`REQUIREMENTS.md`](REQUIREMENTS.md), [`DESIGN.md`](DESIGN.md)
 
 ## 1. Purpose
@@ -346,7 +346,7 @@ Review lifecycle state machine, stable callback storage, raw-pointer lifetimes, 
 ## 11. Increment 4 — JACK backend and real-time harness
 
 **Planned version:** 0.0.5-dev
-**Review split:** 4A approved; 4B and 4C require their own review gates
+**Review split:** 4A and 4B approved; 4C requires its own review gate
 
 ### Goal
 
@@ -366,6 +366,8 @@ Implement and test JACK client/port/callback mechanics independently of CLAP DSP
 - Test missing library, missing symbol, rollback, runtime version calls, move-only ownership, and repeated close.
 
 ### Increment 4B — backend, ports, callbacks, and fake endpoint
+
+**Status:** Approved in review unit 4B.
 
 - Add move-only `JackBackend` open/configure/activate/deactivate/close states.
 - Register every callback before activation and convert notifications to compact POD/atomic state without callback-side cleanup.
@@ -721,7 +723,7 @@ This table is updated only when work is reviewed.
 | 1 — FFI/ABI | Approved | Review unit 1B | Includes verified ownership, callbacks, and RT spike |
 | 2 — CLAP catalog | Approved | Review unit 2B | Loader, catalog, `list`, discovery, and `scan` accepted |
 | 3 — CLAP lifecycle | Approved | Review unit 3B | Host bridge, instance lifecycle, immutable port plans, and render negotiation accepted |
-| 4 — JACK/RT harness | In progress | Review unit 4A | Build/JACK loading foundation approved; 4B and 4C remain gated |
+| 4 — JACK/RT harness | In progress | Review units 4A and 4B | Build/loading and fake-backed client/callback harness approved; 4C remains gated |
 | 5 — Audio vertical slice | Not started | — | — |
 | 6 — MIDI/events | Not started | — | — |
 | 7 — Reactor/signals | Not started | — | — |
@@ -773,4 +775,4 @@ Each candidate requires requirements/design updates and, where architectural, an
 
 ## 23. First action after each review gate
 
-After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 4A is approved. The next session must present the Increment 4B pre-code package before generating backend, port-realization, callback, or RT-skeleton code; do not begin Increment 4B implementation without explicit approval.
+After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increments 4A and 4B are approved. The next session must present the Increment 4C pre-code package before generating live integration harnesses, module-level audits, negative canaries, or C callback instrumentation; do not begin 4C implementation without explicit approval.

@@ -3,12 +3,12 @@
 **Review date:** 2026-08-28
 **Reviewed baseline:** `main` at `642b629`, version `0.0.5-dev`
 **Disposition approval:** 2026-08-28 Increment 4 pre-code review
+**Implementation approvals:** Increment 4A and Increment 4B reviewed and approved
 
-Increment 3B remains approved. The owner approved the dispositions below,
-authorized Increment 4A implementation, and then approved the completed 4A review
-unit. This register now distinguishes accepted, implemented, and deliberately
-deferred work; deferred findings remain review inputs for their named increments
-rather than silently becoming product behavior.
+Increment 3B remains approved. The owner approved the dispositions below, then reviewed
+and approved Increment 4A and Increment 4B. This register distinguishes accepted,
+implemented, and deliberately deferred work; deferred findings remain review inputs for
+their named increments rather than silently becoming product behavior.
 
 ## Approved dispositions
 
@@ -18,22 +18,22 @@ rather than silently becoming product behavior.
 | 2 | Pin ARC, threads, panics, and signal behavior in one product/test profile. | Implemented and approved in 4A |
 | 3 | Replace eager JACK imports with a checked move-only DSO/procedure table. | Implemented and approved in 4A |
 | 4 | Disable Nim signal handlers now; block/consume signals explicitly before public JACK-backed `run`. | Build part approved in 4A; signal service in 7 |
-| 5 | Observe freewheel transitions but remain in `CLAP_RENDER_REALTIME`; offline rendering remains unsupported. | Increment 4B policy |
-| 6 | Apply bounded allocation-free rules to every JACK-invoked callback; latency uses only mandated JACK APIs. | Increments 4B–4C |
+| 5 | Observe freewheel transitions but remain in `CLAP_RENDER_REALTIME`; offline rendering remains unsupported. | Notification policy implemented and approved in 4B; CLAP mode remains in 5 |
+| 6 | Apply bounded allocation-free rules to every JACK-invoked callback; latency uses only mandated JACK APIs. | Implemented and approved in 4B; strengthened evidence remains in 4C |
 | 7 | Retain strict validator-compatible port checks unless independent plugins prove a compatibility problem. | Accepted current behavior |
 | 8 | Retain `transport = nil` and record its compatibility risk. | Risk recorded in 4A; runtime behavior in 5 |
 | 9 | Treat `TAIL` and `CONTINUE_IF_NOT_QUIET` conservatively as continued processing. | Increment 5 |
 | 10 | Document trusted in-process unload risk and add same-DSO double-open coverage. | Increment 11 hardening |
-| 11 | Add xrun/freewheel support now; defer connection/reconnection and MIDI-loss APIs to their owning increments. | ABI part approved in 4A; callbacks in 4B; remaining APIs in 6/8 |
-| 12 | Realize ports transactionally, diagnose the failed count/name, validate actual JACK name limits, and roll back completely. | Increment 4B |
-| 13 | Build/test `AudioRoleGuard` in 4B and connect `clap.thread-check` atomically with CLAP processing in 5. | Increments 4B–5 |
+| 11 | Add xrun/freewheel support now; defer connection/reconnection and MIDI-loss APIs to their owning increments. | ABI approved in 4A; callbacks approved in 4B; remaining APIs in 6/8 |
+| 12 | Realize ports transactionally, diagnose the failed count/name, validate actual JACK name limits, and roll back completely. | Implemented and approved in 4B |
+| 13 | Build/test `AudioRoleGuard` in 4B and connect `clap.thread-check` atomically with CLAP processing in 5. | Guard implemented and approved in 4B; CLAP connection remains in 5 |
 | 14 | Keep current scan policy; document partial-failure status and `CLAP_PATH` relative/tilde behavior. | Implemented and approved in 4A |
 | 15 | Add independent-plugin smoke evidence with the audio vertical slice. | Increment 5 |
 | 16 | Audit complete RT-only generated modules/call paths and require a failing negative canary. | Increment 4C |
 | 17 | Retain Nim counters and add C allocation/lock/I/O instrumentation around live callbacks. | Increment 4C |
 | 18 | Keep fixture refactoring separate; add double-load coverage with hardening. | Increment 11/test cleanup |
 | 19 | Add CI/release matrices later; use the available isolated PipeWire Dummy-Driver for Increment 4 integration. | Increment 4C and 11 |
-| 20 | Close stale plan-state drift; retain JACK naming-boundary checks during realization. | Closed/4B awareness |
+| 20 | Close stale plan-state drift; retain JACK naming-boundary checks during realization. | Naming checks implemented and approved in 4B |
 
 The detailed text below preserves the original evidence and suggested resolutions for
 audit history. Where it conflicts with the approved table, the approved disposition

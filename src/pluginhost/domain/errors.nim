@@ -31,6 +31,15 @@ type
     hekJackLibraryOpen
     hekJackSymbol
     hekJackLibraryClose
+    hekJackClientOpen
+    hekJackClientClose
+    hekJackCallbackRegistration
+    hekJackPortName
+    hekJackPortRegistration
+    hekJackPortAlias
+    hekJackActivation
+    hekJackDeactivation
+    hekJackQuiescence
     hekDiscoveryRoot
     hekDiscoveryTraversal
     hekDiscoveryCandidate
@@ -81,5 +90,8 @@ proc exitCode*(error: HostError): int =
     ExitClap
   of hekNotImplemented, hekInvalidTransition, hekInternal, hekLibraryOpen,
       hekSymbolLookup, hekLibraryClose, hekJackLibraryOpen, hekJackSymbol,
-      hekJackLibraryClose:
+      hekJackLibraryClose, hekJackClientOpen, hekJackClientClose,
+      hekJackCallbackRegistration, hekJackPortName, hekJackPortRegistration,
+      hekJackPortAlias, hekJackActivation, hekJackDeactivation,
+      hekJackQuiescence:
     ExitFailure

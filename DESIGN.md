@@ -188,6 +188,12 @@ Responsibilities:
 Only this package imports the raw JACK FFI/API layers. Importing those layers has no
 module-initialization side effect; `openJackApi` is the explicit runtime load point.
 
+The Increment 4B backend is internal/test-only. It has explicit `Closed`, `Open`,
+`Configured`, and `Active` states and owns one stable shared callback context. JACK
+deactivation is the process-callback quiescence boundary; the immutable map remains
+alive afterward. `jack_client_close` is the all-callback quiescence boundary, after
+which callback storage may be freed and the JACK DSO may be unloaded.
+
 ### 5.5 `RtEngine`
 
 `RtEngine` is a fixed-layout, explicitly owned structure reachable from the JACK callback through an opaque pointer. It contains only real-time-safe data:
@@ -201,6 +207,10 @@ module-initialization side effect; `openJackApi` is the explicit runtime load po
 - Bounded queues for records that must reach the main thread.
 
 It contains no managed strings, sequences, tables, closures, exceptions, GUI objects, dynamic-library handles, or ownership of foreign resources.
+
+The 4B skeleton implements only fixed audio-buffer pointer arrays, a fake process mode,
+and bounded silence/copy/deterministic loops. Event arenas and the CLAP process endpoint
+remain absent until their owning increments.
 
 The JACK callback reaches it through a non-capturing `{.cdecl.}` trampoline. The hot path uses direct procedures/function pointers rather than runtime object dispatch.
 
@@ -289,9 +299,13 @@ Configuration values are validated before any plugin code executes.
 - `NotePortPlan`: CLAP index/ID, name, supported/preferred dialect, provisional JACK name, and direction.
 - `PortPlanVersion`: monotonically increasing generation for diagnostics and restart validation.
 
-The CLAP inspector applies the strict stable consistency rules also enforced by the official validator. `JackBackend` realizes the plan only after it knows JACK's actual client name and limits: it validates canonical full names, bounds/truncates aliases on UTF-8 boundaries, registers ports transactionally, and returns an `RtPortMap` containing handles and array indices rather than metadata.
+The CLAP inspector applies the strict stable consistency rules also enforced by the official validator. `JackBackend` realizes the plan only after it knows JACK's actual client name and limits: it validates canonical full names, prefixes metadata aliases with the actual client name, bounds/truncates aliases on UTF-8 boundaries, registers ports transactionally, and returns a fixed-layout `RtPortMap` containing handles and counts rather than metadata.
 
 A structural rescan creates a new plan and map only after JACK callbacks are quiescent. Live mutation or atomic replacement of a map is not needed initially.
+
+Increment 4B does not support reconfiguration of a configured backend. Its map is
+published once before activation and retained through client close, avoiding mutation
+while latency or other notification callbacks can still execute.
 
 ### 6.3 Error model
 
@@ -369,6 +383,11 @@ normally dispatches it from a non-real-time notification thread. Notification ca
 write only bounded POD/atomic state. The latency callback may invoke JACK latency-range
 operations but never `jack_recompute_total_latencies`; the control plane requests
 recomputation after observing a change.
+
+The process, shutdown/info-shutdown, buffer-size, sample-rate, xrun, freewheel, and
+latency callbacks all borrow one context allocated before registration. Shutdown reasons
+are copied once into a fixed byte array; all other notifications use atomics. No callback
+closes the client, unregisters a port, or releases memory.
 
 ### 8.3 Plugin-created threads
 
@@ -702,6 +721,12 @@ Use simple fakes rather than a general mocking framework:
 - `MemoryStateStream` tests partial reads/writes and errors.
 
 Real-time tests operate on preallocated buffers and inspect counters directly.
+
+The 4B fake JACK DSO implements the complete checked procedure table and exposes test
+controls for status flags, registration failures, buffers, notifications, and a
+condition-variable-gated in-flight callback. The condition variable belongs only to the
+fake server: product callback code remains lock-free, and the gate deterministically
+proves that backend deactivation returns after the process callback completes.
 
 ### 16.2 Contract tests
 

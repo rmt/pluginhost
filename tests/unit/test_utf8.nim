@@ -23,3 +23,15 @@ suite "UTF-8 boundary sanitization":
     ]:
       check validateUtf8(replaceInvalidUtf8(malformed)) == -1
       check "�" in replaceInvalidUtf8(malformed)
+
+  test "byte truncation preserves complete UTF-8 code points":
+    check truncateUtf8Bytes("Aé日", 0) == ""
+    check truncateUtf8Bytes("Aé日", 1) == "A"
+    check truncateUtf8Bytes("Aé日", 2) == "A"
+    check truncateUtf8Bytes("Aé日", 3) == "Aé"
+    check truncateUtf8Bytes("Aé日", 6) == "Aé日"
+
+  test "byte truncation first replaces malformed UTF-8":
+    let truncated = truncateUtf8Bytes("A\x80B", 4)
+    check validateUtf8(truncated) == -1
+    check truncated == "A�"

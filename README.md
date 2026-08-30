@@ -5,9 +5,9 @@
 The current development version is **0.0.5-dev**. The implementation includes
 checked CLAP ownership/catalog/lifecycle, human/JSON `list` and recursive `scan`,
 a stable CLAP host bridge, bounded immutable audio/note port planning, and real-time
-render negotiation. Increment 4A adds one ARC/panic callback-safety build profile and
-checked, move-only runtime ownership of the JACK DSO/procedure table. JACK client,
-port, callback, activation, and processing integration are not implemented yet.
+render negotiation. Increment 4B adds an internal checked JACK
+backend, transactional port realization, stable callbacks, and an allocation-free fake
+process endpoint. It does not activate or process CLAP, and public `run` remains disabled.
 
 ## Build
 
@@ -51,6 +51,10 @@ procedure table. The complete CLAP header tree is preserved under `vendor/clap/`
 with its MIT license and exact upstream provenance. Draft headers are vendored
 unchanged but are not part of pluginhost's bound or supported ABI surface.
 
+`nimble test` also compiles a complete controllable fake JACK DSO and checks client
+statuses, callback registration, transactional ports, quiescence, role exclusivity, and
+fake silence/copy/deterministic processing without requiring a JACK server.
+
 `nimble testFixtures` independently compiles synthetic CLAP libraries and checks
 entry/factory ownership, descriptor validation, instance cleanup, deactivated audio/note
 port inspection, render negotiation, process-level `list`, and recursive `scan` behavior.
@@ -60,9 +64,9 @@ All builds share `--mm:arc --threads:on --panics:on -d:noSignalHandler` through
 after explicit input validation; `raises: []` alone is not treated as a Defect barrier.
 
 `nimble testRt` checks Nim allocator counters over repeated and first-foreign-thread
-calls and audits generated C callback bodies for prohibited operations. This remains
-an FFI-boundary spike until Increment 4C adds module-level audits, a negative canary,
-and C allocation/lock/I/O instrumentation around a live JACK callback.
+calls, including the fake JACK process path, and audits generated C callback bodies for
+prohibited operations. Increment 4C still owns complete module/call-path auditing, a
+negative canary, and C allocation/lock/I/O instrumentation around a live JACK callback.
 
 The checked Linux loader uses `dlopen`/`dlsym`/`dlclose` without another Nim package.
 Both its generic owner and `JackApi` are move-only and require explicit, checked,

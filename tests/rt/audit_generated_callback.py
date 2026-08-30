@@ -19,6 +19,21 @@ MARKERS = (
     "pluginhost_clap_host_log",
     "pluginhost_clap_host_is_main_thread",
     "pluginhost_clap_host_is_audio_thread",
+    "pluginhost_audio_role_try_enter",
+    "pluginhost_audio_role_is_current",
+    "pluginhost_audio_role_leave",
+    "pluginhost_rt_set_audio_input",
+    "pluginhost_rt_set_audio_output",
+    "pluginhost_rt_zero_outputs",
+    "pluginhost_rt_process_fake",
+    "pluginhost_jack_process_callback",
+    "pluginhost_jack_shutdown_callback",
+    "pluginhost_jack_info_shutdown_callback",
+    "pluginhost_jack_buffer_size_callback",
+    "pluginhost_jack_sample_rate_callback",
+    "pluginhost_jack_xrun_callback",
+    "pluginhost_jack_freewheel_callback",
+    "pluginhost_jack_latency_callback",
 )
 FORBIDDEN = {
     r"\b(?:alloc|alloc0|allocShared|allocShared0|dealloc|deallocShared)\w*\s*\(":

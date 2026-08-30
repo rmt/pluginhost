@@ -58,6 +58,22 @@ proc replaceInvalidUtf8*(text: string): string =
         result.add(text[index])
       inc offset, sequenceLength
 
+proc truncateUtf8Bytes*(text: string; maximumBytes: int): string =
+  ## Returns valid UTF-8 no longer than maximumBytes without splitting a code point.
+  if maximumBytes <= 0 or text.len == 0:
+    return ""
+  let validText = replaceInvalidUtf8(text)
+  if validText.len <= maximumBytes:
+    return validText
+
+  var offset = 0
+  while offset < validText.len:
+    let sequenceLength = validSequenceLength(validText, offset)
+    if sequenceLength <= 0 or offset + sequenceLength > maximumBytes:
+      break
+    offset += sequenceLength
+  validText[0 ..< offset]
+
 proc escapeControlText*(text: string): string =
   ## Makes text valid UTF-8 and escapes terminal line/ANSI control bytes.
   let validText = replaceInvalidUtf8(text)
