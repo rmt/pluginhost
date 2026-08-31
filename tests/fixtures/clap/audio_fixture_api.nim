@@ -10,6 +10,7 @@ type
   AudioFixtureCounterProc* = proc(): uint32 {.cdecl, gcsafe, raises: [].}
   AudioFixtureStatusProc* = proc(): int32 {.cdecl, gcsafe, raises: [].}
   AudioFixtureTimeProc* = proc(): int64 {.cdecl, gcsafe, raises: [].}
+  AudioFixtureRateProc* = proc(): cdouble {.cdecl, gcsafe, raises: [].}
   AudioFixtureAddressProc* = proc(index: cint): uint64 {.
     cdecl, gcsafe, raises: [].}
   AudioFixtureLifecycleProc* = proc(index: cint): cint {.
@@ -24,6 +25,9 @@ type
     processCalls*: AudioFixtureCounterProc
     destroyCalls*: AudioFixtureCounterProc
     contractFailures*: AudioFixtureCounterProc
+    lastActivateSampleRate*: AudioFixtureRateProc
+    lastActivateMinFrames*: AudioFixtureCounterProc
+    lastActivateMaxFrames*: AudioFixtureCounterProc
     lastStatus*: AudioFixtureStatusProc
     lastSteadyTime*: AudioFixtureTimeProc
     lastFrames*: AudioFixtureCounterProc
@@ -64,6 +68,12 @@ proc audioFixtureApi*(library: DynamicLibrary): AudioFixtureApi =
     "pluginhost_audio_fixture_destroy_calls")
   result.contractFailures = resolve[AudioFixtureCounterProc](library,
     "pluginhost_audio_fixture_contract_failures")
+  result.lastActivateSampleRate = resolve[AudioFixtureRateProc](library,
+    "pluginhost_audio_fixture_last_activate_sample_rate")
+  result.lastActivateMinFrames = resolve[AudioFixtureCounterProc](library,
+    "pluginhost_audio_fixture_last_activate_min_frames")
+  result.lastActivateMaxFrames = resolve[AudioFixtureCounterProc](library,
+    "pluginhost_audio_fixture_last_activate_max_frames")
   result.lastStatus = resolve[AudioFixtureStatusProc](library,
     "pluginhost_audio_fixture_last_status")
   result.lastSteadyTime = resolve[AudioFixtureTimeProc](library,

@@ -556,6 +556,10 @@ Each CLAP audio group owns a preallocated array of float pointers. During each J
 
 This gives CLAP the expected grouped `float **` view without copying sample data. `data64` remains null. Output buffers are zeroed when the plugin is sleeping, unavailable, restarting, or failed.
 
+The Increment 5 adapter preallocates capacity for 1,024 audio groups and 4,096
+flattened channels independently in each direction, matching the port-inspection
+bounds. Exact-capacity, overflow, and recovery behavior is fixture-tested.
+
 ### 11.2 Input event arena
 
 A fixed-capacity `InputEventArena` contains aligned slots large enough for supported core event structures. It has no ownership of JACK buffers. SysEx event structures point to JACK-owned event bytes whose lifetime covers the current `process()` call.

@@ -45,6 +45,9 @@ CLAP_ROOTS = (
 
 CLAP_PROCESS_ROOTS = (
     "pluginhost_clap_process_audio",
+    "pluginhost_clap_empty_input_size",
+    "pluginhost_clap_empty_input_get",
+    "pluginhost_clap_reject_output_event",
 )
 
 PROBE_ROOTS = (
@@ -280,7 +283,8 @@ def audit_main(nimcache: Path) -> int:
             bridge_path, bridge_source, CLAP_ROOTS)
         failures.extend(bridge_failures)
 
-    audio_matches = find_marker(sources, CLAP_PROCESS_ROOTS[0])
+    audio_matches = [(path, source) for path, source in sources.items()
+                     if path.name == "@ppluginhost@sclap@saudio_process.nim.c"]
     audio_count = 0
     if len(audio_matches) != 1:
         failures.append(

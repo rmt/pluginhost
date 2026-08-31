@@ -1,4 +1,4 @@
-import std/unittest
+import std/[strutils, unittest]
 
 import pluginhost/app/audio_slice
 import pluginhost/app/host_session
@@ -16,6 +16,33 @@ proc fakeConfig(name = "audio-fixture"): JackBackendOpenConfig =
     noStartServer = true,
     libraryPath = jackFakeFixturePath(),
   )
+
+proc capacityPlan(inputGroups, outputGroups, channelsPerGroup: uint32):
+    PortPlan =
+  var groups: seq[AudioGroup]
+  var channels: seq[AudioChannelPlan]
+  for direction in [pdInput, pdOutput]:
+    let groupCount = if direction == pdInput: inputGroups else: outputGroups
+    var flattened = 0'u32
+    for groupIndex in 0'u32 ..< groupCount:
+      groups.add(AudioGroup(
+        index: groupIndex,
+        id: groupIndex + 1'u32,
+        direction: direction,
+        channelCount: channelsPerGroup,
+        flattenedFirst: flattened,
+        flattenedPast: flattened + channelsPerGroup,
+      ))
+      for channelIndex in 0'u32 ..< channelsPerGroup:
+        channels.add(AudioChannelPlan(
+          groupIndex: groupIndex,
+          groupId: groupIndex + 1'u32,
+          channelIndex: channelIndex,
+          flattenedIndex: flattened + channelIndex,
+          direction: direction,
+        ))
+      flattened += channelsPerGroup
+  newPortPlan(portPlanVersion(1), move(groups), move(channels), @[])
 
 proc openOwnedSlice(variant: string):
     tuple[slice: InternalAudioSlice, fixture: AudioFixtureApi,
@@ -112,6 +139,35 @@ proc openBackend(): JackBackend =
   result = move(opened.value)
 
 suite "internal CLAP float32 audio endpoint":
+  test "construction failure closes every acquired owner":
+    var controls = openControls()
+    let path = audioFixturePath("audio_tone")
+    var observerResult = openDynamicLibrary(path)
+    require observerResult.isOk
+    var observer = move(observerResult.value)
+    let fixture = audioFixtureApi(observer)
+    fixture.reset()
+    defer:
+      doAssert observer.close().isOk
+      doAssert controls.close().isOk
+
+    var moduleResult = openClapModule(path)
+    require moduleResult.isOk
+    var module = move(moduleResult.value)
+    var catalog = module.readCatalog()
+    require catalog.isOk
+    var selected = catalog.value.selectDescriptor(PluginSelector(
+      kind: pskImplicitSingle))
+    require selected.isOk
+    controls.setPortFailure(0)
+    var opened = openInternalAudioSlice(
+      move(module), move(selected.value), fakeConfig("construction-failure"))
+    check not opened.isOk
+    check opened.error.kind == hekJackPortRegistration
+    check fixture.destroyCalls() == 1
+    check controls.currentPortCount() == 0
+    check controls.closeCount() == 1
+
   test "composition owner orders JACK and CLAP lifecycle and closes safely":
     var controls = openControls()
     var opened = openOwnedSlice("audio_tone")
@@ -123,7 +179,8 @@ suite "internal CLAP float32 audio endpoint":
       doAssert session.close().isOk
       doAssert observer.close().isOk
       doAssert controls.close().isOk
-    check session.attachInternalAudioSlice(move(slice)).isOk
+    check session.attachInternalAudioSlice(slice).isOk
+    check slice.state == iassEmpty
     check session.state == ssNew
     check session.startInternalAudio().isOk
     check session.state == ssRunning
@@ -146,6 +203,24 @@ suite "internal CLAP float32 audio endpoint":
     check fixture.lifecycleAt(4) == 5
     check fixture.lifecycleAt(5) == 6
 
+  test "rejected session attachment retains caller ownership":
+    var controls = openControls()
+    var opened = openOwnedSlice("audio_tone")
+    var slice = move(opened.slice)
+    var observer = move(opened.observer)
+    let fixture = opened.fixture
+    var session = initHostSession()
+    session.state = ssStopped
+    defer:
+      doAssert slice.close().isOk
+      doAssert observer.close().isOk
+      doAssert controls.close().isOk
+    var attached = session.attachInternalAudioSlice(slice)
+    check not attached.isOk
+    check attached.error.kind == hekInvalidTransition
+    check slice.state == iassReady
+    check fixture.destroyCalls() == 0
+
   test "JACK activation failure rolls back CLAP processing before close":
     var controls = openControls()
     var opened = openOwnedSlice("audio_tone")
@@ -157,7 +232,7 @@ suite "internal CLAP float32 audio endpoint":
       doAssert session.close().isOk
       doAssert observer.close().isOk
       doAssert controls.close().isOk
-    require session.attachInternalAudioSlice(move(slice)).isOk
+    require session.attachInternalAudioSlice(slice).isOk
     controls.setActivateStatus(41)
     var started = session.startInternalAudio()
     check not started.isOk
@@ -171,7 +246,7 @@ suite "internal CLAP float32 audio endpoint":
     check fixture.destroyCalls() == 1
 
 
-  test "runtime block changes silence until controlled reactivation":
+  test "runtime audio changes silence and reactivate at the new limits":
     var controls = openControls()
     var opened = openOwnedSlice("audio_tone")
     var slice = move(opened.slice)
@@ -182,9 +257,13 @@ suite "internal CLAP float32 audio endpoint":
       doAssert observer.close().isOk
       doAssert controls.close().isOk
     require slice.start().isOk
+    check fixture.lastActivateSampleRate() == 48_000.0
+    check fixture.lastActivateMinFrames() == 1
+    check fixture.lastActivateMaxFrames() == 128
     check controls.invokeProcess(4) == 0
     check fixture.processCalls() == 1
     controls.invokeBufferSize(256)
+    controls.invokeSampleRate(96_000)
     check slice.jackBackend().configurationChangePending
     check controls.invokeProcess(4) == 0
     check fixture.processCalls() == 1
@@ -194,10 +273,17 @@ suite "internal CLAP float32 audio endpoint":
     check slice.state == iassActive
     check not slice.jackBackend().configurationChangePending
     check slice.jackBackend().bufferSize == 256
+    check slice.jackBackend().sampleRate == 96_000
     check fixture.activateCalls() == 2
     check fixture.startCalls() == 2
-    check controls.invokeProcess(4) == 0
+    check fixture.lastActivateSampleRate() == 96_000.0
+    check fixture.lastActivateMinFrames() == 1
+    check fixture.lastActivateMaxFrames() == 256
+    check controls.invokeProcess(256) == 0
     check fixture.processCalls() == 2
+    check controls.audioSample(0, 255) == 1_255.0
+    check controls.audioSample(1, 255) == 2_255.0
+    check fixture.contractFailures() == 0
 
   test "tone output preserves groups, timing, null transport, and zero-copy buffers":
     var controls = openControls()
@@ -220,6 +306,7 @@ suite "internal CLAP float32 audio endpoint":
     check controls.audioSample(1, 0) == 2_000.0
     check controls.audioSample(1, 7) == 2_007.0
     check fixture.processCalls() == 1
+    check process.droppedOutputEvents() == 1
     check (instance.takeRequests() and ClapRequestProcess) != 0
     var logRecord: ClapHostLogRecord
     check instance.tryPopLog(logRecord)
@@ -239,6 +326,7 @@ suite "internal CLAP float32 audio endpoint":
     check foreignResult == 0
     check fixture.processCalls() == 2
     check fixture.lastSteadyTime() == 8
+    check process.droppedOutputEvents() == 2
 
     check controls.forceProcess(129) != 0
     check controls.audioSample(0, 0) == 0.0
@@ -398,6 +486,56 @@ suite "internal CLAP float32 audio endpoint":
       check fixture.destroyCalls() == 1
       check observer.close().isOk
       check controls.close().isOk
+
+  test "audio capacities apply independently by direction and recover":
+    var opened = openInstance("audio_tone")
+    var instance = move(opened.instance)
+    var observer = move(opened.observer)
+    defer:
+      doAssert instance.close().isOk
+      doAssert observer.close().isOk
+
+    let exactPlan = capacityPlan(
+      uint32(ClapAudioProcessMaxGroupsPerDirection),
+      uint32(ClapAudioProcessMaxGroupsPerDirection),
+      uint32(ClapAudioProcessMaxChannelsPerDirection div
+        ClapAudioProcessMaxGroupsPerDirection),
+    )
+    var exact = instance.newAudioProcess(exactPlan, 128)
+    require exact.isOk
+    var exactProcess = move(exact.value)
+    check exactProcess.close().isOk
+
+    for counts in [
+      (inputs: uint32(ClapAudioProcessMaxGroupsPerDirection + 1),
+       outputs: 0'u32),
+      (inputs: 0'u32,
+       outputs: uint32(ClapAudioProcessMaxGroupsPerDirection + 1)),
+    ]:
+      let tooManyGroups = capacityPlan(
+        counts.inputs, counts.outputs, 1'u32)
+      var rejectedGroups = instance.newAudioProcess(tooManyGroups, 128)
+      check not rejectedGroups.isOk
+      check rejectedGroups.error.kind == hekClapProcess
+      check rejectedGroups.error.message.contains("group count")
+
+    for counts in [
+      (inputs: 1'u32, outputs: 0'u32),
+      (inputs: 0'u32, outputs: 1'u32),
+    ]:
+      let tooManyChannels = capacityPlan(
+        counts.inputs, counts.outputs,
+        uint32(ClapAudioProcessMaxChannelsPerDirection + 1))
+      var rejectedChannels = instance.newAudioProcess(tooManyChannels, 128)
+      check not rejectedChannels.isOk
+      check rejectedChannels.error.kind == hekClapProcess
+      check rejectedChannels.error.message.contains("channel capacity")
+
+    var recovered = instance.newAudioProcess(
+      capacityPlan(1'u32, 1'u32, 1'u32), 128)
+    require recovered.isOk
+    var recoveredProcess = move(recovered.value)
+    check recoveredProcess.close().isOk
 
   test "audio endpoint rejects note ports until the event increment":
     var openedControls = openFakeJackControls()

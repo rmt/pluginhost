@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include <clap/entry.h>
+#include <clap/events.h>
 #include <clap/ext/audio-ports.h>
 #include <clap/ext/log.h>
 #include <clap/ext/thread-check.h>
@@ -38,6 +39,9 @@ static uint32_t stop_count;
 static uint32_t process_count;
 static uint32_t destroy_count;
 static uint32_t contract_failures;
+static double last_activate_sample_rate;
+static uint32_t last_activate_min_frames;
+static uint32_t last_activate_max_frames;
 static int32_t last_process_status;
 static int64_t last_steady_time;
 static uint32_t last_frames;
@@ -196,10 +200,13 @@ static bool fixture_plugin_activate(const clap_plugin_t *plugin,
                                     uint32_t min_frames_count,
                                     uint32_t max_frames_count) {
    (void)plugin;
-   if (sample_rate != 48000.0 || min_frames_count == 0U ||
+   if (sample_rate <= 0.0 || min_frames_count == 0U ||
        max_frames_count < min_frames_count)
       ++contract_failures;
    require_main_not_audio();
+   last_activate_sample_rate = sample_rate;
+   last_activate_min_frames = min_frames_count;
+   last_activate_max_frames = max_frames_count;
    ++activate_count;
    record_lifecycle(1);
    return PLUGINHOST_AUDIO_FIXTURE_MODE != MODE_ACTIVATE_FAIL;
@@ -242,6 +249,17 @@ static clap_process_status fixture_plugin_process(const clap_plugin_t *plugin,
       ++contract_failures;
       return CLAP_PROCESS_ERROR;
    }
+   if (process->in_events->size == NULL || process->in_events->get == NULL ||
+       process->in_events->size(process->in_events) != 0U ||
+       process->in_events->get(process->in_events, 0U) != NULL)
+      ++contract_failures;
+   clap_event_header_t rejected_event = {
+      .size = sizeof(rejected_event),
+      .space_id = CLAP_CORE_EVENT_SPACE_ID,
+   };
+   if (process->out_events->try_push == NULL ||
+       process->out_events->try_push(process->out_events, &rejected_event))
+      ++contract_failures;
    if (fixture_host != NULL && fixture_host->request_process != NULL)
       fixture_host->request_process(fixture_host);
    if (fixture_host != NULL && fixture_host->get_extension != NULL) {
@@ -412,6 +430,9 @@ AUDIO_FIXTURE_EXPORT void pluginhost_audio_fixture_reset(void) {
    process_count = 0U;
    destroy_count = 0U;
    contract_failures = 0U;
+   last_activate_sample_rate = 0.0;
+   last_activate_min_frames = 0U;
+   last_activate_max_frames = 0U;
    last_process_status = -1;
    last_steady_time = -1;
    last_frames = 0U;
@@ -435,6 +456,15 @@ EXPORT_COUNTER(pluginhost_audio_fixture_stop_calls, stop_count)
 EXPORT_COUNTER(pluginhost_audio_fixture_process_calls, process_count)
 EXPORT_COUNTER(pluginhost_audio_fixture_destroy_calls, destroy_count)
 EXPORT_COUNTER(pluginhost_audio_fixture_contract_failures, contract_failures)
+EXPORT_COUNTER(pluginhost_audio_fixture_last_activate_min_frames,
+               last_activate_min_frames)
+EXPORT_COUNTER(pluginhost_audio_fixture_last_activate_max_frames,
+               last_activate_max_frames)
+
+AUDIO_FIXTURE_EXPORT double
+pluginhost_audio_fixture_last_activate_sample_rate(void) {
+   return last_activate_sample_rate;
+}
 
 AUDIO_FIXTURE_EXPORT int32_t pluginhost_audio_fixture_last_status(void) {
    return last_process_status;

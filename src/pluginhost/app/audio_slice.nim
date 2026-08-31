@@ -53,6 +53,36 @@ proc rememberFailure(first: var HostError; hadFailure: var bool;
     first = move(operation.error)
     hadFailure = true
 
+proc rememberCleanupFailure(first: var HostError; hadFailure: var bool;
+                            operation: var Result[Unit]) =
+  if operation.isOk:
+    return
+  if not hadFailure:
+    first = move(operation.error)
+    hadFailure = true
+  else:
+    first.context.add("; additional-cleanup=" & operation.error.message)
+    if operation.error.context.len > 0:
+      first.context.add(" (" & operation.error.context & ")")
+
+proc cleanupConstructionFailure(slice: var InternalAudioSlice;
+                                primary: sink HostError): HostError =
+  var cleanupFailure: HostError
+  var hadCleanupFailure = false
+  var processClosed = slice.process.close()
+  rememberCleanupFailure(cleanupFailure, hadCleanupFailure, processClosed)
+  if processClosed.isOk:
+    var instanceClosed = slice.instance.close()
+    rememberCleanupFailure(cleanupFailure, hadCleanupFailure, instanceClosed)
+  var backendClosed = slice.backend.close()
+  rememberCleanupFailure(cleanupFailure, hadCleanupFailure, backendClosed)
+  if not hadCleanupFailure:
+    return move(primary)
+  cleanupFailure.context.add("; primary=" & primary.message)
+  if primary.context.len > 0:
+    cleanupFailure.context.add(" (" & primary.context & ")")
+  move(cleanupFailure)
+
 proc state*(slice: InternalAudioSlice): InternalAudioSliceState {.inline.} =
   slice.stateValue
 
@@ -71,39 +101,32 @@ proc openInternalAudioSlice*(module: sink ClapModule;
 
   var render = slice.instance.negotiateRealtimeRender()
   if not render.isOk:
-    let primary = move(render.error)
-    discard slice.instance.close()
-    return failure[InternalAudioSlice](primary)
+    return failure[InternalAudioSlice](slice.cleanupConstructionFailure(
+      move(render.error)))
 
   var planResult = slice.instance.inspectPortPlan()
   if not planResult.isOk:
-    let primary = move(planResult.error)
-    discard slice.instance.close()
-    return failure[InternalAudioSlice](primary)
+    return failure[InternalAudioSlice](slice.cleanupConstructionFailure(
+      move(planResult.error)))
   let plan = move(planResult.value)
 
   var openedBackend = openJackBackend(backendConfig)
   if not openedBackend.isOk:
-    discard slice.instance.close()
-    return failure[InternalAudioSlice](move(openedBackend.error))
+    return failure[InternalAudioSlice](slice.cleanupConstructionFailure(
+      move(openedBackend.error)))
   slice.backend = move(openedBackend.value)
 
   var processResult = slice.instance.newAudioProcess(
     plan, slice.backend.bufferSize)
   if not processResult.isOk:
-    let primary = move(processResult.error)
-    discard slice.instance.close()
-    discard slice.backend.close()
-    return failure[InternalAudioSlice](primary)
+    return failure[InternalAudioSlice](slice.cleanupConstructionFailure(
+      move(processResult.error)))
   slice.process = move(processResult.value)
 
   var configured = slice.backend.configure(plan, slice.process.endpoint)
   if not configured.isOk:
-    let primary = move(configured.error)
-    discard slice.process.close()
-    discard slice.instance.close()
-    discard slice.backend.close()
-    return failure[InternalAudioSlice](primary)
+    return failure[InternalAudioSlice](slice.cleanupConstructionFailure(
+      move(configured.error)))
 
   slice.stateValue = iassReady
   success(move(slice))

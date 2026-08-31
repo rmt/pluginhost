@@ -10,11 +10,13 @@ proc initHostSession*(): HostSession =
   HostSession(state: ssNew)
 
 proc attachInternalAudioSlice*(session: var HostSession;
-                                slice: sink InternalAudioSlice): Result[Unit] =
-  if session.state != ssNew or slice.state != iassReady:
+                                slice: var InternalAudioSlice): Result[Unit] =
+  if session.state != ssNew or session.audioSlice.state != iassEmpty or
+      slice.state != iassReady:
     return failure[Unit](transitionError(
-      "an internal audio slice can only be attached to a new session",
-      $session.state & "; slice=" & $slice.state,
+      "an internal audio slice can only be attached to an empty new session",
+      $session.state & "; attached=" & $session.audioSlice.state &
+        "; slice=" & $slice.state,
     ))
   session.audioSlice = move(slice)
   success()

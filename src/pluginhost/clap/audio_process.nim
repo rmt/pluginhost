@@ -11,8 +11,8 @@ import ../rt/[atomic_pod, engine]
 import ./ffi
 
 const
-  ClapAudioProcessMaxGroups* = 1_024
-  ClapAudioProcessMaxChannels* = 4_096
+  ClapAudioProcessMaxGroupsPerDirection* = 1_024
+  ClapAudioProcessMaxChannelsPerDirection* = 4_096
   ClapAudioProcessMaxFrames* = uint32(high(int32))
 
 type
@@ -24,11 +24,11 @@ type
     outputGroupCount: uint32
     inputChannelCount: uint32
     outputChannelCount: uint32
-    inputBuffers: array[ClapAudioProcessMaxGroups, ClapAudioBuffer]
-    outputBuffers: array[ClapAudioProcessMaxGroups, ClapAudioBuffer]
-    inputPointers: array[ClapAudioProcessMaxChannels,
+    inputBuffers: array[ClapAudioProcessMaxGroupsPerDirection, ClapAudioBuffer]
+    outputBuffers: array[ClapAudioProcessMaxGroupsPerDirection, ClapAudioBuffer]
+    inputPointers: array[ClapAudioProcessMaxChannelsPerDirection,
       ptr UncheckedArray[cfloat]]
-    outputPointers: array[ClapAudioProcessMaxChannels,
+    outputPointers: array[ClapAudioProcessMaxChannelsPerDirection,
       ptr UncheckedArray[cfloat]]
     inputEvents: ClapInputEvents
     outputEvents: ClapOutputEvents
@@ -100,7 +100,7 @@ proc bindGroup(context: ptr ClapAudioProcessContext; group: AudioGroup;
       group.flattenedFirst != expectedChannels or
       group.flattenedPast < group.flattenedFirst or
       group.flattenedPast - group.flattenedFirst != group.channelCount or
-      group.flattenedPast > ClapAudioProcessMaxChannels:
+      group.flattenedPast > ClapAudioProcessMaxChannelsPerDirection:
     return false
 
   let descriptor = if direction == pdInput:
@@ -205,14 +205,6 @@ proc newClapAudioProcess*(plugin: ptr ClapPlugin; plan: PortPlan;
       hekClapProcess,
       "the Increment 5 audio endpoint does not translate note ports",
       path, pluginId, "note-ports=" & $plan.notePortCount))
-  if plan.audioGroupCount > ClapAudioProcessMaxGroups or
-      plan.audioChannelCount > ClapAudioProcessMaxChannels:
-    return failure[ClapAudioProcess](audioProcessError(
-      hekClapProcess,
-      "CLAP audio layout exceeds the fixed process capacity",
-      path, pluginId,
-      "groups=" & $plan.audioGroupCount &
-        "; channels=" & $plan.audioChannelCount))
 
   var context = cast[ptr ClapAudioProcessContext](
     allocShared0(sizeof(ClapAudioProcessContext)))
@@ -255,21 +247,31 @@ proc newClapAudioProcess*(plugin: ptr ClapPlugin; plan: PortPlan;
   for group in plan.audioGroups:
     let groupIndex = if group.direction == pdInput: inputGroups else: outputGroups
     if group.direction == pdInput:
-      if inputGroups >= ClapAudioProcessMaxGroups or
-          not bindGroup(context, group, pdInput, groupIndex, inputChannels):
+      if inputGroups >= ClapAudioProcessMaxGroupsPerDirection:
         deallocShared(context)
         return failure[ClapAudioProcess](audioProcessError(
           hekClapProcess,
-          "CLAP input audio groups are not contiguous",
+          "CLAP input audio group count exceeds the fixed process capacity",
+          path, pluginId, "groups=" & $(inputGroups + 1'u32)))
+      if not bindGroup(context, group, pdInput, groupIndex, inputChannels):
+        deallocShared(context)
+        return failure[ClapAudioProcess](audioProcessError(
+          hekClapProcess,
+          "CLAP input audio groups are not contiguous or exceed channel capacity",
           path, pluginId, "group=" & $groupIndex))
       inc inputGroups
     else:
-      if outputGroups >= ClapAudioProcessMaxGroups or
-          not bindGroup(context, group, pdOutput, groupIndex, outputChannels):
+      if outputGroups >= ClapAudioProcessMaxGroupsPerDirection:
         deallocShared(context)
         return failure[ClapAudioProcess](audioProcessError(
           hekClapProcess,
-          "CLAP output audio groups are not contiguous",
+          "CLAP output audio group count exceeds the fixed process capacity",
+          path, pluginId, "groups=" & $(outputGroups + 1'u32)))
+      if not bindGroup(context, group, pdOutput, groupIndex, outputChannels):
+        deallocShared(context)
+        return failure[ClapAudioProcess](audioProcessError(
+          hekClapProcess,
+          "CLAP output audio groups are not contiguous or exceed channel capacity",
           path, pluginId, "group=" & $groupIndex))
       inc outputGroups
 
