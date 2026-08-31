@@ -41,6 +41,7 @@ type
     role: AudioRoleGuard
     processEnabled: RtAtomicU32
     configurationPending: RtAtomicU32
+    configurationGeneration: RtAtomicU64
     callbacksInFlight: RtAtomicU32
     processInFlight: RtAtomicU32
     knownBufferSize: RtAtomicU32
@@ -84,6 +85,7 @@ proc initJackCallbackContext*(context: ptr JackCallbackContext;
   context.role.initAudioRoleGuard()
   context.processEnabled.storeRelaxed(0'u32)
   context.configurationPending.storeRelaxed(0'u32)
+  context.configurationGeneration.storeRelaxed(0'u64)
   context.callbacksInFlight.storeRelaxed(0'u32)
   context.processInFlight.storeRelaxed(0'u32)
   context.knownBufferSize.storeRelaxed(0'u32)
@@ -162,17 +164,33 @@ proc setRuntimeConfigurationBaseline*(context: ptr JackCallbackContext;
   context.knownBufferSize.storeRelease(bufferSize)
   true
 
-proc clearConfigurationPending*(context: ptr JackCallbackContext;
-                                 sampleRate = 0'u32;
-                                 bufferSize = 0'u32): bool =
-  if context == nil or context.processEnabled.loadAcquire() != 0'u32 or
-      context.processInFlight.loadAcquire() != 0'u32 or
-      context.callbacksInFlight.loadAcquire() != 0'u32:
+proc configurationGeneration*(context: ptr JackCallbackContext): uint64 {.
+    inline.} =
+  if context == nil: 0'u64 else:
+    context.configurationGeneration.loadAcquire()
+
+proc configurationReadStable*(context: ptr JackCallbackContext;
+                              expectedGeneration: uint64): bool =
+  if context == nil or context.callbacksInFlight.loadAcquire() != 0'u32 or
+      context.configurationGeneration.loadAcquire() != expectedGeneration:
     return false
-  if sampleRate != 0'u32 and bufferSize != 0'u32:
-    context.knownSampleRate.storeRelease(sampleRate)
-    context.knownBufferSize.storeRelease(bufferSize)
+  context.callbacksInFlight.loadAcquire() == 0'u32 and
+    context.configurationGeneration.loadAcquire() == expectedGeneration
+
+proc clearConfigurationPending*(context: ptr JackCallbackContext;
+                                 sampleRate, bufferSize: uint32;
+                                 expectedGeneration: uint64): bool =
+  if context == nil or sampleRate == 0'u32 or bufferSize == 0'u32 or
+      context.processEnabled.loadAcquire() != 0'u32 or
+      context.processInFlight.loadAcquire() != 0'u32 or
+      not context.configurationReadStable(expectedGeneration):
+    return false
+  context.knownSampleRate.storeRelease(sampleRate)
+  context.knownBufferSize.storeRelease(bufferSize)
   context.configurationPending.storeRelease(0'u32)
+  if not context.configurationReadStable(expectedGeneration):
+    context.configurationPending.storeRelease(1'u32)
+    return false
   true
 
 proc configurationChangePending*(context: ptr JackCallbackContext): bool {.
@@ -241,6 +259,7 @@ proc markConfigurationChange(context: ptr JackCallbackContext;
       context.knownBufferSize.loadAcquire() != bufferSize):
     context.configurationPending.storeRelease(1'u32)
     context.processEnabled.storeRelease(0'u32)
+  discard context.configurationGeneration.fetchAddRelease(1'u64)
 
 proc bindOutputBuffers(context: ptr JackCallbackContext;
                        nframes: JackNFrames): bool {.

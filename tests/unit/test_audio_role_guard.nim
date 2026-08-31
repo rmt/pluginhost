@@ -60,3 +60,21 @@ suite "symbolic audio-role guard":
 
     check threadCheck.isMainThread(host)
     check not threadCheck.isAudioThread(host)
+
+  test "an attached guard publishes CLAP audio-thread ownership":
+    var guard: AudioRoleGuard
+    guard.initAudioRoleGuard()
+    let bridge = newClapHostBridge()
+    let host = bridge.hostPointer
+    let threadCheck = cast[ptr ClapHostThreadCheck](
+      host.getExtension(host, ClapExtThreadCheck.cstring))
+    require threadCheck != nil
+    require bridge.attachAudioRole(addr guard)
+    require tryEnterAudioRole(addr guard)
+
+    check threadCheck.isMainThread(host)
+    check threadCheck.isAudioThread(host)
+    require leaveAudioRole(addr guard)
+    check not threadCheck.isAudioThread(host)
+    check bridge.detachAudioRole(addr guard)
+    check not bridge.detachAudioRole(addr guard)

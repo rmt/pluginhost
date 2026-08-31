@@ -37,7 +37,7 @@ type
     droppedLogs: ptr RtAtomicU64
     logExtension: ptr ClapHostLog
     threadCheckExtension: ptr ClapHostThreadCheck
-    audioRole: ptr AudioRoleGuard
+    audioRoleAddress: ptr RtAtomicU64
     mainThread: Pthread
 
   ClapHostBridge* = ref object
@@ -47,6 +47,7 @@ type
     callbackData: HostCallbackData
     requests: RtAtomicU32
     droppedLogs: RtAtomicU64
+    audioRoleAddress: RtAtomicU64
     logs: HostLogQueue
     name: string
     vendor: string
@@ -55,6 +56,8 @@ type
 
 static:
   doAssert supportsCopyMem(ClapHostLogRecord)
+  doAssert sizeof(pointer) == sizeof(uint64),
+    "atomic audio-role publication requires a 64-bit pointer target"
 
 {.push checks: off, stackTrace: off, lineTrace: off.}
 proc initLogQueue(queue: var HostLogQueue) {.gcsafe, raises: [].} =
@@ -184,8 +187,11 @@ proc hostIsMainThread(host: ptr ClapHost): bool {.
 proc hostIsAudioThread(host: ptr ClapHost): bool {.
     exportc: "pluginhost_clap_host_is_audio_thread", cdecl, gcsafe, raises: [].} =
   let data = callbackData(host)
-  data != nil and data.audioRole != nil and
-    isAudioRoleThread(data.audioRole)
+  if data == nil or data.audioRoleAddress == nil:
+    return false
+  let roleAddress = data.audioRoleAddress[].loadAcquire()
+  roleAddress != 0'u64 and
+    isAudioRoleThread(cast[ptr AudioRoleGuard](roleAddress))
 
 {.pop.}
 
@@ -197,12 +203,13 @@ proc newClapHostBridge*(): ClapHostBridge =
   result.version = Version
   result.requests.storeRelaxed(0'u32)
   result.droppedLogs.storeRelaxed(0'u64)
+  result.audioRoleAddress.storeRelaxed(0'u64)
   result.logs.initLogQueue()
   result.callbackData.requests = addr result.requests
   result.callbackData.logs = addr result.logs
   result.callbackData.droppedLogs = addr result.droppedLogs
+  result.callbackData.audioRoleAddress = addr result.audioRoleAddress
   result.callbackData.mainThread = pthread_self()
-  result.callbackData.audioRole = nil
   result.logExtension = ClapHostLog(log: hostLog)
   result.threadCheckExtension = ClapHostThreadCheck(
     isMainThread: hostIsMainThread,
@@ -235,16 +242,20 @@ proc isMainThread*(bridge: ClapHostBridge): bool {.inline, gcsafe, raises: [].} 
 proc attachAudioRole*(bridge: ClapHostBridge; role: ptr AudioRoleGuard): bool =
   if bridge == nil or role == nil:
     return false
-  if bridge.callbackData.audioRole != nil and
-      bridge.callbackData.audioRole != role:
+  let desired = cast[uint64](role)
+  let current = bridge.audioRoleAddress.loadAcquire()
+  if current != 0'u64 and current != desired:
     return false
-  bridge.callbackData.audioRole = role
+  bridge.audioRoleAddress.storeRelease(desired)
   true
 
 proc detachAudioRole*(bridge: ClapHostBridge; role: ptr AudioRoleGuard): bool =
-  if bridge == nil or role == nil or bridge.callbackData.audioRole != role:
+  if bridge == nil or role == nil:
     return false
-  bridge.callbackData.audioRole = nil
+  let expected = cast[uint64](role)
+  if bridge.audioRoleAddress.loadAcquire() != expected:
+    return false
+  bridge.audioRoleAddress.storeRelease(0'u64)
   true
 
 proc takeRequests*(bridge: ClapHostBridge): uint32 {.gcsafe, raises: [].} =

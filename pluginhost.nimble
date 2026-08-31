@@ -121,18 +121,26 @@ proc checkIntegrationPrerequisites() =
   verifyIntegrationPrerequisiteFailure()
   exec "python3 tests/integration/run_pipewire_jack.py --check-only"
 
+proc compileLiveIntegrationTest(source, output: string) =
+  exec "nim c --hints:off --path:src --path:tests " &
+       dependencyPathsClause() &
+       " --nimcache:build/nimcache/integration/" & output &
+       " --passL:build/integration/live_callback_instrumentation.o" &
+       rtInstrumentationLinkFlags() &
+       " --out:build/test/" & output & " " & source
+
 proc runIntegrationTests(checkPrerequisites = true) =
   if checkPrerequisites:
     checkIntegrationPrerequisites()
     checkClapSmokePrerequisite()
   compileLiveIntegrationSupport()
-  exec "nim c --hints:off --path:src --path:tests " &
-       dependencyPathsClause() &
-       " --nimcache:build/nimcache/integration " &
-       "--passL:build/integration/live_callback_instrumentation.o" &
-       rtInstrumentationLinkFlags() &
-       " --out:build/test/all_integration_tests " &
-       "tests/integration/all_integration_tests.nim"
+  compileLiveIntegrationTest(
+    "tests/integration/test_live_clap_audio.nim", "live_clap_audio")
+  compileLiveIntegrationTest(
+    "tests/integration/all_integration_tests.nim", "all_integration_tests")
+  exec "python3 tests/integration/run_pipewire_jack.py " &
+       "--test build/test/live_clap_audio " &
+       "--peer build/integration/jack_peer"
   exec "python3 tests/integration/run_pipewire_jack.py " &
        "--test build/test/all_integration_tests " &
        "--peer build/integration/jack_peer"

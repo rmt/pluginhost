@@ -100,6 +100,7 @@ suite "isolated live PipeWire-JACK backend":
     require backend.configure(plan, fpmDeterministic).isOk
     require backend.realizedPortCount == 6
     require backend.activate().isOk
+    require backend.waitForCycles(8'u64)
 
     var peer = startProcess(
       peerPath,
@@ -115,6 +116,10 @@ suite "isolated live PipeWire-JACK backend":
         emergencyPeerCleanup(peer)
 
     let ready = peer.outputStream().readLine()
+    if not ready.startsWith("READY "):
+      discard peer.waitForExit(2_000)
+      checkpoint("peer stdout=" & ready & "; stderr=" &
+        peer.errorStream().readAll())
     require ready.startsWith("READY ")
     let jackLibrary = ready.loadedJackLibrary()
     require jackLibrary.len > 0

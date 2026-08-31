@@ -170,6 +170,42 @@ suite "checked JACK backend lifecycle and callbacks":
     check controls.closeCount() == 0
     check backend.state == jbsConfigured
 
+  test "configuration acknowledgement preserves a newer notification":
+    var openedControls = openFakeJackControls()
+    require openedControls.isOk
+    var controls = move(openedControls.value)
+    defer:
+      doAssert controls.close().isOk
+    controls.reset()
+    var opened = openJackBackend(fakeConfig())
+    require opened.isOk
+    var backend = move(opened.value)
+    defer:
+      doAssert backend.close().isOk
+    require backend.configure(
+      newPortPlan(portPlanVersion(1), @[], @[], @[]),
+      fpmSilence).isOk
+
+    controls.invokeBufferSize(256)
+    require backend.configurationChangePending
+    let first = backend.refreshRuntimeConfiguration()
+    require first.isOk
+    check first.value.bufferSize == 256
+    check first.value.sampleRate == 48_000
+
+    controls.invokeSampleRate(96_000)
+    let stale = backend.acknowledgeConfigurationChange()
+    check not stale.isOk
+    check stale.error.kind == hekJackQuiescence
+    check backend.configurationChangePending
+
+    let current = backend.refreshRuntimeConfiguration()
+    require current.isOk
+    check current.value.bufferSize == 256
+    check current.value.sampleRate == 96_000
+    check backend.acknowledgeConfigurationChange().isOk
+    check not backend.configurationChangePending
+
   test "process callback copies buffers and deactivation rejects late work":
     var openedControls = openFakeJackControls()
     require openedControls.isOk

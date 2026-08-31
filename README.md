@@ -75,9 +75,9 @@ standard atomic helpers install trace frames under the product profile.
 complete JACK/RT generated modules and the process-reachable CLAP host callback helper
 closure under product flags, and requires rejection of a prohibited allocation canary.
 
-`nimble testIntegration` creates a mode-0700 private runtime, launches a uniquely named
-PipeWire core with its Dummy-Driver at 48 kHz/64 frames, validates the internal CLAP
-float32 lifecycle against an independently installed headless plugin, validates live
+`nimble testIntegration` creates isolated mode-0700 private runtimes, launches uniquely
+named PipeWire cores with their Dummy-Drivers at 48 kHz/64 frames, validates the internal
+CLAP float32 lifecycle against an independently installed headless plugin, validates live
 audio/MIDI ports and deterministic samples through a separate JACK peer, proves
 cycle-based quiescence and client-close port removal, runs 32 repeated active-close
 lifecycles, and requires zero instrumented C allocation, deallocation, lock, print, or

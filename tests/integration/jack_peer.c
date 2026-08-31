@@ -13,6 +13,7 @@
 
 #define PEER_TIMEOUT_MILLISECONDS 5000
 #define PEER_SLEEP_NANOSECONDS 1000000L
+#define PEER_CONNECTION_SETTLE_CYCLES 4U
 
 typedef struct peer_state {
     jack_port_t *inputs[2];
@@ -275,6 +276,13 @@ int main(int argc, char **argv) {
         goto cleanup;
     }
 
+    const uint64_t settle_start =
+        atomic_load_explicit(&state.total_cycles, memory_order_acquire);
+    if (wait_for_counter(&state.total_cycles,
+                         settle_start + PEER_CONNECTION_SETTLE_CYCLES) != 0) {
+        fprintf(stderr, "peer timed out waiting for graph connection settle\n");
+        goto cleanup;
+    }
     atomic_store_explicit(&state.armed, 1, memory_order_release);
     if (wait_for_counter(&state.valid_cycles, (uint64_t)required_cycles) != 0) {
         fprintf(stderr, "peer timed out waiting for deterministic samples\n");
