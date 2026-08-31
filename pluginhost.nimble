@@ -1,7 +1,7 @@
 # Nimble 0.20 accepts only dotted numeric package versions and requires a
 # literal assignment. tests/unit/test_version.nim verifies this value against
 # the numeric core of VERSION.
-version       = "0.0.5"
+version       = "0.0.6"
 author        = "pluginhost contributors"
 description   = "A standalone Linux JACK host for CLAP plugins"
 license       = "UNLICENSED"
@@ -54,6 +54,75 @@ proc compileFakeJackFixture() =
        "$(pkg-config --cflags jack) " &
        "tests/fixtures/jack/fake_jack_fixture.c " &
        "-o build/fixtures/libpluginhost_jack_fake_fixture.so"
+
+proc rtInstrumentationLinkFlags(): string =
+  const wrappedSymbols = [
+    "pluginhost_jack_process_callback",
+    "pluginhost_jack_shutdown_callback",
+    "pluginhost_jack_info_shutdown_callback",
+    "pluginhost_jack_buffer_size_callback",
+    "pluginhost_jack_sample_rate_callback",
+    "pluginhost_jack_xrun_callback",
+    "pluginhost_jack_freewheel_callback",
+    "pluginhost_jack_latency_callback",
+    "malloc", "calloc", "realloc", "free", "aligned_alloc",
+    "posix_memalign", "mmap", "munmap",
+    "pthread_mutex_lock", "pthread_mutex_trylock",
+    "pthread_mutex_timedlock", "pthread_rwlock_rdlock",
+    "pthread_rwlock_wrlock", "pthread_rwlock_tryrdlock",
+    "pthread_rwlock_trywrlock", "pthread_spin_lock",
+    "pthread_spin_trylock", "pthread_cond_wait",
+    "pthread_cond_timedwait",
+    "printf", "vprintf", "fprintf", "vfprintf", "sprintf",
+    "vsprintf", "snprintf", "vsnprintf", "puts", "fputs",
+    "fwrite", "putchar",
+    "open", "open64", "openat", "openat64", "read", "pread",
+    "write", "pwrite", "writev", "close", "fsync", "fdatasync",
+  ]
+  for symbol in wrappedSymbols:
+    result.add(" --passL:-Wl,--wrap=" & symbol)
+
+proc compileLiveIntegrationSupport() =
+  exec "mkdir -p build/integration build/nimcache/integration build/test"
+  exec "cc -std=gnu11 -fPIC -fno-builtin -Wall -Wextra -Werror " &
+       "-pthread $(pkg-config --cflags jack) -c " &
+       "tests/rt/live_callback_instrumentation.c " &
+       "-o build/integration/live_callback_instrumentation.o"
+  exec "cc -std=gnu11 -fno-builtin -Wall -Wextra -Werror -pthread " &
+       "$(pkg-config --cflags jack) tests/integration/jack_peer.c " &
+       "$(pkg-config --libs jack) -ldl -Wl,-z,defs " &
+       "-o build/integration/jack_peer"
+
+proc verifyIntegrationPrerequisiteFailure() =
+  exec "python=$(command -v python3); set +e; " &
+       "output=$(env PATH=/pluginhost-missing-prerequisites \"$python\" " &
+       "tests/integration/run_pipewire_jack.py --check-only 2>&1); " &
+       "status=$?; set -e; " &
+       "if [ \"$status\" -ne 1 ] || ! printf '%s\\n' \"$output\" | " &
+       "grep -Fq 'integration test did not run'; then " &
+       "printf '%s\\n' \"$output\" >&2; " &
+       "echo 'missing integration prerequisites produced a false pass' >&2; " &
+       "exit 1; fi; " &
+       "echo 'Missing integration prerequisites fail as required'"
+
+proc checkIntegrationPrerequisites() =
+  verifyIntegrationPrerequisiteFailure()
+  exec "python3 tests/integration/run_pipewire_jack.py --check-only"
+
+proc runIntegrationTests(checkPrerequisites = true) =
+  if checkPrerequisites:
+    checkIntegrationPrerequisites()
+  compileLiveIntegrationSupport()
+  exec "nim c --hints:off --path:src --path:tests " &
+       dependencyPathsClause() &
+       " --nimcache:build/nimcache/integration " &
+       "--passL:build/integration/live_callback_instrumentation.o" &
+       rtInstrumentationLinkFlags() &
+       " --out:build/test/all_integration_tests " &
+       "tests/integration/all_integration_tests.nim"
+  exec "python3 tests/integration/run_pipewire_jack.py " &
+       "--test build/test/all_integration_tests " &
+       "--peer build/integration/jack_peer"
 
 proc compileClapFixtureVariant(name: string; mode: int) =
   exec "cc -std=gnu11 -fPIC -shared -fvisibility=hidden " &
@@ -143,7 +212,7 @@ proc runUnitTests() =
 
 proc runAbiTests() =
   exec "mkdir -p build/abi build/nimcache/abi build/test"
-  exec "cc -std=gnu11 -Wall -Wextra -Werror -Ivendor/clap/include " &
+  exec "cc -std=gnu11 -Wall -Wextra -Werror -Ic -Ivendor/clap/include " &
        "$(pkg-config --cflags jack) -c c/abi_probe.c " &
        "-o build/abi/abi_probe.o"
   compileFfiFixture()
@@ -158,8 +227,32 @@ proc runAbiTests() =
        "tests/abi/all_abi_tests.nim"
   verifyNoEagerJackDependency("build/test/all_abi_tests")
 
+proc runGeneratedCallbackAudit() =
+  exec "rm -rf build/nimcache/rt-product && " &
+       "mkdir -p build/nimcache/rt-product"
+  exec "nim c --compileOnly --hints:off --path:src --path:tests " &
+       dependencyPathsClause() & " --nimcache:build/nimcache/rt-product " &
+       "tests/rt/generated_audit_target.nim"
+  exec "python3 tests/rt/audit_generated_callback.py " &
+       "build/nimcache/rt-product"
+  exec "python3 tests/rt/audit_generated_callback.py --probes " &
+       "build/nimcache/rt-alloc"
+  exec "rm -rf build/nimcache/rt-canary && mkdir -p build/nimcache/rt-canary"
+  exec "nim c --compileOnly --hints:off --path:src --path:tests " &
+       dependencyPathsClause() & " --nimcache:build/nimcache/rt-canary " &
+       "tests/rt/negative_callback_canary.nim"
+  exec "set +e; output=$(python3 tests/rt/audit_generated_callback.py " &
+       "--canary build/nimcache/rt-canary " &
+       "pluginhost_rt_audit_negative_canary 2>&1); status=$?; set -e; " &
+       "printf '%s\\n' \"$output\"; " &
+       "if [ \"$status\" -ne 1 ] || ! printf '%s\\n' \"$output\" | " &
+       "grep -Fq 'C allocation or deallocation'; then " &
+       "echo 'negative generated callback canary was not rejected as required' >&2; " &
+       "exit 1; fi; " &
+       "echo 'Negative generated callback canary rejected as required'"
+
 proc runRtTests() =
-  exec "mkdir -p build/nimcache/rt build/test"
+  exec "mkdir -p build/nimcache/rt-alloc build/test"
   compileFfiFixture()
   compileFakeJackFixture()
   exec "PLUGINHOST_FFI_FIXTURE=$PWD/build/fixtures/" &
@@ -168,9 +261,9 @@ proc runRtTests() =
        "libpluginhost_jack_fake_fixture.so " &
        "nim c -r --hints:off -d:nimAllocStats " &
        "--path:src --path:tests " & dependencyPathsClause() &
-       " --nimcache:build/nimcache/rt --out:build/test/all_rt_tests " &
+       " --nimcache:build/nimcache/rt-alloc --out:build/test/all_rt_tests " &
        "tests/rt/all_rt_tests.nim"
-  exec "python3 tests/rt/audit_generated_callback.py build/nimcache/rt"
+  runGeneratedCallbackAudit()
 
 proc runClapFixtureTests() =
   compileClapFixtures()
@@ -195,7 +288,11 @@ task testFixtures, "Build and test the synthetic CLAP fixtures":
 task testRt, "Run callback allocation and generated-code safety checks":
   runRtTests()
 
+task testIntegration, "Run isolated live PipeWire-JACK integration tests":
+  runIntegrationTests()
+
 task all, "Run compile checks, build the executable, and run tests":
+  checkIntegrationPrerequisites()
   exec "mkdir -p build/nimcache/check"
   exec "nim check --hints:off --path:src " & dependencyPathsClause() &
        " --nimcache:build/nimcache/check src/pluginhost.nim"
@@ -204,3 +301,4 @@ task all, "Run compile checks, build the executable, and run tests":
   runAbiTests()
   runRtTests()
   runClapFixtureTests()
+  runIntegrationTests(false)

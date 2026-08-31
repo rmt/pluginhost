@@ -1,24 +1,20 @@
 #!/usr/bin/env python3
-"""Reject prohibited runtime calls in generated real-time callback paths."""
+"""Audit complete generated RT modules and process-reachable callback helpers."""
 
+from __future__ import annotations
+
+from collections import deque
 from pathlib import Path
 import re
 import sys
 
-MARKERS = (
-    "pluginhost_rt_probe_process",
-    "pluginhost_host_callbacks_probe",
-    "pluginhost_clap_host_cstring_equals",
-    "pluginhost_clap_host_log_try_push",
-    "pluginhost_clap_host_callback_data",
-    "pluginhost_clap_host_record_request",
-    "pluginhost_clap_host_get_extension",
-    "pluginhost_clap_host_request_restart",
-    "pluginhost_clap_host_request_process",
-    "pluginhost_clap_host_request_callback",
-    "pluginhost_clap_host_log",
-    "pluginhost_clap_host_is_main_thread",
-    "pluginhost_clap_host_is_audio_thread",
+COMPLETE_MODULES = (
+    "@ppluginhost@sjack@scallbacks.nim.c",
+    "@ppluginhost@srt@sengine.nim.c",
+    "@ppluginhost@srt@srole_guard.nim.c",
+)
+
+JACK_ROOTS = (
     "pluginhost_audio_role_try_enter",
     "pluginhost_audio_role_is_current",
     "pluginhost_audio_role_leave",
@@ -35,98 +31,327 @@ MARKERS = (
     "pluginhost_jack_freewheel_callback",
     "pluginhost_jack_latency_callback",
 )
+
+CLAP_ROOTS = (
+    "pluginhost_clap_host_get_extension",
+    "pluginhost_clap_host_request_restart",
+    "pluginhost_clap_host_request_process",
+    "pluginhost_clap_host_request_callback",
+    "pluginhost_clap_host_log",
+    "pluginhost_clap_host_is_main_thread",
+    "pluginhost_clap_host_is_audio_thread",
+)
+
+PROBE_ROOTS = (
+    "pluginhost_rt_probe_process",
+    "pluginhost_host_callbacks_probe",
+)
+
 FORBIDDEN = {
     r"\b(?:alloc|alloc0|allocShared|allocShared0|dealloc|deallocShared)\w*\s*\(":
-        "Nim allocation",
+        "Nim allocation or deallocation",
     r"\b(?:nimNewObj|nimRawNewString|rawNewString|newSeq|setLengthSeq)\w*\s*\(":
         "managed allocation",
-    r"\b(?:malloc|calloc|realloc|free)\w*\s*\(": "C allocation",
-    r"\b(?:raise|nimRaise|reraise)\w*\s*\(": "exception runtime",
-    r"\b(?:printf|fprintf|fwrite|puts|write)\w*\s*\(": "diagnostic I/O",
-    r"\b(?:pthread_(?:mutex|rwlock|cond|create|join)|sleep|usleep|nanosleep)\w*\s*\(":
-        "blocking or thread-management call",
-    r"\b(?:dlopen|dlclose|dlsym)\w*\s*\(": "dynamic-library operation",
+    r"\b(?:nimDecRef|nimIncRef|nimDestroy|eqdestroy|unsureAsgnRef)\w*\s*\(":
+        "ARC/managed lifetime operation",
+    r"\b(?:malloc|calloc|realloc|reallocarray|free|aligned_alloc|posix_memalign|"
+    r"mmap|mremap|munmap)\w*\s*\(": "C allocation or deallocation",
+    r"\b(?:raise|nimRaise|reraise|panic|setjmp|longjmp)\w*\s*\(":
+        "exception or panic runtime",
+    r"\b(?:nimfr_|nimlf_|nimln_|pushFrame|popFrame|callDepthLimitReached)\w*\s*\(":
+        "trace-frame or line-trace setup",
+    r"\b(?:printf|vprintf|fprintf|vfprintf|sprintf|snprintf|fwrite|fputs|puts|"
+    r"putchar|write|writev)\w*\s*\(": "print or write I/O",
+    r"\b(?:open|open64|openat|openat64|creat|read|pread|pwrite|close|fsync|"
+    r"fdatasync|ioctl|poll|ppoll|select|pselect|epoll_wait|syscall)\w*\s*\(":
+        "file, device, or blocking I/O",
+    r"\b(?:socket|connect|accept|send|recv)\w*\s*\(": "network I/O",
+    r"\b(?:pthread_(?:mutex|rwlock|spin|cond|create|join|once)|sleep|usleep|"
+    r"nanosleep)\w*\s*\(": "lock, wait, sleep, or thread management",
+    r"\b(?:dlopen|dlclose|dlsym|dlvsym)\w*\s*\(": "dynamic-library operation",
 }
 
+CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+FUNCTION_MACRO_RE = re.compile(
+    r"\b(?:N_INLINE|N_NIMCALL|N_CDECL)\([^,\n]+,\s*([A-Za-z_][A-Za-z0-9_]*)\)"
+)
+C_KEYWORDS = {
+    "if", "for", "while", "switch", "case", "return", "sizeof", "_Alignof",
+    "typeof", "__typeof__", "_Static_assert",
+}
+ALLOWED_EXTERNALS = {
+    "memcpy", "memset", "pthread_self", "pthread_equal",
+    "N_CDECL", "N_INLINE", "N_NIMCALL", "IL64",
+    "__builtin_unreachable", "portGetBuffer", "portGetLatencyRange",
+    "portSetLatencyRange",
+}
+ALLOWED_EXTERNAL_PREFIXES = (
+    "pluginhost_rt_atomic_",
+    "pluginhost_audio_role_",
+    "pluginhost_rt_set_audio_",
+    "pluginhost_rt_zero_outputs",
+    "pluginhost_rt_process_fake",
+    "initAudioRoleGuard__",
+    "initRtEngine__",
+)
 
-def extract_definition(source: str, marker: str) -> str | None:
-    for occurrence in re.finditer(rf"\b{re.escape(marker)}\b", source):
-        tail = source[occurrence.end():]
-        brace_offset = tail.find("{")
-        semicolon_offset = tail.find(";")
-        if brace_offset < 0:
-            continue
-        if 0 <= semicolon_offset < brace_offset:
-            continue
 
-        start = occurrence.start()
-        body_start = occurrence.end() + brace_offset
-        depth = 0
-        for index in range(body_start, len(source)):
-            char = source[index]
-            if char == "{":
-                depth += 1
-            elif char == "}":
-                depth -= 1
-                if depth == 0:
-                    return source[start:index + 1]
+def extract_braced(source: str, opening: int) -> str | None:
+    depth = 0
+    for index in range(opening, len(source)):
+        char = source[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return source[opening:index + 1]
     return None
 
 
-def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: audit_generated_callback.py NIMCACHE", file=sys.stderr)
-        return 2
+def definitions_in(source: str) -> dict[str, str]:
+    definitions: dict[str, str] = {}
+    for match in FUNCTION_MACRO_RE.finditer(source):
+        semicolon = source.find(";", match.end())
+        opening = source.find("{", match.end())
+        if opening < 0 or (semicolon >= 0 and semicolon < opening):
+            continue
+        body = extract_braced(source, opening)
+        if body is None:
+            continue
+        name = match.group(1)
+        definitions[name] = source[match.start():opening] + body
+    return definitions
 
-    nimcache = Path(sys.argv[1])
-    definitions: dict[str, list[tuple[Path, str]]] = {
-        marker: [] for marker in MARKERS
+
+def generated_sources(nimcache: Path) -> dict[Path, str]:
+    return {
+        candidate: candidate.read_text(errors="replace")
+        for candidate in nimcache.rglob("*.c")
     }
-    for candidate in nimcache.rglob("*.c"):
-        source = candidate.read_text(errors="replace")
-        for marker in MARKERS:
-            definition = extract_definition(source, marker)
-            if definition is not None:
-                definitions[marker].append((candidate, definition))
 
-    invalid_counts = False
-    for marker, matches in definitions.items():
+
+def find_marker(sources: dict[Path, str], marker: str) -> list[tuple[Path, str]]:
+    matches: list[tuple[Path, str]] = []
+    for path, source in sources.items():
+        definition = definitions_in(source).get(marker)
+        if definition is not None:
+            matches.append((path, definition))
+    return matches
+
+
+def prohibited(definition: str) -> list[str]:
+    failures: list[str] = []
+    for pattern, description in FORBIDDEN.items():
+        if re.search(pattern, definition):
+            failures.append(description)
+    if "NimFrame" in definition:
+        failures.append("trace-frame storage")
+    return failures
+
+
+def helper_closure(source: str, roots: tuple[str, ...]) -> tuple[dict[str, str], set[str]]:
+    definitions = definitions_in(source)
+    reached: dict[str, str] = {}
+    external: set[str] = set()
+    pending = deque(roots)
+    while pending:
+        name = pending.popleft()
+        if name in reached:
+            continue
+        definition = definitions.get(name)
+        if definition is None:
+            external.add(name)
+            continue
+        reached[name] = definition
+        for called in CALL_RE.findall(definition):
+            if called == name or called in C_KEYWORDS:
+                continue
+            if called in definitions:
+                if called not in reached:
+                    pending.append(called)
+            else:
+                external.add(called)
+    return reached, external
+
+
+def allowed_external(name: str) -> bool:
+    return name in ALLOWED_EXTERNALS or any(
+        name.startswith(prefix) for prefix in ALLOWED_EXTERNAL_PREFIXES
+    )
+
+
+def audit_complete_module(path: Path, source: str) -> list[str]:
+    failures = [f"{path}: {failure}" for failure in prohibited(source)]
+    definitions = definitions_in(source)
+    external: set[str] = set()
+    for name, definition in definitions.items():
+        for called in CALL_RE.findall(definition):
+            if called != name and called not in definitions and \
+                    called not in C_KEYWORDS:
+                external.add(called)
+    for name in sorted(external):
+        if not allowed_external(name):
+            failures.append(
+                f"{path}: unreviewed external call from complete RT module: {name}"
+            )
+    return failures
+
+
+def audit_closure(path: Path, source: str,
+                  roots: tuple[str, ...]) -> tuple[list[str], int]:
+    reached, external = helper_closure(source, roots)
+    failures: list[str] = []
+    for root in roots:
+        if root not in reached:
+            failures.append(f"{path}: missing callback root {root}")
+    for name, definition in reached.items():
+        for failure in prohibited(definition):
+            failures.append(f"{path}: {name}: {failure}")
+    unexpected = sorted(
+        name for name in external
+        if name not in roots and not allowed_external(name)
+    )
+    for name in unexpected:
+        failures.append(f"{path}: unreviewed external call from callback closure: {name}")
+    return failures, len(reached)
+
+
+def audit_atomic_header() -> list[str]:
+    root = Path(__file__).resolve().parents[2]
+    header = root / "c" / "rt_atomic.h"
+    if not header.is_file():
+        return [f"missing real-time atomic header: {header}"]
+    source = header.read_text(errors="replace")
+    failures = [f"{header}: {failure}" for failure in prohibited(source)]
+    for name in sorted(set(CALL_RE.findall(source))):
+        if name in C_KEYWORDS or name == "_Atomic" or \
+                name.startswith("pluginhost_rt_atomic_") or \
+                name.startswith("atomic_") or \
+                name == "__atomic_always_lock_free":
+            continue
+        failures.append(f"{header}: unreviewed C atomic bridge call: {name}")
+    return failures
+
+
+def audit_main(nimcache: Path) -> int:
+    sources = generated_sources(nimcache)
+    failures: list[str] = []
+    audited: set[Path] = set()
+
+    for filename in COMPLETE_MODULES:
+        matches = [(path, source) for path, source in sources.items()
+                   if path.name == filename]
         if len(matches) != 1:
-            print(
-                f"expected one generated {marker} definition, found {len(matches)}",
-                file=sys.stderr,
+            failures.append(
+                f"expected one generated RT module {filename}, found {len(matches)}"
             )
-            invalid_counts = True
-    if invalid_counts:
+            continue
+        path, source = matches[0]
+        audited.add(path)
+        failures.extend(audit_complete_module(path, source))
+
+    all_roots = JACK_ROOTS + CLAP_ROOTS
+    for root in all_roots:
+        matches = find_marker(sources, root)
+        if len(matches) != 1:
+            failures.append(
+                f"expected one generated {root} definition, found {len(matches)}"
+            )
+
+    bridge_matches = [(path, source) for path, source in sources.items()
+                      if path.name == "@ppluginhost@sclap@shost_bridge.nim.c"]
+    if len(bridge_matches) != 1:
+        failures.append(
+            "expected one generated CLAP host bridge module, "
+            f"found {len(bridge_matches)}"
+        )
+        bridge_count = 0
+    else:
+        bridge_path, bridge_source = bridge_matches[0]
+        audited.add(bridge_path)
+        bridge_failures, bridge_count = audit_closure(
+            bridge_path, bridge_source, CLAP_ROOTS)
+        failures.extend(bridge_failures)
+
+
+    failures.extend(audit_atomic_header())
+
+    if failures:
+        print("Generated callback audit failed:", file=sys.stderr)
+        for failure in failures:
+            print(f"- {failure}", file=sys.stderr)
         return 1
 
-    failed = False
-    audited_paths: set[Path] = set()
-    for marker, matches in definitions.items():
-        source_path, definition = matches[0]
-        audited_paths.add(source_path)
-        failures: list[str] = []
-        for pattern, description in FORBIDDEN.items():
-            if re.search(pattern, definition):
-                failures.append(description)
-        if "nimfr_" in definition or "NimFrame" in definition:
-            failures.append("stack-trace frame setup")
-
-        if failures:
-            failed = True
-            print(
-                f"prohibited generated operations in {marker} ({source_path}):",
-                file=sys.stderr,
-            )
-            for failure in failures:
-                print(f"- {failure}", file=sys.stderr)
-
-    if failed:
-        return 1
-
-    paths = ", ".join(str(path) for path in sorted(audited_paths))
-    print(f"Generated callback audit passed: {paths}")
+    paths = ", ".join(str(path) for path in sorted(audited))
+    paths += ", c/rt_atomic.h"
+    print(
+        "Complete generated callback audit passed "
+        f"({bridge_count} CLAP callback/helper functions): {paths}"
+    )
     return 0
+
+
+def audit_probes(nimcache: Path) -> int:
+    sources = generated_sources(nimcache)
+    failures: list[str] = []
+    audited: set[Path] = set()
+    for root in PROBE_ROOTS:
+        matches = find_marker(sources, root)
+        if len(matches) != 1:
+            failures.append(
+                f"expected one generated {root} definition, found {len(matches)}"
+            )
+            continue
+        path, definition = matches[0]
+        audited.add(path)
+        for failure in prohibited(definition):
+            failures.append(f"{path}: {root}: {failure}")
+    if failures:
+        print("Generated callback probe audit failed:", file=sys.stderr)
+        for failure in failures:
+            print(f"- {failure}", file=sys.stderr)
+        return 1
+    paths = ", ".join(str(path) for path in sorted(audited))
+    print(f"Generated callback probe audit passed: {paths}")
+    return 0
+
+
+def audit_canary(nimcache: Path, marker: str) -> int:
+    sources = generated_sources(nimcache)
+    matches = find_marker(sources, marker)
+    if len(matches) != 1:
+        print(
+            f"expected one generated canary {marker} definition, found {len(matches)}",
+            file=sys.stderr,
+        )
+        return 2
+    path, definition = matches[0]
+    failures = prohibited(definition)
+    if not failures:
+        print(f"audit accepted prohibited canary {marker} ({path})", file=sys.stderr)
+        return 0
+    print(f"prohibited generated operations in canary {marker} ({path}):",
+          file=sys.stderr)
+    for failure in failures:
+        print(f"- {failure}", file=sys.stderr)
+    return 1
+
+
+def main() -> int:
+    if len(sys.argv) == 2:
+        return audit_main(Path(sys.argv[1]))
+    if len(sys.argv) == 3 and sys.argv[1] == "--probes":
+        return audit_probes(Path(sys.argv[2]))
+    if len(sys.argv) == 4 and sys.argv[1] == "--canary":
+        return audit_canary(Path(sys.argv[2]), sys.argv[3])
+    print(
+        "usage: audit_generated_callback.py NIMCACHE\n"
+        "       audit_generated_callback.py --probes NIMCACHE\n"
+        "       audit_generated_callback.py --canary NIMCACHE MARKER",
+        file=sys.stderr,
+    )
+    return 2
 
 
 if __name__ == "__main__":

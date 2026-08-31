@@ -35,6 +35,10 @@ missed defect terminates the process rather than unwinding into foreign code.
 The callback rules are still required to prevent defects and real-time-unsafe
 runtime activity in the first place.
 
+ADR 0005 supplements this decision for atomics: Nim 2.2.10's standard atomic
+helpers retain trace frames despite caller-local pragmas, so process-reachable callback
+state uses an audited C11 bridge rather than permitting those transitive helpers.
+
 ## Alternatives considered
 
 - Keep ORC for ordinary builds and ARC only for RT tests: rejected because the

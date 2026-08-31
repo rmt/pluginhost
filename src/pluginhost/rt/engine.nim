@@ -28,6 +28,7 @@ type
 static:
   doAssert supportsCopyMem(RtEngine)
 
+{.push checks: off, stackTrace: off, lineTrace: off.}
 proc initRtEngine*(engine: var RtEngine; mode: FakeProcessMode;
                    inputCount, outputCount: uint32): bool {.
     gcsafe, raises: [].} =
@@ -39,7 +40,6 @@ proc initRtEngine*(engine: var RtEngine; mode: FakeProcessMode;
   engine.outputCount = outputCount
   true
 
-{.push checks: off, stackTrace: off, lineTrace: off.}
 proc setAudioInputBuffer*(engine: ptr RtEngine; index: uint32;
                           buffer: pointer): bool {.
     exportc: "pluginhost_rt_set_audio_input", gcsafe, raises: [].} =

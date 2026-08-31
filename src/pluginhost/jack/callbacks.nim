@@ -2,10 +2,9 @@
 ## Callbacks record only bounded POD/atomic state. Cleanup and diagnostics belong
 ## to the control plane after JACK has been quiesced.
 
-import std/concurrency/atomics
 import std/typetraits
 
-import ../rt/[engine, role_guard]
+import ../rt/[atomic_pod, engine, role_guard]
 import ./[api, ffi, ports]
 
 const ShutdownReasonBytes* = 256
@@ -17,33 +16,33 @@ type
     portSetLatencyRange: JackPortSetLatencyRangeProc
 
   JackNotifications = object
-    shutdownCount: Atomic[uint64]
-    shutdownRecordState: Atomic[uint32]
-    shutdownStatus: Atomic[int32]
+    shutdownCount: RtAtomicU64
+    shutdownRecordState: RtAtomicU32
+    shutdownStatus: RtAtomicI32
     shutdownReasonLength: uint32
     shutdownReason: array[ShutdownReasonBytes, char]
-    xrunCount: Atomic[uint64]
-    freewheelCount: Atomic[uint64]
-    freewheelState: Atomic[int32]
-    bufferSizeCount: Atomic[uint64]
-    bufferSize: Atomic[uint32]
-    sampleRateCount: Atomic[uint64]
-    sampleRate: Atomic[uint32]
-    latencyCount: Atomic[uint64]
-    processCycles: Atomic[uint64]
-    processFrames: Atomic[uint64]
-    processErrors: Atomic[uint64]
-    lateProcessCalls: Atomic[uint64]
+    xrunCount: RtAtomicU64
+    freewheelCount: RtAtomicU64
+    freewheelState: RtAtomicI32
+    bufferSizeCount: RtAtomicU64
+    bufferSize: RtAtomicU32
+    sampleRateCount: RtAtomicU64
+    sampleRate: RtAtomicU32
+    latencyCount: RtAtomicU64
+    processCycles: RtAtomicU64
+    processFrames: RtAtomicU64
+    processErrors: RtAtomicU64
+    lateProcessCalls: RtAtomicU64
 
   JackCallbackContext* = object
     functions: JackCallbackFunctions
     portMap: RtPortMap
     engine: RtEngine
     role: AudioRoleGuard
-    processEnabled: Atomic[uint32]
-    callbacksInFlight: Atomic[uint32]
-    processInFlight: Atomic[uint32]
-    latencyFrames: Atomic[uint32]
+    processEnabled: RtAtomicU32
+    callbacksInFlight: RtAtomicU32
+    processInFlight: RtAtomicU32
+    latencyFrames: RtAtomicU32
     notifications: JackNotifications
 
   JackNotificationStateSnapshot* = object
@@ -79,25 +78,25 @@ proc initJackCallbackContext*(context: ptr JackCallbackContext;
     portSetLatencyRange: functions.portSetLatencyRange,
   )
   context.role.initAudioRoleGuard()
-  context.processEnabled.store(0'u32, moRelaxed)
-  context.callbacksInFlight.store(0'u32, moRelaxed)
-  context.processInFlight.store(0'u32, moRelaxed)
-  context.latencyFrames.store(0'u32, moRelaxed)
-  context.notifications.shutdownCount.store(0'u64, moRelaxed)
-  context.notifications.shutdownRecordState.store(0'u32, moRelaxed)
-  context.notifications.shutdownStatus.store(0'i32, moRelaxed)
-  context.notifications.xrunCount.store(0'u64, moRelaxed)
-  context.notifications.freewheelCount.store(0'u64, moRelaxed)
-  context.notifications.freewheelState.store(0'i32, moRelaxed)
-  context.notifications.bufferSizeCount.store(0'u64, moRelaxed)
-  context.notifications.bufferSize.store(0'u32, moRelaxed)
-  context.notifications.sampleRateCount.store(0'u64, moRelaxed)
-  context.notifications.sampleRate.store(0'u32, moRelaxed)
-  context.notifications.latencyCount.store(0'u64, moRelaxed)
-  context.notifications.processCycles.store(0'u64, moRelaxed)
-  context.notifications.processFrames.store(0'u64, moRelaxed)
-  context.notifications.processErrors.store(0'u64, moRelaxed)
-  context.notifications.lateProcessCalls.store(0'u64, moRelaxed)
+  context.processEnabled.storeRelaxed(0'u32)
+  context.callbacksInFlight.storeRelaxed(0'u32)
+  context.processInFlight.storeRelaxed(0'u32)
+  context.latencyFrames.storeRelaxed(0'u32)
+  context.notifications.shutdownCount.storeRelaxed(0'u64)
+  context.notifications.shutdownRecordState.storeRelaxed(0'u32)
+  context.notifications.shutdownStatus.storeRelaxed(0'i32)
+  context.notifications.xrunCount.storeRelaxed(0'u64)
+  context.notifications.freewheelCount.storeRelaxed(0'u64)
+  context.notifications.freewheelState.storeRelaxed(0'i32)
+  context.notifications.bufferSizeCount.storeRelaxed(0'u64)
+  context.notifications.bufferSize.storeRelaxed(0'u32)
+  context.notifications.sampleRateCount.storeRelaxed(0'u64)
+  context.notifications.sampleRate.storeRelaxed(0'u32)
+  context.notifications.latencyCount.storeRelaxed(0'u64)
+  context.notifications.processCycles.storeRelaxed(0'u64)
+  context.notifications.processFrames.storeRelaxed(0'u64)
+  context.notifications.processErrors.storeRelaxed(0'u64)
+  context.notifications.lateProcessCalls.storeRelaxed(0'u64)
   true
 
 proc callbackArgument*(context: ptr JackCallbackContext): pointer {.inline.} =
@@ -105,26 +104,26 @@ proc callbackArgument*(context: ptr JackCallbackContext): pointer {.inline.} =
 
 proc configureCallbacks*(context: ptr JackCallbackContext; map: RtPortMap;
                          mode: FakeProcessMode): bool =
-  if context == nil or context.processEnabled.load(moAcquire) != 0'u32 or
-      context.processInFlight.load(moAcquire) != 0'u32:
+  if context == nil or context.processEnabled.loadAcquire() != 0'u32 or
+      context.processInFlight.loadAcquire() != 0'u32:
     return false
   context.portMap = map
   context.engine.initRtEngine(
     mode, map.audioInputCount, map.audioOutputCount)
 
 proc enableProcessCallbacks*(context: ptr JackCallbackContext) {.inline.} =
-  context.processEnabled.store(1'u32, moRelease)
+  context.processEnabled.storeRelease(1'u32)
 
 proc disableProcessCallbacks*(context: ptr JackCallbackContext) {.inline.} =
-  context.processEnabled.store(0'u32, moRelease)
+  context.processEnabled.storeRelease(0'u32)
 
 proc processCallbacksQuiescent*(context: ptr JackCallbackContext): bool {.inline.} =
-  context == nil or context.processInFlight.load(moAcquire) == 0'u32
+  context == nil or context.processInFlight.loadAcquire() == 0'u32
 
 proc callbackContextReadyForRelease*(context: ptr JackCallbackContext): bool =
   context == nil or (
-    context.callbacksInFlight.load(moAcquire) == 0'u32 and
-    context.processInFlight.load(moAcquire) == 0'u32 and
+    context.callbacksInFlight.loadAcquire() == 0'u32 and
+    context.processInFlight.loadAcquire() == 0'u32 and
     not context.role.isAudioRoleActive
   )
 
@@ -133,9 +132,9 @@ proc snapshotNotificationState*(
   if context == nil:
     return
   let notifications = addr context.notifications
-  result.shutdownCount = notifications.shutdownCount.load(moAcquire)
-  result.shutdownStatus = notifications.shutdownStatus.load(moAcquire)
-  if notifications.shutdownRecordState.load(moAcquire) == 2'u32:
+  result.shutdownCount = notifications.shutdownCount.loadAcquire()
+  result.shutdownStatus = notifications.shutdownStatus.loadAcquire()
+  if notifications.shutdownRecordState.loadAcquire() == 2'u32:
     result.shutdownReasonLength = notifications.shutdownReasonLength
     if result.shutdownReasonLength > uint32(ShutdownReasonBytes):
       result.shutdownReasonLength = uint32(ShutdownReasonBytes)
@@ -144,42 +143,42 @@ proc snapshotNotificationState*(
       result.shutdownReason[int(index)] =
         notifications.shutdownReason[int(index)]
       index += 1'u32
-  result.xrunCount = notifications.xrunCount.load(moAcquire)
-  result.freewheelCount = notifications.freewheelCount.load(moAcquire)
-  result.freewheel = notifications.freewheelState.load(moAcquire) != 0
-  result.bufferSizeCount = notifications.bufferSizeCount.load(moAcquire)
-  result.bufferSize = notifications.bufferSize.load(moAcquire)
-  result.sampleRateCount = notifications.sampleRateCount.load(moAcquire)
-  result.sampleRate = notifications.sampleRate.load(moAcquire)
-  result.latencyCount = notifications.latencyCount.load(moAcquire)
-  result.processCycles = notifications.processCycles.load(moAcquire)
-  result.processFrames = notifications.processFrames.load(moAcquire)
-  result.processErrors = notifications.processErrors.load(moAcquire)
-  result.lateProcessCalls = notifications.lateProcessCalls.load(moAcquire)
+  result.xrunCount = notifications.xrunCount.loadAcquire()
+  result.freewheelCount = notifications.freewheelCount.loadAcquire()
+  result.freewheel = notifications.freewheelState.loadAcquire() != 0
+  result.bufferSizeCount = notifications.bufferSizeCount.loadAcquire()
+  result.bufferSize = notifications.bufferSize.loadAcquire()
+  result.sampleRateCount = notifications.sampleRateCount.loadAcquire()
+  result.sampleRate = notifications.sampleRate.loadAcquire()
+  result.latencyCount = notifications.latencyCount.loadAcquire()
+  result.processCycles = notifications.processCycles.loadAcquire()
+  result.processFrames = notifications.processFrames.loadAcquire()
+  result.processErrors = notifications.processErrors.loadAcquire()
+  result.lateProcessCalls = notifications.lateProcessCalls.loadAcquire()
 
 proc enterCallback(context: ptr JackCallbackContext) {.inline, gcsafe, raises: [].} =
-  discard context.callbacksInFlight.fetchAdd(1'u32, moAcquire)
+  discard context.callbacksInFlight.fetchAddAcquire(1'u32)
 
 proc leaveCallback(context: ptr JackCallbackContext) {.inline, gcsafe, raises: [].} =
-  discard context.callbacksInFlight.fetchSub(1'u32, moRelease)
+  discard context.callbacksInFlight.fetchSubRelease(1'u32)
 
 proc recordShutdown(context: ptr JackCallbackContext; status: int32;
                     reason: cstring) {.gcsafe, raises: [].} =
-  discard context.notifications.shutdownCount.fetchAdd(1'u64, moRelaxed)
+  discard context.notifications.shutdownCount.fetchAddRelaxed(1'u64)
   var expected = 0'u32
-  if not context.notifications.shutdownRecordState.compareExchange(
-      expected, 1'u32, moAcquire, moRelaxed):
+  if not context.notifications.shutdownRecordState.compareExchangeAcquire(
+      expected, 1'u32):
     return
 
-  context.notifications.shutdownStatus.store(status, moRelaxed)
+  context.notifications.shutdownStatus.storeRelaxed(status)
   var length = 0'u32
-  if reason != nil:
+  if cast[pointer](reason) != nil:
     let bytes = cast[ptr UncheckedArray[char]](reason)
     while length < uint32(ShutdownReasonBytes) and bytes[int(length)] != '\0':
       context.notifications.shutdownReason[int(length)] = bytes[int(length)]
       length += 1'u32
   context.notifications.shutdownReasonLength = length
-  context.notifications.shutdownRecordState.store(2'u32, moRelease)
+  context.notifications.shutdownRecordState.storeRelease(2'u32)
 
 proc jackProcessCallback*(nframes: JackNFrames; argument: pointer): cint {.
     exportc: "pluginhost_jack_process_callback", cdecl, gcsafe, raises: [].} =
@@ -187,11 +186,11 @@ proc jackProcessCallback*(nframes: JackNFrames; argument: pointer): cint {.
     return 0
   let context = cast[ptr JackCallbackContext](argument)
   context.enterCallback()
-  discard context.processInFlight.fetchAdd(1'u32, moAcquire)
+  discard context.processInFlight.fetchAddAcquire(1'u32)
 
-  if context.processEnabled.load(moAcquire) == 0'u32:
-    discard context.notifications.lateProcessCalls.fetchAdd(1'u64, moRelaxed)
-    discard context.processInFlight.fetchSub(1'u32, moRelease)
+  if context.processEnabled.loadAcquire() == 0'u32:
+    discard context.notifications.lateProcessCalls.fetchAddRelaxed(1'u64)
+    discard context.processInFlight.fetchSubRelease(1'u32)
     context.leaveCallback()
     return 0
 
@@ -228,10 +227,10 @@ proc jackProcessCallback*(nframes: JackNFrames; argument: pointer): cint {.
 
   if status != RtProcessOk:
     discard zeroRtOutputs(addr context.engine, nframes)
-    discard context.notifications.processErrors.fetchAdd(1'u64, moRelaxed)
-  discard context.notifications.processCycles.fetchAdd(1'u64, moRelaxed)
-  discard context.notifications.processFrames.fetchAdd(uint64(nframes), moRelaxed)
-  discard context.processInFlight.fetchSub(1'u32, moRelease)
+    discard context.notifications.processErrors.fetchAddRelaxed(1'u64)
+  discard context.notifications.processCycles.fetchAddRelaxed(1'u64)
+  discard context.notifications.processFrames.fetchAddRelaxed(uint64(nframes))
+  discard context.processInFlight.fetchSubRelease(1'u32)
   context.leaveCallback()
   0
 
@@ -262,8 +261,8 @@ proc jackBufferSizeCallback*(nframes: JackNFrames; argument: pointer): cint {.
     return 0
   let context = cast[ptr JackCallbackContext](argument)
   context.enterCallback()
-  context.notifications.bufferSize.store(nframes, moRelaxed)
-  discard context.notifications.bufferSizeCount.fetchAdd(1'u64, moRelease)
+  context.notifications.bufferSize.storeRelaxed(nframes)
+  discard context.notifications.bufferSizeCount.fetchAddRelease(1'u64)
   context.leaveCallback()
   0
 
@@ -274,8 +273,8 @@ proc jackSampleRateCallback*(nframes: JackNFrames; argument: pointer): cint {.
     return 0
   let context = cast[ptr JackCallbackContext](argument)
   context.enterCallback()
-  context.notifications.sampleRate.store(nframes, moRelaxed)
-  discard context.notifications.sampleRateCount.fetchAdd(1'u64, moRelease)
+  context.notifications.sampleRate.storeRelaxed(nframes)
+  discard context.notifications.sampleRateCount.fetchAddRelease(1'u64)
   context.leaveCallback()
   0
 
@@ -285,7 +284,7 @@ proc jackXrunCallback*(argument: pointer): cint {.
     return 0
   let context = cast[ptr JackCallbackContext](argument)
   context.enterCallback()
-  discard context.notifications.xrunCount.fetchAdd(1'u64, moRelaxed)
+  discard context.notifications.xrunCount.fetchAddRelaxed(1'u64)
   context.leaveCallback()
   0
 
@@ -296,8 +295,8 @@ proc jackFreewheelCallback*(starting: cint; argument: pointer) {.
     return
   let context = cast[ptr JackCallbackContext](argument)
   context.enterCallback()
-  context.notifications.freewheelState.store(int32(starting), moRelaxed)
-  discard context.notifications.freewheelCount.fetchAdd(1'u64, moRelease)
+  context.notifications.freewheelState.storeRelaxed(int32(starting))
+  discard context.notifications.freewheelCount.fetchAddRelease(1'u64)
   context.leaveCallback()
 
 proc saturatingAdd(value, additional: uint32): uint32 {.inline, raises: [].} =
@@ -312,7 +311,7 @@ proc jackLatencyCallback*(mode: JackLatencyCallbackMode; argument: pointer) {.
     return
   let context = cast[ptr JackCallbackContext](argument)
   context.enterCallback()
-  discard context.notifications.latencyCount.fetchAdd(1'u64, moRelaxed)
+  discard context.notifications.latencyCount.fetchAddRelaxed(1'u64)
 
   if context.functions.portGetLatencyRange == nil or
       context.functions.portSetLatencyRange == nil:
@@ -353,7 +352,7 @@ proc jackLatencyCallback*(mode: JackLatencyCallbackMode; argument: pointer) {.
       combined.max = current.max
     sourceIndex += 1'u32
 
-  let additional = context.latencyFrames.load(moRelaxed)
+  let additional = context.latencyFrames.loadRelaxed()
   combined.min = saturatingAdd(combined.min, additional)
   combined.max = saturatingAdd(combined.max, additional)
   var targetIndex = 0'u32

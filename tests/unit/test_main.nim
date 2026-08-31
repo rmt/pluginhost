@@ -30,7 +30,7 @@ suite "main process":
     let process = runHost(@["--version"])
 
     check process.exitCode == 0
-    check process.output.startsWith("pluginhost 0.0.5-dev\n")
+    check process.output.startsWith("pluginhost 0.0.6-dev\n")
     check process.errorOutput.len == 0
 
   test "invalid invocation uses stderr and the usage exit status":

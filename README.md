@@ -2,12 +2,14 @@
 
 `pluginhost` is an in-progress standalone Linux JACK host for native CLAP plugins, implemented in Nim. Its intended role is similar to `carla-single`, with one plugin instance and one JACK client per process.
 
-The current development version is **0.0.5-dev**. The implementation includes
+The current development version is **0.0.6-dev**. The implementation includes
 checked CLAP ownership/catalog/lifecycle, human/JSON `list` and recursive `scan`,
-a stable CLAP host bridge, bounded immutable audio/note port planning, and real-time
-render negotiation. Increment 4B adds an internal checked JACK
-backend, transactional port realization, stable callbacks, and an allocation-free fake
-process endpoint. It does not activate or process CLAP, and public `run` remains disabled.
+a stable CLAP host bridge, bounded immutable audio/note port planning, real-time
+render negotiation, and an internal checked JACK backend with transactional ports and
+stable callbacks. Increment 4C proves the fake process endpoint
+against an isolated live PipeWire-JACK server and adds complete generated-call-path and
+live C allocation/lock/I/O evidence. It does not activate or process CLAP, and public
+`run` remains disabled.
 
 ## Build
 
@@ -16,9 +18,10 @@ Requirements:
 - Nim 2.2 or later
 - Nimble
 - `argparse` 4.0.2 (installed by Nimble)
-- A GNU-compatible C11 compiler (GCC or Clang), `pkg-config`, and Binutils `readelf` for verification
+- A GNU-compatible C11 compiler (GCC or Clang), GNU-compatible linker `--wrap`, `pkg-config`, and Binutils `readelf` for verification
 - JACK development headers and `libjack.so.0` for ABI tests
-- Python 3 for the generated real-time callback audit
+- Python 3 for generated-code auditing and the disposable integration harness
+- PipeWire, PipeWire's JACK implementation, `pw-jack`, `pw-cli`, and `pw-dump` for `testIntegration` and the strict `all` gate
 
 ```sh
 nimble check
@@ -32,6 +35,7 @@ nimble test
 nimble testAbi
 nimble testFixtures
 nimble testRt
+nimble testIntegration
 nimble all
 ```
 
@@ -62,16 +66,25 @@ port inspection, render negotiation, process-level `list`, and recursive `scan` 
 All builds share `--mm:arc --threads:on --panics:on -d:noSignalHandler` through
 `config.nims`. Foreign callbacks additionally disable checks and trace setup locally
 after explicit input validation; `raises: []` alone is not treated as a Defect barrier.
+Callback atomics use a narrow audited, always-lock-free C11 bridge because Nim 2.2.10's
+standard atomic helpers install trace frames under the product profile.
 
-`nimble testRt` checks Nim allocator counters over repeated and first-foreign-thread
-calls, including the fake JACK process path, and audits generated C callback bodies for
-prohibited operations. Increment 4C still owns complete module/call-path auditing, a
-negative canary, and C allocation/lock/I/O instrumentation around a live JACK callback.
+`nimble testRt` retains repeated/first-foreign-thread Nim allocation checks, audits
+complete JACK/RT generated modules and the process-reachable CLAP host callback helper
+closure under product flags, and requires rejection of a prohibited allocation canary.
+
+`nimble testIntegration` creates a mode-0700 private runtime, launches a uniquely named
+PipeWire core with its Dummy-Driver at 48 kHz/64 frames, validates live audio/MIDI ports
+and deterministic samples through a separate JACK peer, proves cycle-based quiescence
+and client-close port removal, runs 32 repeated active-close lifecycles, and requires
+zero instrumented C allocation, deallocation, lock, print, or prohibited-I/O operations
+in host callback scope. Missing
+prerequisites fail rather than skip. `nimble all` includes this live task.
 
 The checked Linux loader uses `dlopen`/`dlsym`/`dlclose` without another Nim package.
 Both its generic owner and `JackApi` are move-only and require explicit, checked,
 idempotent close. Importing JACK declarations does not load `libjack.so.0`; information
-commands remain independent of JACK, and a future backend will load it explicitly.
+commands remain independent of JACK, and the internal backend loads it explicitly.
 
 ## Security
 

@@ -1,6 +1,6 @@
-import std/concurrency/atomics
 import std/[posix, typetraits]
 
+import ../rt/atomic_pod
 import ../version
 import ./ffi
 
@@ -23,18 +23,18 @@ type
 
 
   HostLogCell = object
-    sequence: Atomic[uint64]
+    sequence: RtAtomicU64
     record: ClapHostLogRecord
 
   HostLogQueue = object
-    enqueuePosition: Atomic[uint64]
-    dequeuePosition: Atomic[uint64]
+    enqueuePosition: RtAtomicU64
+    dequeuePosition: RtAtomicU64
     cells: array[HostLogQueueCapacity, HostLogCell]
 
   HostCallbackData = object
-    requests: ptr Atomic[uint32]
+    requests: ptr RtAtomicU32
     logs: ptr HostLogQueue
-    droppedLogs: ptr Atomic[uint64]
+    droppedLogs: ptr RtAtomicU64
     logExtension: ptr ClapHostLog
     threadCheckExtension: ptr ClapHostThreadCheck
     mainThread: Pthread
@@ -44,8 +44,8 @@ type
     logExtension: ClapHostLog
     threadCheckExtension: ClapHostThreadCheck
     callbackData: HostCallbackData
-    requests: Atomic[uint32]
-    droppedLogs: Atomic[uint64]
+    requests: RtAtomicU32
+    droppedLogs: RtAtomicU64
     logs: HostLogQueue
     name: string
     vendor: string
@@ -57,14 +57,14 @@ static:
 
 {.push checks: off, stackTrace: off, lineTrace: off.}
 proc initLogQueue(queue: var HostLogQueue) {.gcsafe, raises: [].} =
-  queue.enqueuePosition.store(0'u64, moRelaxed)
-  queue.dequeuePosition.store(0'u64, moRelaxed)
+  queue.enqueuePosition.storeRelaxed(0'u64)
+  queue.dequeuePosition.storeRelaxed(0'u64)
   for index in 0 ..< HostLogQueueCapacity:
-    queue.cells[index].sequence.store(uint64(index), moRelaxed)
+    queue.cells[index].sequence.storeRelaxed(uint64(index))
 
 proc cstringEquals(left, right: cstring): bool {.
     exportc: "pluginhost_clap_host_cstring_equals", inline, gcsafe, raises: [].} =
-  if left == nil or right == nil:
+  if cast[pointer](left) == nil or cast[pointer](right) == nil:
     return false
   let leftBytes = cast[ptr UncheckedArray[char]](left)
   let rightBytes = cast[ptr UncheckedArray[char]](right)
@@ -82,25 +82,25 @@ proc tryPush(queue: ptr HostLogQueue;
   if queue == nil or record == nil:
     return false
 
-  var position = queue.enqueuePosition.load(moRelaxed)
+  var position = queue.enqueuePosition.loadRelaxed()
   while true:
     let cell = addr queue.cells[int(position mod uint64(HostLogQueueCapacity))]
-    let sequence = cell.sequence.load(moAcquire)
+    let sequence = cell.sequence.loadAcquire()
     let difference = cast[int64](sequence - position)
     if difference == 0:
       var expected = position
-      if queue.enqueuePosition.compareExchange(
-          expected, position + 1'u64, moRelaxed, moRelaxed):
+      if queue.enqueuePosition.compareExchangeRelaxed(
+          expected, position + 1'u64):
         break
       position = expected
     elif difference < 0:
       return false
     else:
-      position = queue.enqueuePosition.load(moRelaxed)
+      position = queue.enqueuePosition.loadRelaxed()
 
   let cell = addr queue.cells[int(position mod uint64(HostLogQueueCapacity))]
   cell.record = record[]
-  cell.sequence.store(position + 1'u64, moRelease)
+  cell.sequence.storeRelease(position + 1'u64)
   true
 
 proc tryPop(queue: ptr HostLogQueue;
@@ -108,15 +108,15 @@ proc tryPop(queue: ptr HostLogQueue;
   if queue == nil:
     return false
 
-  let position = queue.dequeuePosition.load(moRelaxed)
+  let position = queue.dequeuePosition.loadRelaxed()
   let cell = addr queue.cells[int(position mod uint64(HostLogQueueCapacity))]
-  let sequence = cell.sequence.load(moAcquire)
+  let sequence = cell.sequence.loadAcquire()
   if cast[int64](sequence - (position + 1'u64)) != 0:
     return false
 
   record = cell.record
-  cell.sequence.store(position + uint64(HostLogQueueCapacity), moRelease)
-  queue.dequeuePosition.store(position + 1'u64, moRelaxed)
+  cell.sequence.storeRelease(position + uint64(HostLogQueueCapacity))
+  queue.dequeuePosition.storeRelaxed(position + 1'u64)
   true
 
 proc callbackData(host: ptr ClapHost): ptr HostCallbackData {.
@@ -140,7 +140,7 @@ proc recordRequest(host: ptr ClapHost; request: uint32) {.
     exportc: "pluginhost_clap_host_record_request", gcsafe, raises: [].} =
   let data = callbackData(host)
   if data != nil and data.requests != nil:
-    discard data.requests[].fetchOr(request, moRelaxed)
+    discard data.requests[].fetchOrRelaxed(request)
 
 proc hostRequestRestart(host: ptr ClapHost) {.
     exportc: "pluginhost_clap_host_request_restart", cdecl, gcsafe, raises: [].} =
@@ -161,7 +161,7 @@ proc hostLog(host: ptr ClapHost; severity: ClapLogSeverity; message: cstring) {.
     return
 
   var record = ClapHostLogRecord(severity: severity)
-  if message != nil:
+  if cast[pointer](message) != nil:
     let bytes = cast[ptr UncheckedArray[char]](message)
     var length = 0
     while length < HostLogMessageBytes and bytes[length] != '\0':
@@ -173,7 +173,7 @@ proc hostLog(host: ptr ClapHost; severity: ClapLogSeverity; message: cstring) {.
       copyMem(addr record.message[0], unsafeAddr bytes[0], length)
 
   if not tryPush(data.logs, addr record):
-    discard data.droppedLogs[].fetchAdd(1'u64, moRelaxed)
+    discard data.droppedLogs[].fetchAddRelaxed(1'u64)
 
 proc hostIsMainThread(host: ptr ClapHost): bool {.
     exportc: "pluginhost_clap_host_is_main_thread", cdecl, gcsafe, raises: [].} =
@@ -194,8 +194,8 @@ proc newClapHostBridge*(): ClapHostBridge =
   result.vendor = ProductName
   result.url = ""
   result.version = Version
-  result.requests.store(0'u32, moRelaxed)
-  result.droppedLogs.store(0'u64, moRelaxed)
+  result.requests.storeRelaxed(0'u32)
+  result.droppedLogs.storeRelaxed(0'u64)
   result.logs.initLogQueue()
   result.callbackData.requests = addr result.requests
   result.callbackData.logs = addr result.logs
@@ -233,7 +233,7 @@ proc isMainThread*(bridge: ClapHostBridge): bool {.inline, gcsafe, raises: [].} 
 proc takeRequests*(bridge: ClapHostBridge): uint32 {.gcsafe, raises: [].} =
   if bridge == nil:
     return 0'u32
-  bridge.requests.exchange(0'u32, moAcquire)
+  bridge.requests.exchangeAcquire(0'u32)
 
 proc tryPopLog*(bridge: ClapHostBridge;
                 record: var ClapHostLogRecord): bool {.gcsafe, raises: [].} =
@@ -244,7 +244,7 @@ proc tryPopLog*(bridge: ClapHostBridge;
 proc takeDroppedLogs*(bridge: ClapHostBridge): uint64 {.gcsafe, raises: [].} =
   if bridge == nil:
     return 0'u64
-  bridge.droppedLogs.exchange(0'u64, moAcquire)
+  bridge.droppedLogs.exchangeAcquire(0'u64)
 
 proc logMessage*(record: ClapHostLogRecord): string =
   var length = int(record.length)

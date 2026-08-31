@@ -3,12 +3,12 @@
 **Review date:** 2026-08-28
 **Reviewed baseline:** `main` at `642b629`, version `0.0.5-dev`
 **Disposition approval:** 2026-08-28 Increment 4 pre-code review
-**Implementation approvals:** Increment 4A and Increment 4B reviewed and approved
+**Implementation approvals:** Increment 4A, Increment 4B, and Increment 4C reviewed and approved
 
-Increment 3B remains approved. The owner approved the dispositions below, then reviewed
-and approved Increment 4A and Increment 4B. This register distinguishes accepted,
-implemented, and deliberately deferred work; deferred findings remain review inputs for
-their named increments rather than silently becoming product behavior.
+Increment 3B remains approved. The owner approved the dispositions below and reviewed
+and approved Increment 4A, Increment 4B, and Increment 4C. This register distinguishes
+accepted, implemented, and deliberately deferred work; deferred findings remain review
+inputs for their named increments rather than silently becoming product behavior.
 
 ## Approved dispositions
 
@@ -19,7 +19,7 @@ their named increments rather than silently becoming product behavior.
 | 3 | Replace eager JACK imports with a checked move-only DSO/procedure table. | Implemented and approved in 4A |
 | 4 | Disable Nim signal handlers now; block/consume signals explicitly before public JACK-backed `run`. | Build part approved in 4A; signal service in 7 |
 | 5 | Observe freewheel transitions but remain in `CLAP_RENDER_REALTIME`; offline rendering remains unsupported. | Notification policy implemented and approved in 4B; CLAP mode remains in 5 |
-| 6 | Apply bounded allocation-free rules to every JACK-invoked callback; latency uses only mandated JACK APIs. | Implemented and approved in 4B; strengthened evidence remains in 4C |
+| 6 | Apply bounded allocation-free rules to every JACK-invoked callback; latency uses only mandated JACK APIs. | Behavior approved in 4B; strengthened live/static evidence implemented and approved in 4C |
 | 7 | Retain strict validator-compatible port checks unless independent plugins prove a compatibility problem. | Accepted current behavior |
 | 8 | Retain `transport = nil` and record its compatibility risk. | Risk recorded in 4A; runtime behavior in 5 |
 | 9 | Treat `TAIL` and `CONTINUE_IF_NOT_QUIET` conservatively as continued processing. | Increment 5 |
@@ -29,10 +29,10 @@ their named increments rather than silently becoming product behavior.
 | 13 | Build/test `AudioRoleGuard` in 4B and connect `clap.thread-check` atomically with CLAP processing in 5. | Guard implemented and approved in 4B; CLAP connection remains in 5 |
 | 14 | Keep current scan policy; document partial-failure status and `CLAP_PATH` relative/tilde behavior. | Implemented and approved in 4A |
 | 15 | Add independent-plugin smoke evidence with the audio vertical slice. | Increment 5 |
-| 16 | Audit complete RT-only generated modules/call paths and require a failing negative canary. | Increment 4C |
-| 17 | Retain Nim counters and add C allocation/lock/I/O instrumentation around live callbacks. | Increment 4C |
+| 16 | Audit complete RT-only generated modules/call paths and require a failing negative canary. | Implemented and approved in 4C |
+| 17 | Retain Nim counters and add C allocation/lock/I/O instrumentation around live callbacks. | Implemented and approved in 4C, including deallocation and print categories |
 | 18 | Keep fixture refactoring separate; add double-load coverage with hardening. | Increment 11/test cleanup |
-| 19 | Add CI/release matrices later; use the available isolated PipeWire Dummy-Driver for Increment 4 integration. | Increment 4C and 11 |
+| 19 | Add CI/release matrices later; use the available isolated PipeWire Dummy-Driver for Increment 4 integration. | Isolated integration implemented and approved in 4C; matrices remain in 11 |
 | 20 | Close stale plan-state drift; retain JACK naming-boundary checks during realization. | Naming checks implemented and approved in 4B |
 
 The detailed text below preserves the original evidence and suggested resolutions for

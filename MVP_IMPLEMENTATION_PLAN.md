@@ -3,7 +3,7 @@
 **Plan version:** 1.0.0  
 **Target product release:** `pluginhost` 0.1.0  
 **Initial development version:** 0.0.1-dev  
-**Status:** Approved through Increment 4B; Increment 4C not started
+**Status:** Approved through Increment 4; Increment 5 not started
 **Companion documents:** [`REQUIREMENTS.md`](REQUIREMENTS.md), [`DESIGN.md`](DESIGN.md)
 
 ## 1. Purpose
@@ -346,7 +346,7 @@ Review lifecycle state machine, stable callback storage, raw-pointer lifetimes, 
 ## 11. Increment 4 — JACK backend and real-time harness
 
 **Planned version:** 0.0.5-dev
-**Review split:** 4A and 4B approved; 4C requires its own review gate
+**Review split:** 4A, 4B, and 4C approved
 
 ### Goal
 
@@ -378,10 +378,15 @@ Implement and test JACK client/port/callback mechanics independently of CLAP DSP
 
 ### Increment 4C — live integration and strengthened RT evidence
 
-- Add a disposable isolated PipeWire-JACK Dummy-Driver harness.
-- Verify live ports, process cycles, deterministic samples, deactivation quiescence, and repeated stress.
-- Audit complete RT-only generated modules under product flags and require a deliberately failing negative canary.
-- Add C allocation/lock/I/O instrumentation around live callbacks in addition to Nim allocator counters.
+**Status:** Approved in review unit 4C.
+
+- Add a disposable isolated PipeWire-JACK Dummy-Driver harness with strict prerequisite failure, private runtime/server naming, readiness checks, and deterministic teardown.
+- Verify live audio/MIDI ports and exact deterministic samples through an independent one-client C JACK peer.
+- Prove peer-witnessed deactivation/close quiescence, client-close port removal, exact-name reuse, stable file descriptors, and 32 repeated active-close lifecycles.
+- Replace traced Nim atomic helpers with an ABI-tested, always-lock-free C11 callback bridge recorded in ADR 0005.
+- Audit complete RT-only generated modules and the CLAP callback helper closure under exact product flags; require a deliberately failing allocation canary.
+- Instrument C allocation/deallocation, locks, print, and prohibited I/O around all live host JACK callbacks after a required detection self-test.
+- Keep fake-backend failure injection in the fast unit task and add the strict live task to `nimble all`.
 
 ### Human review gates
 
@@ -723,7 +728,7 @@ This table is updated only when work is reviewed.
 | 1 — FFI/ABI | Approved | Review unit 1B | Includes verified ownership, callbacks, and RT spike |
 | 2 — CLAP catalog | Approved | Review unit 2B | Loader, catalog, `list`, discovery, and `scan` accepted |
 | 3 — CLAP lifecycle | Approved | Review unit 3B | Host bridge, instance lifecycle, immutable port plans, and render negotiation accepted |
-| 4 — JACK/RT harness | In progress | Review units 4A and 4B | Build/loading and fake-backed client/callback harness approved; 4C remains gated |
+| 4 — JACK/RT harness | Approved | Review units 4A, 4B, and 4C | Checked loading, fake-backed mechanics, live PipeWire-JACK integration, and strengthened RT evidence accepted |
 | 5 — Audio vertical slice | Not started | — | — |
 | 6 — MIDI/events | Not started | — | — |
 | 7 — Reactor/signals | Not started | — | — |
@@ -775,4 +780,4 @@ Each candidate requires requirements/design updates and, where architectural, an
 
 ## 23. First action after each review gate
 
-After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increments 4A and 4B are approved. The next session must present the Increment 4C pre-code package before generating live integration harnesses, module-level audits, negative canaries, or C callback instrumentation; do not begin 4C implementation without explicit approval.
+After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 4 is approved and Increment 5 has not started. The next fresh session must present the Increment 5 pre-code package before changing CLAP activation, process, grouped audio-buffer, or internal composition behavior; do not begin implementation without explicit approval.

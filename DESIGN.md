@@ -194,6 +194,13 @@ deactivation is the process-callback quiescence boundary; the immutable map rema
 alive afterward. `jack_client_close` is the all-callback quiescence boundary, after
 which callback storage may be freed and the JACK DSO may be unloaded.
 
+Increment 4C proves this boundary against a private PipeWire-JACK core at a fixed
+48 kHz/64-frame quantum. A separate process owns the observing JACK client, validates
+realized audio/MIDI ports and deterministic samples, witnesses continued server cycles
+after backend deactivation and close, and verifies that client-close removes every host
+port. The integration remains test-only and does
+not connect the public session stub.
+
 ### 5.5 `RtEngine`
 
 `RtEngine` is a fixed-layout, explicitly owned structure reachable from the JACK callback through an opaque pointer. It contains only real-time-safe data:
@@ -320,6 +327,12 @@ Control-plane functions return a typed result rather than using exceptions as no
 FFI callbacks cannot return `HostError`. They record a compact `RtErrorCode`, counters, and bounded context values. The main thread converts these to diagnostics.
 
 All exported C callbacks have `raises: []`, but that effect does not track Defects. The shared build uses panic mode as the final no-unwind barrier; callback modules additionally disable checks/trace setup after validating inputs explicitly. No exception or Defect may unwind across an ABI boundary.
+
+Nim 2.2.10's standard atomic wrappers install trace frames in transitive generated
+helpers under that profile. Callback communication therefore uses the fixed-width C11
+bridge in `rt/atomic_pod.nim` and `c/rt_atomic.h`. Its operation names fix the intended
+memory order, C and Nim layout is ABI-tested, and compilation rejects targets where the
+required 32/64-bit operations are not always lock-free. ADR 0005 records this boundary.
 
 ## 7. Dependency rules
 
@@ -675,6 +688,7 @@ src/
       callbacks.nim
       latency.nim
     rt/
+      atomic_pod.nim
       engine.nim
       audio_map.nim
       event_arena.nim
@@ -728,6 +742,19 @@ condition-variable-gated in-flight callback. The condition variable belongs only
 fake server: product callback code remains lock-free, and the gate deterministically
 proves that backend deactivation returns after the process callback completes.
 
+The 4C live harness starts `pipewire` without a session manager in a private mode-0700
+runtime and with a random `PIPEWIRE_CORE`/`PIPEWIRE_REMOTE`. It disables portal, JACK
+DBus, and other ambient integration, fixes the clock, poisons `JACK_DEFAULT_SERVER`,
+requires the private Dummy-Driver through `pw-dump`, and tears down process groups and
+socket files deterministically. Missing prerequisites fail the task rather than skip.
+
+A separately linked C peer owns one JACK client, inspects live port types/directions,
+connects only test audio outputs, validates deterministic buffers, and acknowledges
+server-cycle progress over a control pipe. GNU linker wrapping scopes C allocation,
+deallocation, lock, print, and direct-I/O counters around all host JACK callbacks while
+excluding PipeWire/libjack internals and the peer process. A self-test must first prove
+every counter can detect its prohibited category.
+
 ### 16.2 Contract tests
 
 Each concrete adapter must pass shared behavioral contracts where applicable:
@@ -743,9 +770,9 @@ Each concrete adapter must pass shared behavioral contracts where applicable:
 1. Pure unit and property tests with no external services.
 2. C/Nim ABI tests against pinned headers.
 3. Synthetic CLAP plugin tests in-process.
-4. Disposable JACK dummy-server tests.
+4. Disposable isolated PipeWire-JACK Dummy-Driver tests.
 5. Xvfb/X11 GUI tests.
-6. PipeWire-JACK and real third-party plugin smoke tests outside the fast CI suite.
+6. Real third-party plugin smoke tests outside the fast suite.
 7. Sanitizer and real-time instrumentation runs.
 
 Fuzz/property targets should include malformed MIDI, event sizes/timestamps, descriptor text, path traversal/symlink cycles, and state stream short I/O.
@@ -780,7 +807,7 @@ Quality gates:
 - No cyclic imports.
 - ABI tests pass on every supported architecture.
 - Unit/integration tests pass.
-- Real-time instrumentation detects no host allocation, lock, or direct I/O in the process path.
+- Complete generated callback call-path auditing and live C instrumentation detect no host allocation, deallocation, lock, print, or direct I/O in the process path.
 - All externally visible behavior remains traceable to `REQUIREMENTS.md`.
 
 ## 18. Extension strategy
@@ -848,7 +875,7 @@ Initial ADR candidates:
 4. JACK-driven zero-copy float32 processing.
 5. Main-thread Linux reactor for GUI/timer/FD integration.
 6. X11/XEmbed as the initial embedded GUI path.
-7. ARC with an allocation-free unmanaged RT data model (resolved by ADR 0003).
+7. ARC with an allocation-free unmanaged RT data model (resolved by ADR 0003); trace-free lock-free callback atomics are resolved by ADR 0005.
 8. Atomic requests plus bounded queues for cross-thread communication.
 
 An ADR is required when changing an architectural invariant, adding a substantial dependency, exposing a public API, or choosing an option listed in the deferred decisions.

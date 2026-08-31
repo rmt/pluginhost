@@ -17,6 +17,7 @@
 
 #include <jack/jack.h>
 #include <jack/midiport.h>
+#include "rt_atomic.h"
 
 #define ABI_FIELD_ID(type_id, field_id) ((type_id) * 100 + (field_id))
 #define ABI_FIELD_CASE(type_id, field_id, type_name, field_name)                                  \
@@ -224,6 +225,9 @@ uint64_t pluginhost_abi_size(int32_t type_id) {
       ABI_TYPE_CASE(109, jack_latency_range_t);
       ABI_TYPE_CASE(110, jack_midi_event_t);
       ABI_TYPE_CASE(111, jack_midi_data_t);
+      ABI_TYPE_CASE(201, pluginhost_rt_atomic_u32);
+      ABI_TYPE_CASE(202, pluginhost_rt_atomic_i32);
+      ABI_TYPE_CASE(203, pluginhost_rt_atomic_u64);
       default: return UINT64_MAX;
    }
 }
@@ -277,6 +281,9 @@ uint64_t pluginhost_abi_align(int32_t type_id) {
       ABI_ALIGN_CASE(109, jack_latency_range_t);
       ABI_ALIGN_CASE(110, jack_midi_event_t);
       ABI_ALIGN_CASE(111, jack_midi_data_t);
+      ABI_ALIGN_CASE(201, pluginhost_rt_atomic_u32);
+      ABI_ALIGN_CASE(202, pluginhost_rt_atomic_i32);
+      ABI_ALIGN_CASE(203, pluginhost_rt_atomic_u64);
       default: return UINT64_MAX;
    }
 }
