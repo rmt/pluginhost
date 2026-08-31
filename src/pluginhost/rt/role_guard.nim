@@ -1,6 +1,6 @@
 ## Allocation-free symbolic audio-role ownership.
 ##
-## This guard is intentionally independent of clap.thread-check until Increment 5.
+## The CLAP host bridge attaches this guard to clap.thread-check for the audio slice.
 ## State 1 is a private claiming phase; state 2 publishes a fully written pthread ID.
 
 import std/posix

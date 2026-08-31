@@ -40,8 +40,11 @@ type
     engine: RtEngine
     role: AudioRoleGuard
     processEnabled: RtAtomicU32
+    configurationPending: RtAtomicU32
     callbacksInFlight: RtAtomicU32
     processInFlight: RtAtomicU32
+    knownBufferSize: RtAtomicU32
+    knownSampleRate: RtAtomicU32
     latencyFrames: RtAtomicU32
     notifications: JackNotifications
 
@@ -62,6 +65,7 @@ type
     processFrames*: uint64
     processErrors*: uint64
     lateProcessCalls*: uint64
+    configurationPending*: bool
 
 static:
   doAssert supportsCopyMem(JackCallbackFunctions)
@@ -79,8 +83,11 @@ proc initJackCallbackContext*(context: ptr JackCallbackContext;
   )
   context.role.initAudioRoleGuard()
   context.processEnabled.storeRelaxed(0'u32)
+  context.configurationPending.storeRelaxed(0'u32)
   context.callbacksInFlight.storeRelaxed(0'u32)
   context.processInFlight.storeRelaxed(0'u32)
+  context.knownBufferSize.storeRelaxed(0'u32)
+  context.knownSampleRate.storeRelaxed(0'u32)
   context.latencyFrames.storeRelaxed(0'u32)
   context.notifications.shutdownCount.storeRelaxed(0'u64)
   context.notifications.shutdownRecordState.storeRelaxed(0'u32)
@@ -111,11 +118,72 @@ proc configureCallbacks*(context: ptr JackCallbackContext; map: RtPortMap;
   context.engine.initRtEngine(
     mode, map.audioInputCount, map.audioOutputCount)
 
+proc configureEndpointCallbacks*(context: ptr JackCallbackContext;
+                                  map: RtPortMap;
+                                  endpoint: RtProcessEndpoint): bool =
+  if context == nil or context.processEnabled.loadAcquire() != 0'u32 or
+      context.processInFlight.loadAcquire() != 0'u32 or
+      context.configurationPending.loadAcquire() != 0'u32:
+    return false
+  if not context.engine.initRtEngineEndpoint(
+      map.audioInputCount, map.audioOutputCount,
+      endpoint.maxFrames, endpoint):
+    return false
+  context.portMap = map
+  true
+
+proc updateProcessEndpoint*(context: ptr JackCallbackContext;
+                            endpoint: RtProcessEndpoint): bool =
+  if context == nil or endpoint.callback == nil or endpoint.maxFrames == 0'u32 or
+      context.processEnabled.loadAcquire() != 0'u32 or
+      context.processInFlight.loadAcquire() != 0'u32:
+    return false
+  context.engine.endpoint = endpoint
+  context.engine.maxFrames = endpoint.maxFrames
+  true
+
 proc enableProcessCallbacks*(context: ptr JackCallbackContext) {.inline.} =
-  context.processEnabled.storeRelease(1'u32)
+  if context.configurationPending.loadAcquire() == 0'u32:
+    context.processEnabled.storeRelease(1'u32)
+  else:
+    context.processEnabled.storeRelease(0'u32)
 
 proc disableProcessCallbacks*(context: ptr JackCallbackContext) {.inline.} =
   context.processEnabled.storeRelease(0'u32)
+
+proc setRuntimeConfigurationBaseline*(context: ptr JackCallbackContext;
+                                        sampleRate, bufferSize: uint32): bool =
+  if context == nil or sampleRate == 0'u32 or bufferSize == 0'u32 or
+      context.processEnabled.loadAcquire() != 0'u32 or
+      context.processInFlight.loadAcquire() != 0'u32 or
+      context.callbacksInFlight.loadAcquire() != 0'u32:
+    return false
+  context.knownSampleRate.storeRelease(sampleRate)
+  context.knownBufferSize.storeRelease(bufferSize)
+  true
+
+proc clearConfigurationPending*(context: ptr JackCallbackContext;
+                                 sampleRate = 0'u32;
+                                 bufferSize = 0'u32): bool =
+  if context == nil or context.processEnabled.loadAcquire() != 0'u32 or
+      context.processInFlight.loadAcquire() != 0'u32 or
+      context.callbacksInFlight.loadAcquire() != 0'u32:
+    return false
+  if sampleRate != 0'u32 and bufferSize != 0'u32:
+    context.knownSampleRate.storeRelease(sampleRate)
+    context.knownBufferSize.storeRelease(bufferSize)
+  context.configurationPending.storeRelease(0'u32)
+  true
+
+proc configurationChangePending*(context: ptr JackCallbackContext): bool {.
+    inline.} =
+  context != nil and context.configurationPending.loadAcquire() != 0'u32
+
+proc audioRolePointer*(context: ptr JackCallbackContext): ptr AudioRoleGuard {.
+    inline.} =
+  if context == nil:
+    return nil
+  addr context.role
 
 proc processCallbacksQuiescent*(context: ptr JackCallbackContext): bool {.inline.} =
   context == nil or context.processInFlight.loadAcquire() == 0'u32
@@ -155,12 +223,40 @@ proc snapshotNotificationState*(
   result.processFrames = notifications.processFrames.loadAcquire()
   result.processErrors = notifications.processErrors.loadAcquire()
   result.lateProcessCalls = notifications.lateProcessCalls.loadAcquire()
+  result.configurationPending =
+    context.configurationPending.loadAcquire() != 0'u32
 
 proc enterCallback(context: ptr JackCallbackContext) {.inline, gcsafe, raises: [].} =
   discard context.callbacksInFlight.fetchAddAcquire(1'u32)
 
 proc leaveCallback(context: ptr JackCallbackContext) {.inline, gcsafe, raises: [].} =
   discard context.callbacksInFlight.fetchSubRelease(1'u32)
+
+proc markConfigurationChange(context: ptr JackCallbackContext;
+                              sampleRate, bufferSize: uint32) {.
+    inline, gcsafe, raises: [].} =
+  if (sampleRate != 0'u32 and
+      context.knownSampleRate.loadAcquire() != sampleRate) or
+      (bufferSize != 0'u32 and
+      context.knownBufferSize.loadAcquire() != bufferSize):
+    context.configurationPending.storeRelease(1'u32)
+    context.processEnabled.storeRelease(0'u32)
+
+proc bindOutputBuffers(context: ptr JackCallbackContext;
+                       nframes: JackNFrames): bool {.
+    inline, gcsafe, raises: [].} =
+  var buffersValid = context.functions.portGetBuffer != nil
+  var index = 0'u32
+  while index < context.portMap.audioOutputCount:
+    let buffer = if context.functions.portGetBuffer == nil: nil else:
+      context.functions.portGetBuffer(
+        context.portMap.audioOutputs[int(index)], nframes)
+    if not setAudioOutputBuffer(addr context.engine, index, buffer):
+      buffersValid = false
+    if buffer == nil:
+      buffersValid = false
+    index += 1'u32
+  buffersValid
 
 proc recordShutdown(context: ptr JackCallbackContext; status: int32;
                     reason: cstring) {.gcsafe, raises: [].} =
@@ -189,6 +285,8 @@ proc jackProcessCallback*(nframes: JackNFrames; argument: pointer): cint {.
   discard context.processInFlight.fetchAddAcquire(1'u32)
 
   if context.processEnabled.loadAcquire() == 0'u32:
+    discard bindOutputBuffers(context, nframes)
+    discard zeroRtOutputs(addr context.engine, nframes)
     discard context.notifications.lateProcessCalls.fetchAddRelaxed(1'u64)
     discard context.processInFlight.fetchSubRelease(1'u32)
     context.leaveCallback()
@@ -219,20 +317,23 @@ proc jackProcessCallback*(nframes: JackNFrames; argument: pointer): cint {.
 
   var status = RtProcessMissingBuffer
   if buffersValid and tryEnterAudioRole(addr context.role):
-    status = processRtFake(addr context.engine, nframes)
+    status = processRt(addr context.engine, nframes)
     if not leaveAudioRole(addr context.role):
       status = RtProcessInvalidContext
   else:
     discard zeroRtOutputs(addr context.engine, nframes)
 
+  var callbackResult = 0.cint
   if status != RtProcessOk:
     discard zeroRtOutputs(addr context.engine, nframes)
     discard context.notifications.processErrors.fetchAddRelaxed(1'u64)
+    context.processEnabled.storeRelease(0'u32)
+    callbackResult = 1
   discard context.notifications.processCycles.fetchAddRelaxed(1'u64)
   discard context.notifications.processFrames.fetchAddRelaxed(uint64(nframes))
   discard context.processInFlight.fetchSubRelease(1'u32)
   context.leaveCallback()
-  0
+  callbackResult
 
 proc jackShutdownCallback*(argument: pointer) {.
     exportc: "pluginhost_jack_shutdown_callback", cdecl, gcsafe, raises: [].} =
@@ -263,6 +364,7 @@ proc jackBufferSizeCallback*(nframes: JackNFrames; argument: pointer): cint {.
   context.enterCallback()
   context.notifications.bufferSize.storeRelaxed(nframes)
   discard context.notifications.bufferSizeCount.fetchAddRelease(1'u64)
+  context.markConfigurationChange(0'u32, nframes)
   context.leaveCallback()
   0
 
@@ -275,6 +377,7 @@ proc jackSampleRateCallback*(nframes: JackNFrames; argument: pointer): cint {.
   context.enterCallback()
   context.notifications.sampleRate.storeRelaxed(nframes)
   discard context.notifications.sampleRateCount.fetchAddRelease(1'u64)
+  context.markConfigurationChange(nframes, 0'u32)
   context.leaveCallback()
   0
 

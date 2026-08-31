@@ -6,10 +6,10 @@ The current development version is **0.0.6-dev**. The implementation includes
 checked CLAP ownership/catalog/lifecycle, human/JSON `list` and recursive `scan`,
 a stable CLAP host bridge, bounded immutable audio/note port planning, real-time
 render negotiation, and an internal checked JACK backend with transactional ports and
-stable callbacks. Increment 4C proves the fake process endpoint
-against an isolated live PipeWire-JACK server and adds complete generated-call-path and
-live C allocation/lock/I/O evidence. It does not activate or process CLAP, and public
-`run` remains disabled.
+stable callbacks. Increment 5 adds an internal CLAP/JACK float32 audio slice with
+zero-copy grouped buffers, lifecycle rollback, configuration quiescence, synthetic
+fixtures, generated-call-path evidence, and an explicit independent-plugin smoke
+hook. The canonical public `run` path remains disabled.
 
 ## Build
 
@@ -35,7 +35,8 @@ nimble test
 nimble testAbi
 nimble testFixtures
 nimble testRt
-nimble testIntegration
+# Requires an independently installed headless CLAP plugin:
+PLUGINHOST_CLAP_SMOKE_PLUGIN=/absolute/path/to/headless.clap nimble testIntegration
 nimble all
 ```
 
@@ -61,7 +62,8 @@ fake silence/copy/deterministic processing without requiring a JACK server.
 
 `nimble testFixtures` independently compiles synthetic CLAP libraries and checks
 entry/factory ownership, descriptor validation, instance cleanup, deactivated audio/note
-port inspection, render negotiation, process-level `list`, and recursive `scan` behavior.
+port inspection, render negotiation, the internal float32 audio lifecycle and zero-copy
+group mapping, process-level `list`, and recursive `scan` behavior.
 
 All builds share `--mm:arc --threads:on --panics:on -d:noSignalHandler` through
 `config.nims`. Foreign callbacks additionally disable checks and trace setup locally
@@ -74,11 +76,13 @@ complete JACK/RT generated modules and the process-reachable CLAP host callback 
 closure under product flags, and requires rejection of a prohibited allocation canary.
 
 `nimble testIntegration` creates a mode-0700 private runtime, launches a uniquely named
-PipeWire core with its Dummy-Driver at 48 kHz/64 frames, validates live audio/MIDI ports
-and deterministic samples through a separate JACK peer, proves cycle-based quiescence
-and client-close port removal, runs 32 repeated active-close lifecycles, and requires
-zero instrumented C allocation, deallocation, lock, print, or prohibited-I/O operations
-in host callback scope. Missing
+PipeWire core with its Dummy-Driver at 48 kHz/64 frames, validates the internal CLAP
+float32 lifecycle against an independently installed headless plugin, validates live
+audio/MIDI ports and deterministic samples through a separate JACK peer, proves
+cycle-based quiescence and client-close port removal, runs 32 repeated active-close
+lifecycles, and requires zero instrumented C allocation, deallocation, lock, print, or
+prohibited-I/O operations in host callback scope. Set
+`PLUGINHOST_CLAP_SMOKE_PLUGIN=/absolute/path/to/headless.clap`; missing smoke
 prerequisites fail rather than skip. `nimble all` includes this live task.
 
 The checked Linux loader uses `dlopen`/`dlsym`/`dlclose` without another Nim package.
@@ -112,9 +116,9 @@ pluginhost scan [--json] [DIRECTORY ...]
 plugin instance. `scan` recursively discovers canonical `.clap` files, continues
 past per-root and per-candidate failures, reports successful descriptors, and uses
 exit status 3 when any issue occurred. Relative explicit/`CLAP_PATH` roots resolve
-from the current working directory; environment values do not expand `~`. `run`
-remains an explicit not-implemented failure until orderly signal/reactor control is
-implemented.
+from the current working directory; environment values do not expand `~`. The
+Increment 5 audio slice is internal/test-only; `run` remains an explicit
+not-implemented failure until orderly signal/reactor control is implemented.
 
 ## Project documents
 

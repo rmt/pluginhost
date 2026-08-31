@@ -297,6 +297,13 @@ PLUGINHOST_FIXTURE_EXPORT float pluginhost_fake_jack_audio_sample(
    return state.ports[port_index].audio[frame];
 }
 
+PLUGINHOST_FIXTURE_EXPORT uint64_t
+pluginhost_fake_jack_audio_address(int port_index) {
+   if (port_index < 0 || port_index >= state.successful_registrations)
+      return 0U;
+   return (uint64_t)(uintptr_t)state.ports[port_index].audio;
+}
+
 PLUGINHOST_FIXTURE_EXPORT int
 pluginhost_fake_jack_invoke_process(uint32_t frames) {
    if (!state.active)

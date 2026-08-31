@@ -22,6 +22,7 @@ JACK_ROOTS = (
     "pluginhost_rt_set_audio_output",
     "pluginhost_rt_zero_outputs",
     "pluginhost_rt_process_fake",
+    "pluginhost_rt_process",
     "pluginhost_jack_process_callback",
     "pluginhost_jack_shutdown_callback",
     "pluginhost_jack_info_shutdown_callback",
@@ -40,6 +41,10 @@ CLAP_ROOTS = (
     "pluginhost_clap_host_log",
     "pluginhost_clap_host_is_main_thread",
     "pluginhost_clap_host_is_audio_thread",
+)
+
+CLAP_PROCESS_ROOTS = (
+    "pluginhost_clap_process_audio",
 )
 
 PROBE_ROOTS = (
@@ -80,7 +85,7 @@ C_KEYWORDS = {
     "typeof", "__typeof__", "_Static_assert",
 }
 ALLOWED_EXTERNALS = {
-    "memcpy", "memset", "pthread_self", "pthread_equal",
+    "memcpy", "memset", "pthread_self", "pthread_equal", "callback", "processProc",
     "N_CDECL", "N_INLINE", "N_NIMCALL", "IL64",
     "__builtin_unreachable", "portGetBuffer", "portGetLatencyRange",
     "portSetLatencyRange",
@@ -91,6 +96,7 @@ ALLOWED_EXTERNAL_PREFIXES = (
     "pluginhost_rt_set_audio_",
     "pluginhost_rt_zero_outputs",
     "pluginhost_rt_process_fake",
+    "pluginhost_rt_process",
     "initAudioRoleGuard__",
     "initRtEngine__",
 )
@@ -251,7 +257,7 @@ def audit_main(nimcache: Path) -> int:
         audited.add(path)
         failures.extend(audit_complete_module(path, source))
 
-    all_roots = JACK_ROOTS + CLAP_ROOTS
+    all_roots = JACK_ROOTS + CLAP_ROOTS + CLAP_PROCESS_ROOTS
     for root in all_roots:
         matches = find_marker(sources, root)
         if len(matches) != 1:
@@ -274,6 +280,20 @@ def audit_main(nimcache: Path) -> int:
             bridge_path, bridge_source, CLAP_ROOTS)
         failures.extend(bridge_failures)
 
+    audio_matches = find_marker(sources, CLAP_PROCESS_ROOTS[0])
+    audio_count = 0
+    if len(audio_matches) != 1:
+        failures.append(
+            "expected one generated CLAP audio process module, "
+            f"found {len(audio_matches)}"
+        )
+    else:
+        audio_path, audio_source = audio_matches[0]
+        audited.add(audio_path)
+        audio_failures, audio_count = audit_closure(
+            audio_path, audio_source, CLAP_PROCESS_ROOTS)
+        failures.extend(audio_failures)
+
 
     failures.extend(audit_atomic_header())
 
@@ -287,7 +307,7 @@ def audit_main(nimcache: Path) -> int:
     paths += ", c/rt_atomic.h"
     print(
         "Complete generated callback audit passed "
-        f"({bridge_count} CLAP callback/helper functions): {paths}"
+        f"({bridge_count + audio_count} CLAP callback/helper functions): {paths}"
     )
     return 0
 

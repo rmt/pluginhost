@@ -1,10 +1,15 @@
-import ./[ffi, host_bridge, loader, port_inspector]
+import std/math
+
+import ./[audio_process, ffi, host_bridge, loader, port_inspector]
 import ../domain/[errors, plugin_catalog, port_plan, result]
+import ../rt/role_guard
 
 type
   ClapInstanceState* = enum
     cisUnloaded
     cisInitialized
+    cisActivated
+    cisProcessing
     cisDestroyed
     cisClosed
 
@@ -247,6 +252,173 @@ proc negotiateRealtimeRender*(instance: var ClapInstance):
 proc hostBridge*(instance: ClapInstance): ClapHostBridge {.inline.} =
   instance.bridge
 
+proc activate*(instance: var ClapInstance; sampleRate: float64;
+                minFrames, maxFrames: uint32): Result[Unit] =
+  if instance.state != cisInitialized:
+    return failure[Unit](instanceError(
+      hekClapActivation,
+      "CLAP activation requires an initialized, deactivated plugin",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id & "; state=" & $instance.state,
+    ))
+  if not instance.bridge.isMainThread:
+    return failure[Unit](instanceError(
+      hekClapActivation,
+      "CLAP activation must run on the host main thread",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id,
+    ))
+  if sampleRate <= 0.0 or classify(sampleRate) in {fcNan, fcInf, fcNegInf}:
+    return failure[Unit](instanceError(
+      hekClapActivation,
+      "CLAP activation requires a finite positive sample rate",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id & "; sample-rate=" & $sampleRate,
+    ))
+  if minFrames == 0'u32 or maxFrames == 0'u32 or minFrames > maxFrames or
+      maxFrames > uint32(high(int32)):
+    return failure[Unit](instanceError(
+      hekClapActivation,
+      "CLAP activation frame range is invalid",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id & "; min=" & $minFrames &
+        "; max=" & $maxFrames,
+    ))
+  if not instance.plugin.activate(instance.plugin, sampleRate,
+                                  minFrames, maxFrames):
+    return failure[Unit](instanceError(
+      hekClapActivation,
+      "CLAP plugin activation failed",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id & "; sample-rate=" & $sampleRate &
+        "; max-frames=" & $maxFrames,
+    ))
+  instance.state = cisActivated
+  success()
+
+proc startProcessing*(instance: var ClapInstance;
+                      role: ptr AudioRoleGuard): Result[Unit] =
+  if instance.state != cisActivated:
+    return failure[Unit](instanceError(
+      hekClapStartProcessing,
+      "CLAP start_processing requires an active, non-processing plugin",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id & "; state=" & $instance.state,
+    ))
+  if not instance.bridge.isMainThread or role == nil:
+    return failure[Unit](instanceError(
+      hekClapStartProcessing,
+      "CLAP start_processing must run on the host main thread with an audio role",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id,
+    ))
+  if not instance.bridge.attachAudioRole(role):
+    return failure[Unit](instanceError(
+      hekClapStartProcessing,
+      "could not attach the symbolic CLAP audio role to thread-check",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id,
+    ))
+  if not tryEnterAudioRole(role):
+    return failure[Unit](instanceError(
+      hekClapStartProcessing,
+      "could not claim the symbolic CLAP audio role for start_processing",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id,
+    ))
+  let started = instance.plugin.startProcessing(instance.plugin)
+  if not started:
+    discard leaveAudioRole(role)
+    return failure[Unit](instanceError(
+      hekClapStartProcessing,
+      "CLAP plugin start_processing failed",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id,
+    ))
+  if not leaveAudioRole(role):
+    return failure[Unit](instanceError(
+      hekClapStartProcessing,
+      "could not release the symbolic CLAP audio role after start_processing",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id,
+    ))
+  instance.state = cisProcessing
+  success()
+
+proc stopProcessing*(instance: var ClapInstance;
+                     role: ptr AudioRoleGuard): Result[Unit] =
+  if instance.state == cisActivated or instance.state == cisInitialized:
+    return success()
+  if instance.state != cisProcessing:
+    return failure[Unit](instanceError(
+      hekClapStopProcessing,
+      "CLAP stop_processing requires an active plugin",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id & "; state=" & $instance.state,
+    ))
+  if not instance.bridge.isMainThread or role == nil or
+      not instance.bridge.attachAudioRole(role) or
+      not tryEnterAudioRole(role):
+    return failure[Unit](instanceError(
+      hekClapStopProcessing,
+      "CLAP stop_processing could not claim the symbolic audio role",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id,
+    ))
+  instance.plugin.stopProcessing(instance.plugin)
+  if not leaveAudioRole(role):
+    return failure[Unit](instanceError(
+      hekClapStopProcessing,
+      "could not release the symbolic CLAP audio role after stop_processing",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id,
+    ))
+  instance.state = cisActivated
+  success()
+
+proc deactivate*(instance: var ClapInstance): Result[Unit] =
+  case instance.state
+  of cisInitialized:
+    return success()
+  of cisActivated:
+    discard
+  of cisProcessing:
+    return failure[Unit](instanceError(
+      hekClapDeactivation,
+      "CLAP deactivation requires stopped processing",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id,
+    ))
+  of cisUnloaded, cisDestroyed, cisClosed:
+    return failure[Unit](instanceError(
+      hekClapDeactivation,
+      "CLAP deactivation requires a live initialized plugin",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id & "; state=" & $instance.state,
+    ))
+  if not instance.bridge.isMainThread:
+    return failure[Unit](instanceError(
+      hekClapDeactivation,
+      "CLAP deactivation must run on the host main thread",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id,
+    ))
+  instance.plugin.deactivate(instance.plugin)
+  instance.state = cisInitialized
+  success()
+
+proc newAudioProcess*(instance: var ClapInstance; plan: PortPlan;
+                      maxFrames: uint32): Result[ClapAudioProcess] =
+  if instance.state != cisInitialized or not instance.bridge.isMainThread:
+    return failure[ClapAudioProcess](instanceError(
+      hekClapProcess,
+      "CLAP audio process construction requires the main-thread deactivated state",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id & "; state=" & $instance.state,
+    ))
+  newClapAudioProcess(instance.plugin, plan, maxFrames,
+                      instance.module.modulePath, instance.descriptor.id)
+
 proc takeRequests*(instance: ClapInstance): uint32 {.gcsafe, raises: [].} =
   instance.bridge.takeRequests()
 
@@ -273,6 +445,13 @@ proc destroy*(instance: var ClapInstance): Result[Unit] =
     instance.state = cisDestroyed
   of cisUnloaded:
     instance.state = cisDestroyed
+  of cisActivated, cisProcessing:
+    return failure[Unit](instanceError(
+      hekClapPlugin,
+      "CLAP plugin must be stopped and deactivated before destruction",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id & "; state=" & $instance.state,
+    ))
   of cisDestroyed, cisClosed:
     discard
   success()

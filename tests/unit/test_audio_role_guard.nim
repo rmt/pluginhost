@@ -46,7 +46,7 @@ suite "symbolic audio-role guard":
     check enterOnThread(guard)
     check not guard.isAudioRoleActive
 
-  test "the guard is not advertised through clap.thread-check in Increment 4B":
+  test "an unattached guard reports no CLAP audio-thread ownership":
     var guard: AudioRoleGuard
     guard.initAudioRoleGuard()
     let bridge = newClapHostBridge()

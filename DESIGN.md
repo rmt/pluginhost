@@ -192,7 +192,9 @@ The Increment 4B backend is internal/test-only. It has explicit `Closed`, `Open`
 `Configured`, and `Active` states and owns one stable shared callback context. JACK
 deactivation is the process-callback quiescence boundary; the immutable map remains
 alive afterward. `jack_client_close` is the all-callback quiescence boundary, after
-which callback storage may be freed and the JACK DSO may be unloaded.
+which callback storage may be freed and the JACK DSO may be unloaded. Increment 5's
+internal `InternalAudioSlice` composes this backend with `ClapInstance` and owns the
+preallocated CLAP audio process view; public session execution remains disabled.
 
 Increment 4C proves this boundary against a private PipeWire-JACK core at a fixed
 48 kHz/64-frame quantum. A separate process owns the observing JACK client, validates
@@ -215,9 +217,10 @@ not connect the public session stub.
 
 It contains no managed strings, sequences, tables, closures, exceptions, GUI objects, dynamic-library handles, or ownership of foreign resources.
 
-The 4B skeleton implements only fixed audio-buffer pointer arrays, a fake process mode,
-and bounded silence/copy/deterministic loops. Event arenas and the CLAP process endpoint
-remain absent until their owning increments.
+The 4B skeleton implements fixed audio-buffer pointer arrays, a fake process mode,
+and bounded silence/copy/deterministic loops. Increment 5 adds a separate CLAP audio
+adapter with preallocated grouped descriptors and channel-pointer storage. Event
+arenas and note/event translation remain absent until Increment 6.
 
 The JACK callback reaches it through a non-capturing `{.cdecl.}` trampoline. The hot path uses direct procedures/function pointers rather than runtime object dispatch.
 
@@ -310,9 +313,11 @@ The CLAP inspector applies the strict stable consistency rules also enforced by 
 
 A structural rescan creates a new plan and map only after JACK callbacks are quiescent. Live mutation or atomic replacement of a map is not needed initially.
 
-Increment 4B does not support reconfiguration of a configured backend. Its map is
-published once before activation and retained through client close, avoiding mutation
-while latency or other notification callbacks can still execute.
+Increment 4B does not support structural reconfiguration of a configured backend. Its
+map is published once before activation and retained through client close, avoiding
+port mutation while latency or other notification callbacks can still execute.
+Increment 5 may refresh the frozen process endpoint for a changed sample rate or
+buffer size only after JACK process quiescence; structural port changes remain deferred.
 
 ### 6.3 Error model
 
@@ -658,6 +663,7 @@ src/
       cli.nim
       commands.nim
       host_session.nim
+      audio_slice.nim
       run_config.nim
     discovery/
       paths.nim
@@ -674,6 +680,7 @@ src/
       loader.nim
       catalog.nim
       instance.nim
+      audio_process.nim
       lifecycle.nim
       host_bridge.nim
       host_extensions.nim

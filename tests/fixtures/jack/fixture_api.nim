@@ -27,6 +27,8 @@ type
   FakeGetAudioSampleProc* = proc(portIndex: cint;
                                   frame: uint32): cfloat {.
     cdecl, gcsafe, raises: [].}
+  FakeGetAudioAddressProc* = proc(portIndex: cint): uint64 {.
+    cdecl, gcsafe, raises: [].}
   FakeInvokeProcessProc* = proc(frames: uint32): cint {.
     cdecl, gcsafe, raises: [].}
   FakeInvokeProcessOnThreadProc* = proc(frames: uint32; force: cint;
@@ -69,6 +71,7 @@ type
     portFlags*: FakeGetIndexedFlagsProc
     setAudioSample*: FakeSetAudioSampleProc
     audioSample*: FakeGetAudioSampleProc
+    audioAddress*: FakeGetAudioAddressProc
     invokeProcess*: FakeInvokeProcessProc
     forceProcess*: FakeInvokeProcessProc
     invokeProcessOnThread*: FakeInvokeProcessOnThreadProc
@@ -123,6 +126,7 @@ proc `=sink`*(destination: var FakeJackControls; source: FakeJackControls) =
   destination.portFlags = source.portFlags
   destination.setAudioSample = source.setAudioSample
   destination.audioSample = source.audioSample
+  destination.audioAddress = source.audioAddress
   destination.invokeProcess = source.invokeProcess
   destination.forceProcess = source.forceProcess
   destination.invokeProcessOnThread = source.invokeProcessOnThread
@@ -230,6 +234,8 @@ proc openFakeJackControls*(): Result[FakeJackControls] =
     "pluginhost_fake_jack_set_audio_sample")
   resolve(audioSample, FakeGetAudioSampleProc,
     "pluginhost_fake_jack_audio_sample")
+  resolve(audioAddress, FakeGetAudioAddressProc,
+    "pluginhost_fake_jack_audio_address")
   resolve(invokeProcess, FakeInvokeProcessProc,
     "pluginhost_fake_jack_invoke_process")
   resolve(forceProcess, FakeInvokeProcessProc,

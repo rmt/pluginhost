@@ -105,6 +105,18 @@ proc verifyIntegrationPrerequisiteFailure() =
        "exit 1; fi; " &
        "echo 'Missing integration prerequisites fail as required'"
 
+proc checkClapSmokePrerequisite() =
+  let path = getEnv("PLUGINHOST_CLAP_SMOKE_PLUGIN")
+  if path.len == 0:
+    echo "CLAP smoke prerequisite missing: set PLUGINHOST_CLAP_SMOKE_PLUGIN to an absolute headless plugin path"
+    quit(1)
+  if path[0] != '/':
+    echo "CLAP smoke prerequisite must be an absolute path: " & path
+    quit(1)
+  if not fileExists(path):
+    echo "CLAP smoke prerequisite does not exist: " & path
+    quit(1)
+
 proc checkIntegrationPrerequisites() =
   verifyIntegrationPrerequisiteFailure()
   exec "python3 tests/integration/run_pipewire_jack.py --check-only"
@@ -112,6 +124,7 @@ proc checkIntegrationPrerequisites() =
 proc runIntegrationTests(checkPrerequisites = true) =
   if checkPrerequisites:
     checkIntegrationPrerequisites()
+    checkClapSmokePrerequisite()
   compileLiveIntegrationSupport()
   exec "nim c --hints:off --path:src --path:tests " &
        dependencyPathsClause() &
@@ -136,6 +149,13 @@ proc compilePortFixtureVariant(name: string; mode: int) =
        "-Wall -Wextra -Werror -Wl,-z,defs -Ivendor/clap/include " &
        "-DPLUGINHOST_PORT_FIXTURE_MODE=" & $mode & " " &
        "tests/fixtures/clap/port_fixture.c " &
+       "-o build/fixtures/clap/" & name & ".clap"
+
+proc compileAudioFixtureVariant(name: string; mode: int) =
+  exec "cc -std=gnu11 -fPIC -shared -fvisibility=hidden " &
+       "-Wall -Wextra -Werror -Wl,-z,defs -Ivendor/clap/include " &
+       "-DPLUGINHOST_AUDIO_FIXTURE_MODE=" & $mode & " " &
+       "tests/fixtures/clap/audio_fixture.c " &
        "-o build/fixtures/clap/" & name & ".clap"
 
 proc compileClapFixtures() =
@@ -195,6 +215,15 @@ proc compileClapFixtures() =
   compilePortFixtureVariant("audio_bad_preference", 27)
   compilePortFixtureVariant("render_missing_requirement", 28)
   compilePortFixtureVariant("ports_exact_limits", 29)
+  compileAudioFixtureVariant("audio_tone", 0)
+  compileAudioFixtureVariant("audio_gain", 1)
+  compileAudioFixtureVariant("audio_multi", 2)
+  compileAudioFixtureVariant("audio_activate_fail", 3)
+  compileAudioFixtureVariant("audio_start_fail", 4)
+  compileAudioFixtureVariant("audio_process_error", 5)
+  compileAudioFixtureVariant("audio_process_sleep", 6)
+  compileAudioFixtureVariant("audio_process_tail", 7)
+  compileAudioFixtureVariant("audio_process_continue_if_not_quiet", 8)
   exec "cc -std=gnu11 -fPIC -shared -fvisibility=hidden " &
        "-Wall -Wextra -Werror -Wl,-z,defs " &
        "tests/fixtures/clap/no_entry_fixture.c " &
@@ -267,9 +296,13 @@ proc runRtTests() =
 
 proc runClapFixtureTests() =
   compileClapFixtures()
+  compileFakeJackFixture()
   exec "mkdir -p build/nimcache/fixtures build/test"
   exec "PLUGINHOST_TEST_BIN=$PWD/build/test/pluginhost " &
+       "PLUGINHOST_JACK_FAKE_FIXTURE=$PWD/build/fixtures/" &
+       "libpluginhost_jack_fake_fixture.so " &
        "PLUGINHOST_CLAP_FIXTURE_DIR=$PWD/build/fixtures/clap " &
+       "PLUGINHOST_CLAP_AUDIO_FIXTURE_DIR=$PWD/build/fixtures/clap " &
        "nim c -r --hints:off --path:src --path:tests " &
        dependencyPathsClause() & " --nimcache:build/nimcache/fixtures " &
        "--out:build/test/all_fixture_tests tests/fixtures/all_fixture_tests.nim"
@@ -293,6 +326,7 @@ task testIntegration, "Run isolated live PipeWire-JACK integration tests":
 
 task all, "Run compile checks, build the executable, and run tests":
   checkIntegrationPrerequisites()
+  checkClapSmokePrerequisite()
   exec "mkdir -p build/nimcache/check"
   exec "nim check --hints:off --path:src " & dependencyPathsClause() &
        " --nimcache:build/nimcache/check src/pluginhost.nim"

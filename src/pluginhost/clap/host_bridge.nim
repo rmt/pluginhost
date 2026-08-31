@@ -1,6 +1,6 @@
 import std/[posix, typetraits]
 
-import ../rt/atomic_pod
+import ../rt/[atomic_pod, role_guard]
 import ../version
 import ./ffi
 
@@ -37,6 +37,7 @@ type
     droppedLogs: ptr RtAtomicU64
     logExtension: ptr ClapHostLog
     threadCheckExtension: ptr ClapHostThreadCheck
+    audioRole: ptr AudioRoleGuard
     mainThread: Pthread
 
   ClapHostBridge* = ref object
@@ -182,9 +183,9 @@ proc hostIsMainThread(host: ptr ClapHost): bool {.
 
 proc hostIsAudioThread(host: ptr ClapHost): bool {.
     exportc: "pluginhost_clap_host_is_audio_thread", cdecl, gcsafe, raises: [].} =
-  ## No symbolic audio role exists before the processing increment.
-  discard host
-  false
+  let data = callbackData(host)
+  data != nil and data.audioRole != nil and
+    isAudioRoleThread(data.audioRole)
 
 {.pop.}
 
@@ -201,6 +202,7 @@ proc newClapHostBridge*(): ClapHostBridge =
   result.callbackData.logs = addr result.logs
   result.callbackData.droppedLogs = addr result.droppedLogs
   result.callbackData.mainThread = pthread_self()
+  result.callbackData.audioRole = nil
   result.logExtension = ClapHostLog(log: hostLog)
   result.threadCheckExtension = ClapHostThreadCheck(
     isMainThread: hostIsMainThread,
@@ -229,6 +231,21 @@ proc hostPointer*(bridge: ClapHostBridge): ptr ClapHost {.inline, gcsafe,
 
 proc isMainThread*(bridge: ClapHostBridge): bool {.inline, gcsafe, raises: [].} =
   bridge != nil and hostIsMainThread(addr bridge.host)
+
+proc attachAudioRole*(bridge: ClapHostBridge; role: ptr AudioRoleGuard): bool =
+  if bridge == nil or role == nil:
+    return false
+  if bridge.callbackData.audioRole != nil and
+      bridge.callbackData.audioRole != role:
+    return false
+  bridge.callbackData.audioRole = role
+  true
+
+proc detachAudioRole*(bridge: ClapHostBridge; role: ptr AudioRoleGuard): bool =
+  if bridge == nil or role == nil or bridge.callbackData.audioRole != role:
+    return false
+  bridge.callbackData.audioRole = nil
+  true
 
 proc takeRequests*(bridge: ClapHostBridge): uint32 {.gcsafe, raises: [].} =
   if bridge == nil:

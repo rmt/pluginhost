@@ -1,4 +1,4 @@
-## Checked control-plane JACK backend for Increment 4B.
+## Checked control-plane JACK backend for the internal audio slice.
 ##
 ## One backend owns one JackApi, one JACK client, all realized ports, and one
 ## stable callback context. Public plugin execution does not use this backend yet.
@@ -6,7 +6,7 @@
 import std/[options, strutils]
 
 import ../domain/[errors, port_plan, result]
-import ../rt/engine
+import ../rt/[engine, role_guard]
 import ../support/utf8
 import ./[api, callbacks, ffi, ports]
 
@@ -39,6 +39,11 @@ type
     processFrames*: uint64
     processErrors*: uint64
     lateProcessCalls*: uint64
+    configurationPending*: bool
+
+  JackRuntimeConfiguration* = object
+    sampleRate*: uint32
+    bufferSize*: uint32
 
   JackBackend* = object
     api: JackApi
@@ -121,6 +126,12 @@ proc clientNameSize*(backend: JackBackend): int {.inline.} =
 proc portNameSize*(backend: JackBackend): int {.inline.} =
   backend.portNameSizeValue
 
+proc audioRoleGuard*(backend: JackBackend): ptr AudioRoleGuard {.inline.} =
+  backend.callbackContext.audioRolePointer()
+
+proc configurationChangePending*(backend: JackBackend): bool {.inline.} =
+  backend.callbackContext.configurationChangePending()
+
 proc realizedPortCount*(backend: JackBackend): int {.inline.} =
   backend.portOwner.registeredPortCount
 
@@ -146,6 +157,7 @@ proc notifications*(backend: JackBackend): JackNotificationSnapshot =
   result.processFrames = snapshot.processFrames
   result.processErrors = snapshot.processErrors
   result.lateProcessCalls = snapshot.lateProcessCalls
+  result.configurationPending = snapshot.configurationPending
 
 proc backendError(kind: HostErrorKind; message: string;
                   backend: JackBackend; detail = ""): HostError =
@@ -268,10 +280,23 @@ proc activate*(backend: var JackBackend): Result[Unit] =
       backend,
       "state=" & $backend.stateValue,
     ))
+  if backend.callbackContext.configurationChangePending():
+    return failure[Unit](backendError(
+      hekJackActivation,
+      "JACK activation is blocked by a pending runtime configuration change",
+      backend,
+    ))
   backend.callbackContext.enableProcessCallbacks()
   let status = backend.api.functions.activate(backend.client)
   if status != 0:
     backend.callbackContext.disableProcessCallbacks()
+    if not backend.callbackContext.processCallbacksQuiescent():
+      return failure[Unit](backendError(
+        hekJackQuiescence,
+        "JACK process callback did not quiesce after activation failure",
+        backend,
+        "status=" & $status,
+      ))
     return failure[Unit](backendError(
       hekJackActivation,
       "could not activate the JACK client",
@@ -462,16 +487,55 @@ proc openJackBackend*(config: JackBackendOpenConfig): Result[JackBackend] =
     allocShared0(sizeof(JackCallbackContext)))
   doAssert backend.callbackContext.initJackCallbackContext(
     backend.api.functions)
+  let initialSampleRate = backend.api.functions.getSampleRate(client)
+  let initialBufferSize = backend.api.functions.getBufferSize(client)
+  if initialSampleRate == 0'u32 or initialBufferSize == 0'u32:
+    let primary = backendError(
+      hekJackClientOpen,
+      "JACK returned an invalid initial audio configuration",
+      backend,
+      "sample-rate=" & $initialSampleRate &
+        "; buffer-size=" & $initialBufferSize,
+    )
+    return failure[JackBackend](backend.cleanupBackendFailure(primary))
+  if not backend.callbackContext.setRuntimeConfigurationBaseline(
+      initialSampleRate, initialBufferSize):
+    let primary = backendError(
+      hekJackClientOpen,
+      "could not establish the initial JACK audio configuration baseline",
+      backend,
+    )
+    return failure[JackBackend](backend.cleanupBackendFailure(primary))
   let registered = backend.registerCallbacks()
   if not registered.isOk:
     return failure[JackBackend](backend.cleanupBackendFailure(registered.error))
 
-  backend.sampleRateValue = backend.api.functions.getSampleRate(client)
-  backend.bufferSizeValue = backend.api.functions.getBufferSize(client)
+  let currentSampleRate = backend.api.functions.getSampleRate(client)
+  let currentBufferSize = backend.api.functions.getBufferSize(client)
+  if currentSampleRate == 0'u32 or currentBufferSize == 0'u32:
+    let primary = backendError(
+      hekJackClientOpen,
+      "JACK returned an invalid post-registration audio configuration",
+      backend,
+      "sample-rate=" & $currentSampleRate &
+        "; buffer-size=" & $currentBufferSize,
+    )
+    return failure[JackBackend](backend.cleanupBackendFailure(primary))
+  backend.sampleRateValue = currentSampleRate
+  backend.bufferSizeValue = currentBufferSize
+  if not backend.callbackContext.clearConfigurationPending(
+      currentSampleRate, currentBufferSize):
+    let primary = backendError(
+      hekJackClientOpen,
+      "could not clear initial JACK configuration notifications",
+      backend,
+    )
+    return failure[JackBackend](backend.cleanupBackendFailure(primary))
   success(move(backend))
 
-proc configure*(backend: var JackBackend; plan: PortPlan;
-                mode: FakeProcessMode): Result[Unit] =
+proc configureRealized(backend: var JackBackend; plan: PortPlan;
+                       mode: FakeProcessMode;
+                       endpoint: RtProcessEndpoint): Result[Unit] =
   if backend.stateValue != jbsOpen or backend.client == nil or
       backend.callbackContext == nil:
     return failure[Unit](backendError(
@@ -501,7 +565,11 @@ proc configure*(backend: var JackBackend; plan: PortPlan;
         return failure[Unit](appendPrimary(cleanup.error, realized.error))
     return realized
 
-  if not backend.callbackContext.configureCallbacks(candidateMap, mode):
+  let configured = if endpoint.callback != nil:
+      backend.callbackContext.configureEndpointCallbacks(candidateMap, endpoint)
+    else:
+      backend.callbackContext.configureCallbacks(candidateMap, mode)
+  if not configured:
     let rollback = candidateOwner.unregisterOwnedPorts(
       backend.api.functions, backend.client, backend.actualClientNameValue)
     let primary = backendError(
@@ -518,4 +586,78 @@ proc configure*(backend: var JackBackend; plan: PortPlan;
 
   backend.portOwner = move(candidateOwner)
   backend.stateValue = jbsConfigured
+  success()
+
+proc configure*(backend: var JackBackend; plan: PortPlan;
+                mode: FakeProcessMode): Result[Unit] =
+  backend.configureRealized(plan, mode, RtProcessEndpoint())
+
+proc configure*(backend: var JackBackend; plan: PortPlan;
+                endpoint: RtProcessEndpoint): Result[Unit] =
+  if endpoint.callback == nil:
+    return failure[Unit](backendError(
+      hekJackPortRegistration,
+      "JACK process endpoint is not configured",
+      backend,
+    ))
+  backend.configureRealized(plan, fpmSilence, endpoint)
+
+proc updateProcessEndpoint*(backend: var JackBackend;
+                             endpoint: RtProcessEndpoint): Result[Unit] =
+  if backend.stateValue != jbsConfigured or backend.callbackContext == nil:
+    return failure[Unit](backendError(
+      hekJackActivation,
+      "JACK process endpoint can only be updated while configured",
+      backend,
+      "state=" & $backend.stateValue,
+    ))
+  if not backend.callbackContext.updateProcessEndpoint(endpoint):
+    return failure[Unit](backendError(
+      hekJackQuiescence,
+      "could not update the JACK process endpoint while inactive",
+      backend,
+    ))
+  success()
+
+proc refreshRuntimeConfiguration*(backend: var JackBackend):
+    Result[JackRuntimeConfiguration] =
+  if backend.client == nil or backend.callbackContext == nil or
+      backend.stateValue == jbsClosed or backend.stateValue == jbsActive:
+    return failure[JackRuntimeConfiguration](backendError(
+      hekJackActivation,
+      "JACK runtime configuration can only be refreshed while inactive",
+      backend,
+      "state=" & $backend.stateValue,
+    ))
+  let sampleRate = backend.api.functions.getSampleRate(backend.client)
+  let bufferSize = backend.api.functions.getBufferSize(backend.client)
+  if sampleRate == 0'u32 or bufferSize == 0'u32:
+    return failure[JackRuntimeConfiguration](backendError(
+      hekJackActivation,
+      "JACK returned an invalid runtime audio configuration",
+      backend,
+      "sample-rate=" & $sampleRate & "; buffer-size=" & $bufferSize,
+    ))
+  backend.sampleRateValue = sampleRate
+  backend.bufferSizeValue = bufferSize
+  success(JackRuntimeConfiguration(
+    sampleRate: sampleRate,
+    bufferSize: bufferSize,
+  ))
+
+proc acknowledgeConfigurationChange*(backend: var JackBackend): Result[Unit] =
+  if backend.stateValue != jbsConfigured or backend.callbackContext == nil:
+    return failure[Unit](backendError(
+      hekJackActivation,
+      "JACK configuration changes can only be acknowledged while configured",
+      backend,
+      "state=" & $backend.stateValue,
+    ))
+  if not backend.callbackContext.clearConfigurationPending(
+      backend.sampleRateValue, backend.bufferSizeValue):
+    return failure[Unit](backendError(
+      hekJackQuiescence,
+      "JACK callbacks are not quiescent for configuration acknowledgement",
+      backend,
+    ))
   success()

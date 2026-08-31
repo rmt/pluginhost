@@ -1,5 +1,7 @@
-## Fixed-layout, allocation-free fake real-time process endpoint for Increment 4B.
-## No CLAP types or lifecycle operations are reachable from this module.
+## Fixed-layout, allocation-free real-time process endpoint.
+##
+## The engine owns only POD buffer views and a prevalidated endpoint binding. The
+## endpoint may be a CLAP adapter, but this module does not import CLAP types.
 
 import std/typetraits
 
@@ -9,8 +11,19 @@ const
   RtProcessInvalidContext* = -1.cint
   RtProcessInvalidLayout* = -2.cint
   RtProcessMissingBuffer* = -3.cint
+  RtProcessInvalidFrameCount* = -4.cint
+  RtProcessEndpointFailure* = -5.cint
 
 type
+  RtProcessEndpointProc* = proc(context: pointer; engine: ptr RtEngine;
+                                 nframes: uint32): cint {.
+    cdecl, gcsafe, raises: [].}
+
+  RtProcessEndpoint* {.bycopy.} = object
+    callback*: RtProcessEndpointProc
+    context*: pointer
+    maxFrames*: uint32
+
   FakeProcessMode* = enum
     fpmSilence
     fpmCopyInput
@@ -20,12 +33,15 @@ type
     mode*: FakeProcessMode
     inputCount*: uint32
     outputCount*: uint32
+    maxFrames*: uint32
+    endpoint*: RtProcessEndpoint
     inputBuffers*: array[int(RtMaxAudioChannelsPerDirection),
       ptr UncheckedArray[cfloat]]
     outputBuffers*: array[int(RtMaxAudioChannelsPerDirection),
       ptr UncheckedArray[cfloat]]
 
 static:
+  doAssert supportsCopyMem(RtProcessEndpoint)
   doAssert supportsCopyMem(RtEngine)
 
 {.push checks: off, stackTrace: off, lineTrace: off.}
@@ -38,6 +54,24 @@ proc initRtEngine*(engine: var RtEngine; mode: FakeProcessMode;
   engine.mode = mode
   engine.inputCount = inputCount
   engine.outputCount = outputCount
+  engine.maxFrames = high(uint32)
+  engine.endpoint = RtProcessEndpoint()
+  true
+
+proc initRtEngineEndpoint*(engine: var RtEngine; inputCount, outputCount,
+                           maxFrames: uint32;
+                           endpoint: RtProcessEndpoint): bool {.
+    gcsafe, raises: [].} =
+  if inputCount > RtMaxAudioChannelsPerDirection or
+      outputCount > RtMaxAudioChannelsPerDirection or
+      maxFrames == 0'u32 or endpoint.callback == nil or
+      endpoint.maxFrames == 0'u32 or endpoint.maxFrames < maxFrames:
+    return false
+  engine.mode = fpmSilence
+  engine.inputCount = inputCount
+  engine.outputCount = outputCount
+  engine.maxFrames = maxFrames
+  engine.endpoint = endpoint
   true
 
 proc setAudioInputBuffer*(engine: ptr RtEngine; index: uint32;
@@ -130,4 +164,14 @@ proc processRtFake*(engine: ptr RtEngine; nframes: uint32): cint {.
           frame += 1'u32
       channel += 1'u32
     if missing: RtProcessMissingBuffer else: RtProcessOk
+
+proc processRt*(engine: ptr RtEngine; nframes: uint32): cint {.
+    exportc: "pluginhost_rt_process", gcsafe, raises: [].} =
+  if engine == nil:
+    return RtProcessInvalidContext
+  if engine.endpoint.callback == nil:
+    return processRtFake(engine, nframes)
+  if nframes == 0'u32 or nframes > engine.maxFrames:
+    return RtProcessInvalidFrameCount
+  engine.endpoint.callback(engine.endpoint.context, engine, nframes)
 {.pop.}
