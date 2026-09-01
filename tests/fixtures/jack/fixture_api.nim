@@ -51,6 +51,10 @@ type
       cint {.cdecl, gcsafe, raises: [].}
   FakeGetMidiAddressProc* = proc(portIndex: cint; eventIndex: uint32): uint64 {.
     cdecl, gcsafe, raises: [].}
+  FakeSetPortLatencyProc* = proc(index, mode: cint; minimum, maximum: uint32) {.
+    cdecl, gcsafe, raises: [].}
+  FakeGetPortLatencyProc* = proc(index, mode, maximum: cint): uint32 {.
+    cdecl, gcsafe, raises: [].}
   FakeInvokeShutdownProc* = proc(status: cint; reason: cstring) {.
     cdecl, gcsafe, raises: [].}
 
@@ -66,6 +70,7 @@ type
     setActivateStatus*: FakeSetIntProc
     setDeactivateStatus*: FakeSetIntProc
     setCloseStatus*: FakeSetIntProc
+    setRecomputeStatus*: FakeSetIntProc
     setClientNameSize*: FakeSetIntProc
     setPortNameSize*: FakeSetIntProc
     setActualClientName*: FakeSetStringProc
@@ -77,6 +82,9 @@ type
     closeCount*: FakeGetIntProc
     activateCount*: FakeGetIntProc
     deactivateCount*: FakeGetIntProc
+    recomputeCount*: FakeGetIntProc
+    setPortLatency*: FakeSetPortLatencyProc
+    portLatency*: FakeGetPortLatencyProc
     isActive*: FakeGetIntProc
     callbacksCleared*: FakeGetIntProc
     requestedClientName*: FakeGetStringProc
@@ -133,6 +141,7 @@ proc `=sink`*(destination: var FakeJackControls; source: FakeJackControls) =
   destination.setActivateStatus = source.setActivateStatus
   destination.setDeactivateStatus = source.setDeactivateStatus
   destination.setCloseStatus = source.setCloseStatus
+  destination.setRecomputeStatus = source.setRecomputeStatus
   destination.setClientNameSize = source.setClientNameSize
   destination.setPortNameSize = source.setPortNameSize
   destination.setActualClientName = source.setActualClientName
@@ -144,6 +153,9 @@ proc `=sink`*(destination: var FakeJackControls; source: FakeJackControls) =
   destination.closeCount = source.closeCount
   destination.activateCount = source.activateCount
   destination.deactivateCount = source.deactivateCount
+  destination.recomputeCount = source.recomputeCount
+  destination.setPortLatency = source.setPortLatency
+  destination.portLatency = source.portLatency
   destination.isActive = source.isActive
   destination.callbacksCleared = source.callbacksCleared
   destination.requestedClientName = source.requestedClientName
@@ -233,6 +245,8 @@ proc openFakeJackControls*(): Result[FakeJackControls] =
     "pluginhost_fake_jack_set_deactivate_status")
   resolve(setCloseStatus, FakeSetIntProc,
     "pluginhost_fake_jack_set_close_status")
+  resolve(setRecomputeStatus, FakeSetIntProc,
+    "pluginhost_fake_jack_set_recompute_status")
   resolve(setClientNameSize, FakeSetIntProc,
     "pluginhost_fake_jack_set_client_name_size")
   resolve(setPortNameSize, FakeSetIntProc,
@@ -254,6 +268,12 @@ proc openFakeJackControls*(): Result[FakeJackControls] =
     "pluginhost_fake_jack_activate_count")
   resolve(deactivateCount, FakeGetIntProc,
     "pluginhost_fake_jack_deactivate_count")
+  resolve(recomputeCount, FakeGetIntProc,
+    "pluginhost_fake_jack_recompute_count")
+  resolve(setPortLatency, FakeSetPortLatencyProc,
+    "pluginhost_fake_jack_set_port_latency")
+  resolve(portLatency, FakeGetPortLatencyProc,
+    "pluginhost_fake_jack_port_latency")
   resolve(isActive, FakeGetIntProc, "pluginhost_fake_jack_is_active")
   resolve(callbacksCleared, FakeGetIntProc,
     "pluginhost_fake_jack_callbacks_cleared")

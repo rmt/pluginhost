@@ -660,6 +660,39 @@ proc configure*(backend: var JackBackend; plan: PortPlan;
     ))
   backend.configureRealized(plan, fpmSilence, endpoint)
 
+proc pluginLatency*(backend: JackBackend): uint32 =
+  if backend.callbackContext == nil:
+    return 0'u32
+  backend.callbackContext.pluginLatency()
+
+proc setPluginLatency*(backend: var JackBackend; frames: uint32): Result[Unit] =
+  if backend.stateValue != jbsConfigured or backend.callbackContext == nil:
+    return failure[Unit](backendError(
+      hekJackLatency,
+      "JACK plugin latency can only be set before backend activation",
+      backend,
+      "frames=" & $frames & "; state=" & $backend.stateValue,
+    ))
+  if not backend.callbackContext.setPluginLatency(frames):
+    return failure[Unit](backendError(
+      hekJackLatency, "could not publish JACK plugin latency", backend))
+  success()
+
+proc recomputeLatencies*(backend: var JackBackend): Result[Unit] =
+  if backend.stateValue != jbsActive or backend.client == nil:
+    return failure[Unit](backendError(
+      hekJackLatency,
+      "JACK latency recomputation requires an active backend", backend,
+      "state=" & $backend.stateValue,
+    ))
+  let status = backend.api.functions.recomputeTotalLatencies(backend.client)
+  if status != 0:
+    return failure[Unit](backendError(
+      hekJackLatency, "JACK total-latency recomputation failed", backend,
+      "status=" & $status,
+    ))
+  success()
+
 proc updateProcessEndpoint*(backend: var JackBackend;
                              endpoint: RtProcessEndpoint): Result[Unit] =
   if backend.stateValue != jbsConfigured or backend.callbackContext == nil:

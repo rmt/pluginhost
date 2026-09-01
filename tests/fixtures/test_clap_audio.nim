@@ -1,13 +1,14 @@
-import std/[os, strutils, unittest]
+import std/[options, os, strutils, unittest]
 
 import pluginhost/app/audio_slice
-import pluginhost/app/[host_session, run_config]
+import pluginhost/app/[host_session, main_reactor, plugin_services, run_config]
 import pluginhost/clap/ffi
 import pluginhost/clap/[audio_process, host_bridge, instance, loader]
-import pluginhost/domain/[errors, lifecycle, plugin_catalog, port_plan, result]
+import pluginhost/domain/[errors, lifecycle, plugin_catalog, port_plan, reactor,
+                          result]
 import pluginhost/jack/[backend, ffi]
 import pluginhost/rt/role_guard
-import pluginhost/platform/linux/dynlib
+import pluginhost/platform/linux/[dynlib, reactor as linux_reactor]
 import ./jack/fixture_api
 import ./clap/audio_fixture_api
 
@@ -543,6 +544,56 @@ suite "internal CLAP float32 audio endpoint":
       check observer.close().isOk
       check controls.close().isOk
 
+  test "JACK latency recomputation failure rolls active startup back":
+    var controls = openControls()
+    controls.setRecomputeStatus(-71)
+    defer: doAssert controls.close().isOk
+    var opened = openOwnedSlice("audio_tone")
+    var slice = move(opened.slice)
+    var observer = move(opened.observer)
+    let fixture = opened.fixture
+    defer:
+      discard slice.close()
+      discard observer.close()
+
+    var started = slice.start()
+    check not started.isOk
+    check started.error.kind == hekJackLatency
+    check started.error.context.contains("status=-71")
+    check slice.state == iassReady
+    check controls.isActive() == 0
+    check controls.activateCount() == 1
+    check controls.deactivateCount() == 1
+    check fixture.startCalls() == 1'u32
+    check fixture.stopCalls() == 1'u32
+    check fixture.deactivateCalls() == 1'u32
+    check slice.close().isOk
+    check fixture.destroyCalls() == 1'u32
+    check observer.close().isOk
+
+  test "malformed latency extension fails startup and rolls activation back":
+    var controls = openControls()
+    defer: doAssert controls.close().isOk
+    var opened = openOwnedSlice("audio_latency_missing_get")
+    var slice = move(opened.slice)
+    var observer = move(opened.observer)
+    let fixture = opened.fixture
+    defer:
+      discard slice.close()
+      discard observer.close()
+
+    var started = slice.start()
+    check not started.isOk
+    check started.error.kind == hekClapPlugin
+    check started.error.message.contains("missing get callback")
+    check slice.state == iassReady
+    check fixture.activateCalls() == 1'u32
+    check fixture.deactivateCalls() == 1'u32
+    check fixture.startCalls() == 0'u32
+    check slice.close().isOk
+    check fixture.destroyCalls() == 1'u32
+    check observer.close().isOk
+
   test "audio capacities apply independently by direction and recover":
     var opened = openInstance("audio_tone")
     var instance = move(opened.instance)
@@ -618,3 +669,73 @@ suite "internal CLAP float32 audio endpoint":
     require process.isOk
     var owner = move(process.value)
     check owner.close().isOk
+
+  test "timer FD dirty and latency services dispatch through the public adapters":
+    var controls = openControls()
+    defer: doAssert controls.close().isOk
+    var driverResult = linux_reactor.openLinuxReactorDriver()
+    require driverResult.isOk
+    var reactorResult = initMainReactor(driverResult.value)
+    require reactorResult.isOk
+    var reactor = move(reactorResult.value)
+    let services = newPluginServiceRegistry(reactor)
+
+    let path = audioFixturePath("audio_tone")
+    var observerResult = openDynamicLibrary(path)
+    require observerResult.isOk
+    var observer = move(observerResult.value)
+    let fixture = audioFixtureApi(observer)
+    fixture.reset()
+    var moduleResult = openClapModule(path)
+    require moduleResult.isOk
+    var module = move(moduleResult.value)
+    var catalog = module.readCatalog()
+    require catalog.isOk
+    var selected = catalog.value.selectDescriptor(PluginSelector(
+      kind: pskImplicitSingle))
+    require selected.isOk
+    var opened = openInternalAudioSlice(
+      move(module), move(selected.value), fakeConfig("services-fixture"),
+      services.servicePointer)
+    require opened.isOk
+    var slice = move(opened.value)
+    defer:
+      discard services.close()
+      discard slice.close()
+      discard observer.close()
+      discard reactor.close()
+
+    require slice.start().isOk
+    check slice.jackBackend.pluginLatency == 257'u32
+    check controls.recomputeCount() == 1
+    check fixture.signalFd() == 0
+
+    var iterations = 0
+    while (fixture.timerCalls() == 0'u32 or fixture.fdCalls() == 0'u32) and
+        iterations < 8:
+      var ready = reactor.wait(monotonicNanos(100_000_000))
+      require ready.isOk
+      for rawEvent in ready.value:
+        let event = services.classify(rawEvent)
+        if event.isNone:
+          continue
+        case event.get.kind
+        of psekTimer:
+          require slice.callOnTimer(event.get.timerId).isOk
+          require services.completeTimerDispatch(event.get.timerId).isOk
+        of psekFd:
+          require slice.callOnFd(event.get.fd, event.get.fdFlags).isOk
+      inc iterations
+
+    check fixture.timerCalls() == 1'u32
+    check fixture.fdCalls() == 1'u32
+    check services.activeTimerCount == 0
+    check services.activeFdCount == 0
+    check slice.takeStateDirty()
+    check not slice.takeStateDirty()
+    check fixture.contractFailures() == 0'u32
+    check slice.stop().isOk
+    check services.close().isOk
+    check slice.close().isOk
+    check observer.close().isOk
+    check reactor.close().isOk

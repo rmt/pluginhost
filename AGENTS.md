@@ -49,8 +49,8 @@ The progress table changes only after human review. A task appearing in the plan
 As of the latest reviewed state:
 
 - Default/current branch: `main`; inspect `git status` and `git log` before editing.
-- Version: `0.0.8-dev` (`pluginhost.nimble` uses numeric `0.0.8` because of Nimble metadata syntax).
-- Increments 0 through 6 are approved. Increment 7 is implemented and awaiting review.
+- Version: `0.0.9-dev` (`pluginhost.nimble` uses numeric `0.0.9` because of Nimble metadata syntax).
+- Increments 0 through 7 and Increment 8 review unit 8A are approved. Review unit 8B has not started.
 - The CLI uses exactly pinned `argparse` 4.0.2.
 - `list` and `scan` report copied CLAP descriptors without creating a plugin
   instance; canonical `run` now provides a headless signal-controlled JACK runtime.
@@ -58,18 +58,18 @@ As of the latest reviewed state:
 - CLAP/JACK declarations, Linux DSO ownership, C/Nim callbacks, and the ARC RT
   spike retain their ABI, foreign-thread, allocator, and generated-C checks.
 - The shared build profile is ARC, threads on, panics on, and Nim signal handlers disabled.
-- The current suite contains 92 unit, 25 ABI, 48 fixture, 9 RT, and 5 live integration tests (179 total), plus required generated-C negative-canary rejection.
-- The public headless runtime composes the existing bounded CLAP/JACK audio/event slice with an `epoll`/`signalfd` reactor, generation-safe timers/FDs, main-thread callback service, orderly shutdown, and atomic PID-file ownership. GUI, state, parameters, restart, latency, and later host extensions remain unimplemented.
+- The current suite contains 98 unit, 25 ABI, 51 fixture, 9 RT, and 5 live integration tests (188 total), plus required generated-C negative-canary rejection.
+- The public headless runtime composes the bounded CLAP/JACK audio/event slice with an `epoll`/`signalfd` reactor, CLAP timer/FD services, state-dirty notification, plugin/JACK latency propagation, main-thread callbacks, orderly shutdown, and atomic PID-file ownership. State serialization, parameters, restart/rescans, GUI, and later host extensions remain unimplemented.
 - Remote `origin` is configured; no project license is currently configured.
 
 Current source responsibilities:
 
 - `src/pluginhost.nim` — process composition root and exit handling.
-- `src/pluginhost/app/` — CLI configuration/output, public `HostSession` policy, internal audio composition, and backend-neutral main-reactor scheduling.
+- `src/pluginhost/app/` — CLI configuration/output, public `HostSession` policy, internal audio composition, backend-neutral main-reactor scheduling, and generation-safe CLAP timer/FD registry ownership.
 - `src/pluginhost/domain/` — typed results/errors/lifecycle/reactor values plus host-owned catalog and immutable port plans.
 - `src/pluginhost/clap/ffi.nim` — stable CLAP 1.2.10 raw ABI declarations.
 - `src/pluginhost/clap/loader.nim` — move-only entry/factory ownership, copied catalog extraction, and checked plugin creation.
-- `src/pluginhost/clap/host_bridge.nim` and `instance.nim` — stable host callbacks, bounded request/log transport, and one-instance lifecycle ownership.
+- `src/pluginhost/clap/host_bridge.nim`, `main_thread_services.nim`, and `instance.nim` — stable host callbacks/service boundary, bounded request/log transport, extension dispatch, and one-instance lifecycle ownership.
 - `src/pluginhost/clap/port_inspector.nim`, `audio_process.nim`, and `event_bridge.nim` — bounded port inspection, grouped zero-copy float32 processing, and fixed-capacity sample-accurate event translation.
 - `src/pluginhost/discovery/paths.nim` and `scanner.nim` — ordered roots, deterministic
   candidate traversal, canonical deduplication, and scan reports.
@@ -119,23 +119,20 @@ nimble all
 
 For user-visible CLI changes, also exercise the compiled process directly and verify stdout, stderr, signals, PID cleanup, and exit codes. Deferred GUI/state/restart capabilities remain explicit failures.
 
-## Current review candidate: Increment 7 — reactor, signals, and orderly process control
+## Next planned work: Increment 8B — parameters, restart, rescans, and sleep/wake
 
-Increment 6 is approved. Increment 7 enables canonical headless `run` only after blocking
-handled signals, constructing a generation-safe `epoll` reactor, and registering a
-nonblocking `signalfd` before plugin/JACK startup. It dispatches `on_main_thread()` within
-a 16 ms active service bound, refreshes nonstructural JACK configuration, adopts server
-shutdown after post-callback publication, handles process errors, and owns an optional
-atomically published PID file. ADR 0006 records the direct Linux boundary.
+Review unit 8A is approved. It added stable `clap.state` dirty, `clap.latency`,
+`clap.timer-support`, and `clap.posix-fd-support` host services, a bounded
+generation-safe 256-timer/256-FD registry, quiescent teardown, and atomic JACK
+latency publication. The strict reviewed gate passed 188 tests.
 
-Ordinary GUI policy warns and falls back headlessly; required/scaled GUI and requested
-state operations fail explicitly. Restart, parameters, timer/FD CLAP extensions, latency,
-structural rescans/reconnection, GUI, and state remain deferred. Stop at the Increment 7
-review gate.
-
-After approval, the next fresh session must present an Increment 8 pre-code package before
-advertising host extensions or changing parameter, timer/FD, restart, rescan, reconnection,
-or latency behavior. Do not advance to `0.0.9-dev` or begin Increment 8 without approval.
+Review unit 8B has not started. Before editing it, inspect the current approved state,
+run the existing verification matrix, and present a fresh pre-code package for complete
+parameters/flush transport, restart, audio/note/parameter rescans, quiescent JACK port
+rebuild/reconnection policy, and sleep/wake behavior. It must describe the parameter
+concurrency boundary and `flush()`/`process()` exclusion, restart state machine, dynamic
+port/reconnection policy, bounded transports, test fixtures, RT evidence, risks, and
+non-goals. Stop for explicit owner approval before implementing 8B.
 
 ## Non-negotiable engineering rules
 

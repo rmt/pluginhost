@@ -1,7 +1,50 @@
 import std/unittest
 
-import pluginhost/clap/host_bridge
-import pluginhost/clap/ffi
+import pluginhost/clap/[ffi, host_bridge, main_thread_services]
+
+type TestMainServices = object
+  timerId: uint32
+  timerRegistered: bool
+  fd: int32
+  fdFlags: uint32
+
+proc registerTimer(context: pointer; periodMs: uint32; timerId: ptr uint32): bool {.cdecl, gcsafe, raises: [].} =
+  let state = cast[ptr TestMainServices](context)
+  if state == nil or timerId == nil or periodMs != 34'u32:
+    return false
+  state.timerId = 17'u32
+  state.timerRegistered = true
+  timerId[] = state.timerId
+  true
+
+proc unregisterTimer(context: pointer; timerId: uint32): bool {.cdecl, gcsafe, raises: [].} =
+  let state = cast[ptr TestMainServices](context)
+  if state == nil or not state.timerRegistered or timerId != state.timerId:
+    return false
+  state.timerRegistered = false
+  true
+
+proc registerFd(context: pointer; fd: int32; flags: uint32): bool {.cdecl, gcsafe, raises: [].} =
+  let state = cast[ptr TestMainServices](context)
+  if state == nil or fd < 0:
+    return false
+  state.fd = fd
+  state.fdFlags = flags
+  true
+
+proc modifyFd(context: pointer; fd: int32; flags: uint32): bool {.cdecl, gcsafe, raises: [].} =
+  let state = cast[ptr TestMainServices](context)
+  if state == nil or fd != state.fd:
+    return false
+  state.fdFlags = flags
+  true
+
+proc unregisterFd(context: pointer; fd: int32): bool {.cdecl, gcsafe, raises: [].} =
+  let state = cast[ptr TestMainServices](context)
+  if state == nil or fd != state.fd:
+    return false
+  state.fd = -1
+  true
 
 suite "CLAP host bridge":
   test "host identity and supported extensions have stable storage":
@@ -12,9 +55,13 @@ suite "CLAP host bridge":
     check host.clapVersion == ClapVersionCurrent
     check $host.name == "pluginhost"
     check $host.vendor == "pluginhost"
-    check $host.version == "0.0.8-dev"
+    check $host.version == "0.0.9-dev"
     check host.getExtension(host, ClapExtLog.cstring) != nil
     check host.getExtension(host, ClapExtThreadCheck.cstring) != nil
+    check host.getExtension(host, ClapExtState.cstring) != nil
+    check host.getExtension(host, ClapExtLatency.cstring) != nil
+    check host.getExtension(host, ClapExtTimerSupport.cstring) == nil
+    check host.getExtension(host, ClapExtPosixFdSupport.cstring) == nil
     check host.getExtension(host, "clap.unsupported") == nil
     check host.getExtension(host, ClapExtLog.cstring) ==
       host.getExtension(host, ClapExtLog.cstring)
@@ -85,3 +132,48 @@ suite "CLAP host bridge":
 
     check extension.isMainThread(host)
     check not extension.isAudioThread(host)
+
+  test "dirty and latency notifications coalesce on the main thread":
+    let bridge = newClapHostBridge()
+    let host = bridge.hostPointer
+    let state = cast[ptr ClapHostState](
+      host.getExtension(host, ClapExtState.cstring))
+    let latency = cast[ptr ClapHostLatency](
+      host.getExtension(host, ClapExtLatency.cstring))
+
+    state.markDirty(host)
+    state.markDirty(host)
+    latency.changed(host)
+    latency.changed(host)
+    check bridge.takeStateDirty()
+    check not bridge.takeStateDirty()
+    check bridge.takeLatencyChanged()
+    check not bridge.takeLatencyChanged()
+
+  test "timer and FD services are advertised only with a complete stable table":
+    var state = TestMainServices(fd: -1)
+    var services = ClapMainThreadServices(
+      context: addr state, registerTimer: registerTimer,
+      unregisterTimer: unregisterTimer, registerFd: registerFd,
+      modifyFd: modifyFd, unregisterFd: unregisterFd)
+    let bridge = newClapHostBridge(addr services)
+    let host = bridge.hostPointer
+    let timers = cast[ptr ClapHostTimerSupport](
+      host.getExtension(host, ClapExtTimerSupport.cstring))
+    let fds = cast[ptr ClapHostPosixFdSupport](
+      host.getExtension(host, ClapExtPosixFdSupport.cstring))
+    require timers != nil and fds != nil
+
+    var timerId = ClapInvalidId
+    check not timers.registerTimer(host, 0'u32, addr timerId)
+    check timers.registerTimer(host, 34'u32, addr timerId)
+    check timerId == 17'u32
+    check timers.unregisterTimer(host, timerId)
+    check not timers.unregisterTimer(host, timerId)
+
+    check not fds.registerFd(host, -1, ClapPosixFdRead)
+    check not fds.registerFd(host, 9, 0'u32)
+    check fds.registerFd(host, 9, ClapPosixFdRead)
+    check fds.modifyFd(host, 9, ClapPosixFdRead or ClapPosixFdWrite)
+    check state.fdFlags == (ClapPosixFdRead or ClapPosixFdWrite)
+    check fds.unregisterFd(host, 9)

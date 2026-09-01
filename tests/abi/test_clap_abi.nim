@@ -80,6 +80,8 @@ suite "CLAP raw ABI":
       int64(ClapLogFatal), int64(ClapLogHostMisbehaving),
       int64(ClapLogPluginMisbehaving),
       int64(ClapRenderRealtime), int64(ClapRenderOffline),
+      int64(ClapPosixFdRead), int64(ClapPosixFdWrite),
+      int64(ClapPosixFdError),
     ]
     for index, value in expected:
       check value == abiConstant(int32(index + 1))
@@ -92,6 +94,10 @@ suite "CLAP raw ABI":
     check $abiString(6) == ClapExtLog
     check $abiString(7) == ClapExtThreadCheck
     check $abiString(8) == ClapExtRender
+    check $abiString(9) == ClapExtState
+    check $abiString(10) == ClapExtLatency
+    check $abiString(11) == ClapExtTimerSupport
+    check $abiString(12) == ClapExtPosixFdSupport
 
   test "structure sizes and alignments match the official headers":
     checkLayout(ClapVersion, 1)
@@ -123,6 +129,13 @@ suite "CLAP raw ABI":
     checkLayout(ClapHostLog, 33)
     checkLayout(ClapHostThreadCheck, 34)
     checkLayout(ClapPluginRender, 35)
+    checkLayout(ClapHostState, 37)
+    checkLayout(ClapPluginLatency, 38)
+    checkLayout(ClapHostLatency, 39)
+    checkLayout(ClapPluginTimerSupport, 40)
+    checkLayout(ClapHostTimerSupport, 41)
+    checkLayout(ClapPluginPosixFdSupport, 42)
+    checkLayout(ClapHostPosixFdSupport, 43)
 
   test "event field offsets match the official headers":
     checkField(ClapVersion, major, 1, 1)
@@ -275,6 +288,16 @@ suite "CLAP raw ABI":
     checkField(ClapHostThreadCheck, isAudioThread, 34, 2)
     checkField(ClapPluginRender, hasHardRealtimeRequirement, 35, 1)
     checkField(ClapPluginRender, set, 35, 2)
+    checkField(ClapHostState, markDirty, 37, 1)
+    checkField(ClapPluginLatency, get, 38, 1)
+    checkField(ClapHostLatency, changed, 39, 1)
+    checkField(ClapPluginTimerSupport, onTimer, 40, 1)
+    checkField(ClapHostTimerSupport, registerTimer, 41, 1)
+    checkField(ClapHostTimerSupport, unregisterTimer, 41, 2)
+    checkField(ClapPluginPosixFdSupport, onFd, 42, 1)
+    checkField(ClapHostPosixFdSupport, registerFd, 43, 1)
+    checkField(ClapHostPosixFdSupport, modifyFd, 43, 2)
+    checkField(ClapHostPosixFdSupport, unregisterFd, 43, 3)
 
   test "all bound CLAP callbacks use pointer-sized C function values":
     checkFunctionPointer(ClapInputEventsSizeProc)
@@ -310,3 +333,13 @@ suite "CLAP raw ABI":
     checkFunctionPointer(ClapHostNotePortsRescanProc)
     checkFunctionPointer(ClapPluginRenderHasHardRealtimeRequirementProc)
     checkFunctionPointer(ClapPluginRenderSetProc)
+    checkFunctionPointer(ClapHostStateMarkDirtyProc)
+    checkFunctionPointer(ClapPluginLatencyGetProc)
+    checkFunctionPointer(ClapHostLatencyChangedProc)
+    checkFunctionPointer(ClapPluginTimerOnTimerProc)
+    checkFunctionPointer(ClapHostTimerRegisterProc)
+    checkFunctionPointer(ClapHostTimerUnregisterProc)
+    checkFunctionPointer(ClapPluginPosixFdOnFdProc)
+    checkFunctionPointer(ClapHostPosixFdRegisterProc)
+    checkFunctionPointer(ClapHostPosixFdModifyProc)
+    checkFunctionPointer(ClapHostPosixFdUnregisterProc)

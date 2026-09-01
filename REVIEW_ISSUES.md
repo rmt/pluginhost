@@ -3,12 +3,12 @@
 **Review date:** 2026-08-28
 **Reviewed baseline:** `main` at `642b629`, version `0.0.5-dev`
 **Disposition approval:** 2026-08-28 Increment 4 pre-code review
-**Implementation approvals:** Increments 4 through 6 reviewed and approved; Increment 7 awaiting review
+**Implementation approvals:** Increments 4 through 8A reviewed and approved; 8B not started
 
 Increment 3B remains approved. The owner approved the dispositions below and reviewed
-Increments 4 through 6. Increment 7's reactor/signal implementation is a review candidate.
-This register distinguishes accepted, implemented, and deliberately deferred work; deferred
-findings remain inputs for their named increments rather than silently becoming behavior.
+Increments 4 through 8A. Review unit 8A's main-thread service/latency implementation is
+approved. This register distinguishes accepted, implemented, and deliberately deferred
+work; deferred findings remain inputs for their named increments.
 
 ## Approved dispositions
 
@@ -17,14 +17,14 @@ findings remain inputs for their named increments rather than silently becoming 
 | 1 | Use `--panics:on`; callbacks also disable checks and validate explicitly. | Implemented and approved in 4A |
 | 2 | Pin ARC, threads, panics, and signal behavior in one product/test profile. | Implemented and approved in 4A |
 | 3 | Replace eager JACK imports with a checked move-only DSO/procedure table. | Implemented and approved in 4A |
-| 4 | Disable Nim signal handlers now; block/consume signals explicitly before public JACK-backed `run`. | Build part approved in 4A; epoll/signalfd service implemented in Increment 7 candidate |
+| 4 | Disable Nim signal handlers now; block/consume signals explicitly before public JACK-backed `run`. | Build part approved in 4A; epoll/signalfd service implemented and approved in Increment 7 |
 | 5 | Observe freewheel transitions but remain in `CLAP_RENDER_REALTIME`; offline rendering remains unsupported. | Notification policy implemented and approved in 4B; CLAP mode remains in 5 |
 | 6 | Apply bounded allocation-free rules to every JACK-invoked callback; latency uses only mandated JACK APIs. | Behavior approved in 4B; strengthened live/static evidence implemented and approved in 4C |
 | 7 | Retain strict validator-compatible port checks unless independent plugins prove a compatibility problem. | Accepted current behavior |
 | 8 | Retain `transport = nil` and record its compatibility risk. | Risk recorded in 4A; runtime behavior in 5 |
 | 9 | Treat `TAIL` and `CONTINUE_IF_NOT_QUIET` conservatively as continued processing. | Increment 5 |
 | 10 | Document trusted in-process unload risk and add same-DSO double-open coverage. | Increment 11 hardening |
-| 11 | Add xrun/freewheel support now; defer connection/reconnection and MIDI-loss APIs to their owning increments. | ABI approved in 4A; callbacks approved in 4B; remaining APIs in 6/8 |
+| 11 | Add xrun/freewheel support now; defer connection/reconnection and MIDI-loss APIs to their owning increments. | ABI/callbacks approved in 4; MIDI loss approved in 6; reconnection remains in 8B |
 | 12 | Realize ports transactionally, diagnose the failed count/name, validate actual JACK name limits, and roll back completely. | Implemented and approved in 4B |
 | 13 | Build/test `AudioRoleGuard` in 4B and connect `clap.thread-check` atomically with CLAP processing in 5. | Guard implemented and approved in 4B; CLAP connection remains in 5 |
 | 14 | Keep current scan policy; document partial-failure status and `CLAP_PATH` relative/tilde behavior. | Implemented and approved in 4A |

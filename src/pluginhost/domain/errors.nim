@@ -47,6 +47,7 @@ type
     hekJackActivation
     hekJackDeactivation
     hekJackQuiescence
+    hekJackLatency
     hekDiscoveryRoot
     hekDiscoveryTraversal
     hekDiscoveryCandidate
@@ -120,5 +121,5 @@ proc exitCode*(error: HostError): int =
       hekJackLibraryClose, hekJackClientOpen, hekJackClientClose,
       hekJackCallbackRegistration, hekJackPortName, hekJackPortRegistration,
       hekJackPortAlias, hekJackActivation, hekJackDeactivation,
-      hekJackQuiescence, hekReactor, hekSignal, hekPidFile:
+      hekJackQuiescence, hekJackLatency, hekReactor, hekSignal, hekPidFile:
     ExitFailure

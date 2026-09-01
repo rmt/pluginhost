@@ -18,6 +18,10 @@ const
   ClapExtNotePorts* = "clap.note-ports"
   ClapExtRender* = "clap.render"
   ClapExtLog* = "clap.log"
+  ClapExtState* = "clap.state"
+  ClapExtLatency* = "clap.latency"
+  ClapExtTimerSupport* = "clap.timer-support"
+  ClapExtPosixFdSupport* = "clap.posix-fd-support"
   ClapExtThreadCheck* = "clap.thread-check"
   ClapPortMono* = "mono"
   ClapPortStereo* = "stereo"
@@ -93,6 +97,10 @@ const
   ClapLogFatal* = 4'i32
   ClapLogHostMisbehaving* = 5'i32
   ClapLogPluginMisbehaving* = 6'i32
+
+  ClapPosixFdRead* = 1'u32 shl 0
+  ClapPosixFdWrite* = 1'u32 shl 1
+  ClapPosixFdError* = 1'u32 shl 2
 
 type
   ClapId* = uint32
@@ -250,6 +258,37 @@ type
   ClapHostThreadCheck* {.bycopy.} = object
     isMainThread*: ClapHostThreadCheckProc
     isAudioThread*: ClapHostThreadCheckProc
+
+  ClapHostStateMarkDirtyProc* = proc(host: ptr ClapHost) {.cdecl, gcsafe, raises: [].}
+  ClapHostState* {.bycopy.} = object
+    markDirty*: ClapHostStateMarkDirtyProc
+
+  ClapPluginLatencyGetProc* = proc(plugin: ptr ClapPlugin): uint32 {.cdecl, gcsafe, raises: [].}
+  ClapPluginLatency* {.bycopy.} = object
+    get*: ClapPluginLatencyGetProc
+  ClapHostLatencyChangedProc* = proc(host: ptr ClapHost) {.cdecl, gcsafe, raises: [].}
+  ClapHostLatency* {.bycopy.} = object
+    changed*: ClapHostLatencyChangedProc
+
+  ClapPluginTimerOnTimerProc* = proc(plugin: ptr ClapPlugin; timerId: ClapId) {.cdecl, gcsafe, raises: [].}
+  ClapPluginTimerSupport* {.bycopy.} = object
+    onTimer*: ClapPluginTimerOnTimerProc
+  ClapHostTimerRegisterProc* = proc(host: ptr ClapHost; periodMs: uint32; timerId: ptr ClapId): bool {.cdecl, gcsafe, raises: [].}
+  ClapHostTimerUnregisterProc* = proc(host: ptr ClapHost; timerId: ClapId): bool {.cdecl, gcsafe, raises: [].}
+  ClapHostTimerSupport* {.bycopy.} = object
+    registerTimer*: ClapHostTimerRegisterProc
+    unregisterTimer*: ClapHostTimerUnregisterProc
+
+  ClapPluginPosixFdOnFdProc* = proc(plugin: ptr ClapPlugin; fd: cint; flags: uint32) {.cdecl, gcsafe, raises: [].}
+  ClapPluginPosixFdSupport* {.bycopy.} = object
+    onFd*: ClapPluginPosixFdOnFdProc
+  ClapHostPosixFdRegisterProc* = proc(host: ptr ClapHost; fd: cint; flags: uint32): bool {.cdecl, gcsafe, raises: [].}
+  ClapHostPosixFdModifyProc* = proc(host: ptr ClapHost; fd: cint; flags: uint32): bool {.cdecl, gcsafe, raises: [].}
+  ClapHostPosixFdUnregisterProc* = proc(host: ptr ClapHost; fd: cint): bool {.cdecl, gcsafe, raises: [].}
+  ClapHostPosixFdSupport* {.bycopy.} = object
+    registerFd*: ClapHostPosixFdRegisterProc
+    modifyFd*: ClapHostPosixFdModifyProc
+    unregisterFd*: ClapHostPosixFdUnregisterProc
 
   ClapPluginDescriptor* {.bycopy.} = object
     clapVersion*: ClapVersion

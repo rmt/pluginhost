@@ -2,7 +2,7 @@ import std/[posix, typetraits]
 
 import ../rt/[atomic_pod, role_guard]
 import ../version
-import ./ffi
+import ./[ffi, main_thread_services]
 
 const
   HostLogQueueCapacity* = 256
@@ -36,17 +36,30 @@ type
     logs: ptr HostLogQueue
     droppedLogs: ptr RtAtomicU64
     logExtension: ptr ClapHostLog
+    stateExtension: ptr ClapHostState
+    latencyExtension: ptr ClapHostLatency
+    timerExtension: ptr ClapHostTimerSupport
+    posixFdExtension: ptr ClapHostPosixFdSupport
     threadCheckExtension: ptr ClapHostThreadCheck
+    mainServices: ptr ClapMainThreadServices
+    stateDirty: ptr RtAtomicU32
+    latencyChanged: ptr RtAtomicU32
     audioRoleAddress: ptr RtAtomicU64
     mainThread: Pthread
 
   ClapHostBridge* = ref object
     host: ClapHost
     logExtension: ClapHostLog
+    stateExtension: ClapHostState
+    latencyExtension: ClapHostLatency
+    timerExtension: ClapHostTimerSupport
+    posixFdExtension: ClapHostPosixFdSupport
     threadCheckExtension: ClapHostThreadCheck
     callbackData: HostCallbackData
     requests: RtAtomicU32
     droppedLogs: RtAtomicU64
+    stateDirty: RtAtomicU32
+    latencyChanged: RtAtomicU32
     audioRoleAddress: RtAtomicU64
     logs: HostLogQueue
     name: string
@@ -136,6 +149,16 @@ proc hostGetExtension(host: ptr ClapHost; extensionId: cstring): pointer {.
     return nil
   if cstringEquals(extensionId, ClapExtLog.cstring):
     return cast[pointer](data.logExtension)
+  if cstringEquals(extensionId, ClapExtState.cstring):
+    return cast[pointer](data.stateExtension)
+  if cstringEquals(extensionId, ClapExtLatency.cstring):
+    return cast[pointer](data.latencyExtension)
+  if cstringEquals(extensionId, ClapExtTimerSupport.cstring) and
+      data.mainServices.isComplete:
+    return cast[pointer](data.timerExtension)
+  if cstringEquals(extensionId, ClapExtPosixFdSupport.cstring) and
+      data.mainServices.isComplete:
+    return cast[pointer](data.posixFdExtension)
   if cstringEquals(extensionId, ClapExtThreadCheck.cstring):
     return cast[pointer](data.threadCheckExtension)
   nil
@@ -193,9 +216,72 @@ proc hostIsAudioThread(host: ptr ClapHost): bool {.
   roleAddress != 0'u64 and
     isAudioRoleThread(cast[ptr AudioRoleGuard](roleAddress))
 
+proc hostStateMarkDirty(host: ptr ClapHost) {.
+    exportc: "pluginhost_clap_host_state_mark_dirty", cdecl, gcsafe, raises: [].} =
+  let data = callbackData(host)
+  if data != nil and data.stateDirty != nil and
+      pthread_equal(pthread_self(), data.mainThread) != 0:
+    data.stateDirty[].storeRelease(1'u32)
+
+proc hostLatencyChanged(host: ptr ClapHost) {.
+    exportc: "pluginhost_clap_host_latency_changed", cdecl, gcsafe, raises: [].} =
+  let data = callbackData(host)
+  if data != nil and data.latencyChanged != nil and
+      pthread_equal(pthread_self(), data.mainThread) != 0:
+    data.latencyChanged[].storeRelease(1'u32)
+
+proc hostRegisterTimer(host: ptr ClapHost; periodMs: uint32;
+                       timerId: ptr ClapId): bool {.
+    exportc: "pluginhost_clap_host_register_timer", cdecl, gcsafe, raises: [].} =
+  let data = callbackData(host)
+  if data == nil or timerId == nil or periodMs == 0'u32 or
+      pthread_equal(pthread_self(), data.mainThread) == 0 or
+      not data.mainServices.isComplete:
+    return false
+  data.mainServices.registerTimer(
+    data.mainServices.context, periodMs, cast[ptr uint32](timerId))
+
+proc hostUnregisterTimer(host: ptr ClapHost; timerId: ClapId): bool {.
+    exportc: "pluginhost_clap_host_unregister_timer", cdecl, gcsafe, raises: [].} =
+  let data = callbackData(host)
+  if data == nil or pthread_equal(pthread_self(), data.mainThread) == 0 or
+      not data.mainServices.isComplete:
+    return false
+  data.mainServices.unregisterTimer(data.mainServices.context, timerId)
+
+proc validFdFlags(flags: uint32): bool {.inline, gcsafe, raises: [].} =
+  flags != 0'u32 and
+    (flags and not (ClapPosixFdRead or ClapPosixFdWrite or ClapPosixFdError)) == 0'u32
+
+proc hostRegisterFd(host: ptr ClapHost; fd: cint; flags: uint32): bool {.
+    exportc: "pluginhost_clap_host_register_fd", cdecl, gcsafe, raises: [].} =
+  let data = callbackData(host)
+  if data == nil or fd < 0 or not validFdFlags(flags) or
+      pthread_equal(pthread_self(), data.mainThread) == 0 or
+      not data.mainServices.isComplete:
+    return false
+  data.mainServices.registerFd(data.mainServices.context, int32(fd), flags)
+
+proc hostModifyFd(host: ptr ClapHost; fd: cint; flags: uint32): bool {.
+    exportc: "pluginhost_clap_host_modify_fd", cdecl, gcsafe, raises: [].} =
+  let data = callbackData(host)
+  if data == nil or fd < 0 or not validFdFlags(flags) or
+      pthread_equal(pthread_self(), data.mainThread) == 0 or
+      not data.mainServices.isComplete:
+    return false
+  data.mainServices.modifyFd(data.mainServices.context, int32(fd), flags)
+
+proc hostUnregisterFd(host: ptr ClapHost; fd: cint): bool {.
+    exportc: "pluginhost_clap_host_unregister_fd", cdecl, gcsafe, raises: [].} =
+  let data = callbackData(host)
+  if data == nil or fd < 0 or pthread_equal(pthread_self(), data.mainThread) == 0 or
+      not data.mainServices.isComplete:
+    return false
+  data.mainServices.unregisterFd(data.mainServices.context, int32(fd))
+
 {.pop.}
 
-proc newClapHostBridge*(): ClapHostBridge =
+proc newClapHostBridge*(mainServices: ptr ClapMainThreadServices = nil): ClapHostBridge =
   new(result)
   result.name = ProductName
   result.vendor = ProductName
@@ -203,19 +289,35 @@ proc newClapHostBridge*(): ClapHostBridge =
   result.version = Version
   result.requests.storeRelaxed(0'u32)
   result.droppedLogs.storeRelaxed(0'u64)
+  result.stateDirty.storeRelaxed(0'u32)
+  result.latencyChanged.storeRelaxed(0'u32)
   result.audioRoleAddress.storeRelaxed(0'u64)
   result.logs.initLogQueue()
   result.callbackData.requests = addr result.requests
   result.callbackData.logs = addr result.logs
   result.callbackData.droppedLogs = addr result.droppedLogs
+  result.callbackData.stateDirty = addr result.stateDirty
+  result.callbackData.latencyChanged = addr result.latencyChanged
   result.callbackData.audioRoleAddress = addr result.audioRoleAddress
   result.callbackData.mainThread = pthread_self()
+  result.callbackData.mainServices = mainServices
   result.logExtension = ClapHostLog(log: hostLog)
+  result.stateExtension = ClapHostState(markDirty: hostStateMarkDirty)
+  result.latencyExtension = ClapHostLatency(changed: hostLatencyChanged)
+  result.timerExtension = ClapHostTimerSupport(
+    registerTimer: hostRegisterTimer, unregisterTimer: hostUnregisterTimer)
+  result.posixFdExtension = ClapHostPosixFdSupport(
+    registerFd: hostRegisterFd, modifyFd: hostModifyFd,
+    unregisterFd: hostUnregisterFd)
   result.threadCheckExtension = ClapHostThreadCheck(
     isMainThread: hostIsMainThread,
     isAudioThread: hostIsAudioThread,
   )
   result.callbackData.logExtension = addr result.logExtension
+  result.callbackData.stateExtension = addr result.stateExtension
+  result.callbackData.latencyExtension = addr result.latencyExtension
+  result.callbackData.timerExtension = addr result.timerExtension
+  result.callbackData.posixFdExtension = addr result.posixFdExtension
   result.callbackData.threadCheckExtension = addr result.threadCheckExtension
   result.host = ClapHost(
     clapVersion: ClapVersionCurrent,
@@ -274,6 +376,11 @@ proc takeDroppedLogs*(bridge: ClapHostBridge): uint64 {.gcsafe, raises: [].} =
     return 0'u64
   bridge.droppedLogs.exchangeAcquire(0'u64)
 
+proc takeStateDirty*(bridge: ClapHostBridge): bool {.gcsafe, raises: [].} =
+  bridge != nil and bridge.stateDirty.exchangeAcquire(0'u32) != 0'u32
+
+proc takeLatencyChanged*(bridge: ClapHostBridge): bool {.gcsafe, raises: [].} =
+  bridge != nil and bridge.latencyChanged.exchangeAcquire(0'u32) != 0'u32
 proc logMessage*(record: ClapHostLogRecord): string =
   var length = int(record.length)
   if length > HostLogMessageBytes:

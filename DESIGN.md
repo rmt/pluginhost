@@ -160,6 +160,11 @@ signal source/reactor before plugin or JACK work, moves one `InternalAudioSlice`
 session, services bounded control snapshots and CLAP requests, and releases PID, reactor,
 and signal-mask resources after audio/plugin/JACK teardown.
 
+Increment 8A makes `HostSession` own one fixed-capacity `PluginServiceRegistry` before
+plugin creation. Its stable callback table is borrowed by `ClapHostBridge`; registrations
+map CLAP timer IDs and POSIX FDs to reactor generation tokens. Shutdown first quiesces
+JACK/CLAP processing, then removes service registrations, then destroys the plugin.
+
 ### 5.3 `ClapRuntime`
 
 This package is split into several focused components:
@@ -169,6 +174,7 @@ This package is split into several focused components:
 - **`ClapInstance`** owns one initialized plugin and its cached extension pointers.
 - **`ClapLifecycle`** checks and executes legal plugin state transitions.
 - **`ClapHostBridge`** owns the stable `clap_host` object and all host extension vtables exposed to the plugin.
+- **`ClapMainThreadServices`** is a narrow stable callback table that lets host timer/FD vtables reach application-owned reactor policy without importing application modules.
 - **`ClapPortInspector`** builds audio/note port descriptions while deactivated.
 - **`ClapEventBridge`** translates JACK MIDI and CLAP events using preallocated storage.
 - **`ClapStateCodec`** adapts bounded file streams to CLAP stream callbacks.
@@ -258,6 +264,11 @@ Registrations use opaque tokens and generation numbers rather than raw object po
 
 The reactor calculates a bounded wait from the next timer and a control-request service deadline. Increment 7 caps active waits at 16 ms, dispatches coalesced `request_callback()` on the original main thread, treats `request_process()` as satisfied by continuous processing, and terminates explicitly on restart until Increment 8 owns restart. The audio thread performs no wakeup system call.
 
+Increment 8A uses those registrations for CLAP periodic timers and level-triggered POSIX
+FD readiness. The application registry is bounded to 256 entries of each kind, rejects
+duplicates and stale IDs/generations, and revalidates registrations after reentrant plugin
+callbacks so self-unregistration cannot rearm a removed timer.
+
 ### 5.8 `StateStore`
 
 Responsibilities:
@@ -307,6 +318,9 @@ Configuration values are validated before any plugin code executes.
 The CLAP inspector applies the strict stable consistency rules also enforced by the official validator. `JackBackend` realizes the plan only after it knows JACK's actual client name and limits: it validates canonical full names, prefixes metadata aliases with the actual client name, bounds/truncates aliases on UTF-8 boundaries, registers ports transactionally, and returns a fixed-layout `RtPortMap` containing handles and counts rather than metadata.
 
 A structural rescan creates a new plan and map only after JACK callbacks are quiescent. Live mutation or atomic replacement of a map is not needed initially.
+
+Increment 8A does not advertise host audio/note rescan extensions; complete structural
+rescan and port rebuild behavior remains review unit 8B.
 
 Increment 4B does not support structural reconfiguration of a configured backend. Its
 map is published once before activation and retained through client close, avoiding
@@ -532,6 +546,10 @@ Every step registers its acquired resource with the session's explicit cleanup p
 
 Requests arriving during restart remain set and are handled in a subsequent coalesced pass. A restart has a bounded retry/coalescing policy to prevent a misbehaving plugin from creating a tight restart loop.
 
+Restart remains unimplemented in review unit 8A and is owned by 8B. A plugin restart
+request therefore retains the existing explicit nonzero termination rather than claiming
+partial recovery.
+
 ### 10.3 Shutdown
 
 1. Mark the session stopping so new show/restart requests are ignored.
@@ -543,6 +561,10 @@ Requests arriving during restart remain set and are handled in a subsequent coal
 7. Deinitialize the CLAP entry and unload the library.
 8. Unregister/close remaining JACK resources.
 9. Remove the PID file and close reactor/signal resources.
+
+Increment 8A refines steps 2–6: after JACK deactivation and CLAP `stop_processing`, the
+session removes every CLAP timer/FD registration while the plugin and bridge remain valid;
+only then does it deactivate/destroy the plugin and close the backend/reactor.
 
 Increment 7 publishes PID content through a fully written and synchronized temporary inode
 and an atomic hard-link operation. Removal compares device/inode ownership so an externally
@@ -594,6 +616,16 @@ Real-time counters use atomics or single-writer fields and include:
 - Restart requests.
 
 The main thread periodically snapshots and reports deltas. Metrics are diagnostic and must not introduce audio-thread contention.
+
+### 11.6 Plugin latency
+
+After each successful CLAP activation, the main thread queries `clap.latency` while the
+plugin is active. It publishes the frame count through an audited atomic to the JACK
+callback context. The JACK latency callback only reads/writes documented JACK latency
+ranges with saturating addition; `jack_recompute_total_latencies` is invoked separately
+from the control plane after JACK activation. `clap_host_latency.changed()` coalesces an
+activation-time notification; a notification outside activation is treated as plugin
+misbehavior until 8B supplies restart.
 
 ## 12. FFI design
 
@@ -648,6 +680,7 @@ Plugin callbacks may request changes while the main thread is already inside a p
 | Frozen RT map/arena | `HostSession`, borrowed by `RtEngine` | Before JACK activation | After JACK deactivation |
 | X11 display/window | `X11WindowHost` | GUI creation | GUI destruction |
 | CLAP timer/FD entries | `MainReactor` registry | Plugin request | Unregister or plugin teardown |
+| CLAP main-service table | `PluginServiceRegistry`, borrowed by `ClapHostBridge` | Before plugin creation | After plugin destruction |
 | State temporary file | `StateStore` transaction | Save begins | Rename or rollback |
 | PID file | Session process service | Startup | Shutdown/rollback |
 
@@ -666,6 +699,7 @@ src/
       host_session.nim
       audio_slice.nim
       main_reactor.nim
+      plugin_services.nim
       run_config.nim
     discovery/
       paths.nim
@@ -686,6 +720,7 @@ src/
       audio_process.nim
       lifecycle.nim
       host_bridge.nim
+      main_thread_services.nim
       host_extensions.nim
       ports.nim
       events.nim
@@ -773,6 +808,10 @@ Increment 7 adds a separately launched public host process under the private ser
 test observes complete PID publication/removal, sends repeated GUI-reservation signals,
 and verifies clean `SIGINT`/`SIGTERM` exit while fake-backed tests inject JACK shutdown
 and CLAP process errors deterministically.
+
+Increment 8A extends the independent audio fixture with plugin-init timer/FD registration,
+real epoll dispatch, self-unregistration, dirty notification, and nonzero latency propagated
+through the fake JACK latency callback and control-plane recomputation.
 
 ### 16.2 Contract tests
 

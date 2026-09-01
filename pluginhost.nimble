@@ -1,7 +1,7 @@
 # Nimble 0.20 accepts only dotted numeric package versions and requires a
 # literal assignment. tests/unit/test_version.nim verifies this value against
 # the numeric core of VERSION.
-version       = "0.0.8"
+version       = "0.0.9"
 author        = "pluginhost contributors"
 description   = "A standalone Linux JACK host for CLAP plugins"
 license       = "UNLICENSED"
@@ -273,6 +273,7 @@ proc compileClapFixtures() =
   compileAudioFixtureVariant("audio_process_sleep", 6)
   compileAudioFixtureVariant("audio_process_tail", 7)
   compileAudioFixtureVariant("audio_process_continue_if_not_quiet", 8)
+  compileAudioFixtureVariant("audio_latency_missing_get", 9)
   compileEventFixtureVariant("events_raw", 0)
   compileEventFixtureVariant("events_clap", 1)
   compileEventFixtureVariant("events_midi2_only", 2)

@@ -1,4 +1,7 @@
+#define _GNU_SOURCE
 #include <stdbool.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -8,9 +11,14 @@
 #include <clap/ext/audio-ports.h>
 #include <clap/ext/log.h>
 #include <clap/ext/thread-check.h>
+#include <clap/ext/state.h>
+#include <clap/ext/latency.h>
+#include <clap/ext/timer-support.h>
+#include <clap/ext/posix-fd-support.h>
 #include <clap/factory/plugin-factory.h>
 #include <clap/plugin-features.h>
 
+#include <unistd.h>
 #if defined(__GNUC__) || defined(__clang__)
 #define AUDIO_FIXTURE_EXPORT __attribute__((visibility("default")))
 #else
@@ -30,6 +38,7 @@
 #define MODE_PROCESS_SLEEP 6
 #define MODE_PROCESS_TAIL 7
 #define MODE_PROCESS_CONTINUE_IF_NOT_QUIET 8
+#define MODE_LATENCY_MISSING_GET 9
 
 static const clap_host_t *fixture_host;
 static uint32_t activate_count;
@@ -54,6 +63,12 @@ static uintptr_t output_addresses[8];
 static int lifecycle_order[32];
 static uint32_t lifecycle_order_count;
 static uint32_t on_main_thread_count;
+static const clap_host_timer_support_t *fixture_host_timers;
+static const clap_host_posix_fd_support_t *fixture_host_fds;
+static clap_id fixture_timer_id = CLAP_INVALID_ID;
+static int fixture_pipe[2] = {-1, -1};
+static uint32_t timer_callback_count;
+static uint32_t fd_callback_count;
 
 static const char *fixture_features[] = {
    CLAP_PLUGIN_FEATURE_AUDIO_EFFECT,
@@ -183,15 +198,101 @@ static const clap_plugin_audio_ports_t fixture_audio_ports = {
    .get = fixture_audio_get,
 };
 
+static uint32_t fixture_latency_get(const clap_plugin_t *plugin) {
+   (void)plugin;
+   require_main_not_audio();
+   return 257U;
+}
+
+static const clap_plugin_latency_t fixture_latency = {
+   .get = fixture_latency_get,
+};
+
+static const clap_plugin_latency_t fixture_bad_latency = {
+   .get = NULL,
+};
+
+static void fixture_on_timer(const clap_plugin_t *plugin, clap_id timer_id) {
+   (void)plugin;
+   require_main_not_audio();
+   if (timer_id != fixture_timer_id)
+      ++contract_failures;
+   ++timer_callback_count;
+   const clap_host_state_t *state = (const clap_host_state_t *)
+      fixture_host->get_extension(fixture_host, CLAP_EXT_STATE);
+   if (state == NULL || state->mark_dirty == NULL)
+      ++contract_failures;
+   else
+      state->mark_dirty(fixture_host);
+   if (fixture_host_timers != NULL && fixture_timer_id != CLAP_INVALID_ID) {
+      if (!fixture_host_timers->unregister_timer(fixture_host, fixture_timer_id))
+         ++contract_failures;
+      fixture_timer_id = CLAP_INVALID_ID;
+   }
+}
+
+static const clap_plugin_timer_support_t fixture_timer_support = {
+   .on_timer = fixture_on_timer,
+};
+
+static void fixture_on_fd(const clap_plugin_t *plugin, int fd,
+                          clap_posix_fd_flags_t flags) {
+   (void)plugin;
+   require_main_not_audio();
+   if (fd != fixture_pipe[0] || (flags & CLAP_POSIX_FD_READ) == 0U)
+      ++contract_failures;
+   char byte;
+   if (read(fd, &byte, 1U) != 1 || byte != 's')
+      ++contract_failures;
+   ++fd_callback_count;
+   if (fixture_host_fds == NULL ||
+       !fixture_host_fds->unregister_fd(fixture_host, fd))
+      ++contract_failures;
+}
+
+static const clap_plugin_posix_fd_support_t fixture_posix_fd_support = {
+   .on_fd = fixture_on_fd,
+};
+
 static bool fixture_plugin_init(const clap_plugin_t *plugin) {
    (void)plugin;
    require_main_not_audio();
+   if (fixture_host == NULL || fixture_host->get_extension == NULL)
+      return false;
+   fixture_host_timers = (const clap_host_timer_support_t *)
+      fixture_host->get_extension(fixture_host, CLAP_EXT_TIMER_SUPPORT);
+   fixture_host_fds = (const clap_host_posix_fd_support_t *)
+      fixture_host->get_extension(fixture_host, CLAP_EXT_POSIX_FD_SUPPORT);
+   if ((fixture_host_timers == NULL) != (fixture_host_fds == NULL))
+      return false;
+   if (fixture_host_timers == NULL)
+      return true;
+   if (!fixture_host_timers->register_timer(
+          fixture_host, 34U, &fixture_timer_id))
+      return false;
+   if (pipe2(fixture_pipe, O_NONBLOCK | O_CLOEXEC) != 0)
+      return false;
+   if (!fixture_host_fds->register_fd(
+          fixture_host, fixture_pipe[0],
+          CLAP_POSIX_FD_READ | CLAP_POSIX_FD_ERROR))
+      return false;
    return true;
 }
 
 static void fixture_plugin_destroy(const clap_plugin_t *plugin) {
    (void)plugin;
    require_main_not_audio();
+   if (fixture_timer_id != CLAP_INVALID_ID && fixture_host_timers != NULL)
+      (void)fixture_host_timers->unregister_timer(fixture_host, fixture_timer_id);
+   if (fixture_pipe[0] >= 0 && fixture_host_fds != NULL)
+      (void)fixture_host_fds->unregister_fd(fixture_host, fixture_pipe[0]);
+   if (fixture_pipe[0] >= 0)
+      (void)close(fixture_pipe[0]);
+   if (fixture_pipe[1] >= 0)
+      (void)close(fixture_pipe[1]);
+   fixture_pipe[0] = -1;
+   fixture_pipe[1] = -1;
+   fixture_timer_id = CLAP_INVALID_ID;
    ++destroy_count;
    record_lifecycle(6);
 }
@@ -210,6 +311,12 @@ static bool fixture_plugin_activate(const clap_plugin_t *plugin,
    last_activate_max_frames = max_frames_count;
    ++activate_count;
    record_lifecycle(1);
+   const clap_host_latency_t *latency = (const clap_host_latency_t *)
+      fixture_host->get_extension(fixture_host, CLAP_EXT_LATENCY);
+   if (latency == NULL || latency->changed == NULL)
+      ++contract_failures;
+   else
+      latency->changed(fixture_host);
    return PLUGINHOST_AUDIO_FIXTURE_MODE != MODE_ACTIVATE_FAIL;
 }
 
@@ -361,6 +468,14 @@ static const void *fixture_plugin_get_extension(const clap_plugin_t *plugin,
    (void)plugin;
    if (extension_id != NULL && strcmp(extension_id, CLAP_EXT_AUDIO_PORTS) == 0)
       return &fixture_audio_ports;
+   if (extension_id != NULL && strcmp(extension_id, CLAP_EXT_LATENCY) == 0)
+      return PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_LATENCY_MISSING_GET
+         ? &fixture_bad_latency
+         : &fixture_latency;
+   if (extension_id != NULL && strcmp(extension_id, CLAP_EXT_TIMER_SUPPORT) == 0)
+      return &fixture_timer_support;
+   if (extension_id != NULL && strcmp(extension_id, CLAP_EXT_POSIX_FD_SUPPORT) == 0)
+      return &fixture_posix_fd_support;
    return NULL;
 }
 
@@ -451,6 +566,13 @@ AUDIO_FIXTURE_EXPORT void pluginhost_audio_fixture_reset(void) {
    memset(lifecycle_order, 0, sizeof(lifecycle_order));
    lifecycle_order_count = 0U;
    on_main_thread_count = 0U;
+   fixture_host_timers = NULL;
+   fixture_host_fds = NULL;
+   fixture_timer_id = CLAP_INVALID_ID;
+   fixture_pipe[0] = -1;
+   fixture_pipe[1] = -1;
+   timer_callback_count = 0U;
+   fd_callback_count = 0U;
 }
 
 #define EXPORT_COUNTER(name, value) \
@@ -515,4 +637,19 @@ AUDIO_FIXTURE_EXPORT int pluginhost_audio_fixture_lifecycle_at(int index) {
 
 AUDIO_FIXTURE_EXPORT uint32_t pluginhost_audio_fixture_on_main_thread_calls(void) {
    return on_main_thread_count;
+}
+
+AUDIO_FIXTURE_EXPORT uint32_t pluginhost_audio_fixture_timer_calls(void) {
+   return timer_callback_count;
+}
+
+AUDIO_FIXTURE_EXPORT uint32_t pluginhost_audio_fixture_fd_calls(void) {
+   return fd_callback_count;
+}
+
+AUDIO_FIXTURE_EXPORT int pluginhost_audio_fixture_signal_fd(void) {
+   if (fixture_pipe[1] < 0)
+      return -1;
+   const char byte = 's';
+   return write(fixture_pipe[1], &byte, 1U) == 1 ? 0 : -1;
 }

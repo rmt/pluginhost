@@ -48,12 +48,12 @@ proc decodeReactorToken*(value: uint64): ReactorToken {.inline.} =
     generation: uint32(value shr 32),
   )
 
-method now*(driver: ReactorDriver): Result[MonotonicNanos] {.base.} =
+method now*(driver: ReactorDriver): Result[MonotonicNanos] {.base, raises: [].} =
   failure[MonotonicNanos](hostError(
     hsInternal, hekInternal, "reactor driver does not provide a clock"))
 
 method addFd*(driver: ReactorDriver; fd: int32; interests: ReactorInterests;
-              tokenValue: uint64): Result[Unit] {.base.} =
+              tokenValue: uint64): Result[Unit] {.base, raises: [].} =
   discard fd
   discard interests
   discard tokenValue
@@ -62,23 +62,23 @@ method addFd*(driver: ReactorDriver; fd: int32; interests: ReactorInterests;
 
 method modifyFd*(driver: ReactorDriver; fd: int32;
                  interests: ReactorInterests;
-                 tokenValue: uint64): Result[Unit] {.base.} =
+                 tokenValue: uint64): Result[Unit] {.base, raises: [].} =
   discard fd
   discard interests
   discard tokenValue
   failure[Unit](hostError(
     hsInternal, hekInternal, "reactor driver does not support FD modification"))
 
-method removeFd*(driver: ReactorDriver; fd: int32): Result[Unit] {.base.} =
+method removeFd*(driver: ReactorDriver; fd: int32): Result[Unit] {.base, raises: [].} =
   discard fd
   failure[Unit](hostError(
     hsInternal, hekInternal, "reactor driver does not support FD removal"))
 
 method wait*(driver: ReactorDriver; timeoutMilliseconds: int32):
-    Result[seq[ReactorReady]] {.base.} =
+    Result[seq[ReactorReady]] {.base, raises: [].} =
   discard timeoutMilliseconds
   failure[seq[ReactorReady]](hostError(
     hsInternal, hekInternal, "reactor driver does not support waiting"))
 
-method close*(driver: ReactorDriver): Result[Unit] {.base.} =
+method close*(driver: ReactorDriver): Result[Unit] {.base, raises: [].} =
   success()

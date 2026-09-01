@@ -1,7 +1,7 @@
 import std/options
 
-import ./[audio_slice, main_reactor, run_config]
-import ../clap/loader
+import ./[audio_slice, main_reactor, plugin_services, run_config]
+import ../clap/[loader, main_thread_services]
 import ../domain/[errors, lifecycle, plugin_catalog, reactor, result]
 import ../jack/backend
 import ../platform/linux/[pid_file, reactor as linux_reactor, signals]
@@ -20,9 +20,11 @@ type
     signalSource: SignalSource
     signalToken: ReactorToken
     pidFile: PidFile
+    pluginServices: PluginServiceRegistry
     guiSignalWarnings: set[SignalIntent]
     lastXruns: uint64
     lastFreewheelChanges: uint64
+    stateDirty: bool
 
 proc initHostSession*(): HostSession =
   HostSession(state: ssNew)
@@ -105,7 +107,9 @@ proc cleanupModuleFailure(module: var ClapModule;
     closed.error.context.add(" (" & primary.context & ")")
   move(closed.error)
 
-proc openRunSlice(config: RunConfig): Result[InternalAudioSlice] =
+proc openRunSlice(config: RunConfig;
+                  mainServices: ptr ClapMainThreadServices):
+    Result[InternalAudioSlice] =
   var moduleResult = openClapModule(config.pluginPath)
   if not moduleResult.isOk:
     return failure[InternalAudioSlice](move(moduleResult.error))
@@ -129,7 +133,8 @@ proc openRunSlice(config: RunConfig): Result[InternalAudioSlice] =
     serverName = config.jackServer,
     noStartServer = config.noStartServer,
   )
-  openInternalAudioSlice(move(module), move(selected.value), backendConfig)
+  openInternalAudioSlice(
+    move(module), move(selected.value), backendConfig, mainServices)
 
 proc warning(errorOutput: File; message: string) =
   errorOutput.write("pluginhost: warning: " & message & "\n")
@@ -187,6 +192,31 @@ proc serviceSignals(session: var HostSession; events: seq[ReactorEvent];
         warning(errorOutput, "SIGUSR request to " & operation &
           " the GUI is unavailable until GUI hosting is implemented")
   success(shutdown)
+
+proc servicePluginEvents(session: var HostSession; events: seq[ReactorEvent]):
+    Result[Unit] =
+  if session.pluginServices == nil:
+    return success()
+  for event in events:
+    let serviceEvent = session.pluginServices.classify(event)
+    if serviceEvent.isNone:
+      continue
+    case serviceEvent.get.kind
+    of psekTimer:
+      var called = session.audioSlice.callOnTimer(serviceEvent.get.timerId)
+      if not called.isOk:
+        return called
+      var completed = session.pluginServices.completeTimerDispatch(
+        serviceEvent.get.timerId)
+      if not completed.isOk:
+        return completed
+    of psekFd:
+      if serviceEvent.get.fdFlags != 0'u32:
+        var called = session.audioSlice.callOnFd(
+          serviceEvent.get.fd, serviceEvent.get.fdFlags)
+        if not called.isOk:
+          return called
+  success()
 
 proc serviceAudioControl(session: var HostSession; config: RunConfig;
                          errorOutput: File): Result[Unit] =
@@ -246,6 +276,14 @@ proc serviceAudioControl(session: var HostSession; config: RunConfig;
   if droppedEvents > 0'u64 and config.verbosity != vbQuiet:
     warning(errorOutput, "audio event bridge dropped or rejected " &
       $droppedEvents & " events")
+  if session.audioSlice.takeStateDirty():
+    session.stateDirty = true
+  if session.audioSlice.takeLatencyChanged():
+    return failure[Unit](hostError(
+      hsClap, hekClapPlugin,
+      "CLAP plugin reported a latency change outside activation",
+      "path=" & session.audioSlice.pluginPath & "; id=" & session.audioSlice.pluginId,
+    ))
   session.drainPluginLogs(config, errorOutput)
   success()
 
@@ -277,6 +315,7 @@ proc openProcessControl(session: var HostSession): Result[Unit] =
   if not registered.isOk:
     return failure[Unit](move(registered.error))
   session.signalToken = registered.value
+  session.pluginServices = newPluginServiceRegistry(session.reactor)
   success()
 
 proc run*(session: var HostSession; config: RunConfig;
@@ -292,7 +331,8 @@ proc run*(session: var HostSession; config: RunConfig;
   if not processControl.isOk:
     return failSession[Unit](session, move(processControl.error))
 
-  var sliceResult = openRunSlice(config)
+  var sliceResult = openRunSlice(
+    config, session.pluginServices.servicePointer)
   if not sliceResult.isOk:
     return failSession[Unit](session, move(sliceResult.error))
   var slice = move(sliceResult.value)
@@ -326,6 +366,9 @@ proc run*(session: var HostSession; config: RunConfig;
       if not stopping.isOk:
         return stopping
       return success()
+    var pluginEvents = session.servicePluginEvents(events.value)
+    if not pluginEvents.isOk:
+      return failSession[Unit](session, move(pluginEvents.error))
     var serviced = session.serviceAudioControl(config, errorOutput)
     if not serviced.isOk:
       return failSession[Unit](session, move(serviced.error))
@@ -354,6 +397,11 @@ proc close*(session: var HostSession): Result[Unit] =
 
   var first: HostError
   var failed = false
+  if session.audioSlice.state == iassActive:
+    var audioStopped = session.audioSlice.stop()
+    rememberCleanup(first, failed, audioStopped)
+  var servicesClosed = session.pluginServices.close()
+  rememberCleanup(first, failed, servicesClosed)
   var audioClosed = session.audioSlice.close()
   rememberCleanup(first, failed, audioClosed)
   var pidClosed = session.pidFile.close()

@@ -170,6 +170,45 @@ suite "checked JACK backend lifecycle and callbacks":
     check controls.closeCount() == 0
     check backend.state == jbsConfigured
 
+  test "plugin latency is published in callbacks and recomputed from control plane":
+    var openedControls = openFakeJackControls()
+    require openedControls.isOk
+    var controls = move(openedControls.value)
+    defer: doAssert controls.close().isOk
+    controls.reset()
+    var opened = openJackBackend(fakeConfig())
+    require opened.isOk
+    var backend = move(opened.value)
+    defer: doAssert backend.close().isOk
+    require backend.configure(oneInOneOutPlan(), fpmSilence).isOk
+
+    check backend.pluginLatency == 0'u32
+    check backend.setPluginLatency(257'u32).isOk
+    check backend.pluginLatency == 257'u32
+    check not backend.recomputeLatencies().isOk
+    require backend.activate().isOk
+    check not backend.setPluginLatency(1'u32).isOk
+    check backend.recomputeLatencies().isOk
+    check controls.recomputeCount() == 1
+
+    controls.invokeLatency(JackPlaybackLatency)
+    check controls.portLatency(1, JackPlaybackLatency, 0) == 257'u32
+    check controls.portLatency(1, JackPlaybackLatency, 1) == 257'u32
+    controls.invokeLatency(JackCaptureLatency)
+    check controls.portLatency(0, JackCaptureLatency, 0) == 257'u32
+    check controls.portLatency(0, JackCaptureLatency, 1) == 257'u32
+    controls.setPortLatency(
+      0, JackPlaybackLatency, high(uint32) - 10'u32, high(uint32) - 5'u32)
+    controls.invokeLatency(JackPlaybackLatency)
+    check controls.portLatency(1, JackPlaybackLatency, 0) == high(uint32)
+    check controls.portLatency(1, JackPlaybackLatency, 1) == high(uint32)
+    controls.setRecomputeStatus(-44)
+    let failed = backend.recomputeLatencies()
+    check not failed.isOk
+    check failed.error.kind == hekJackLatency
+    check failed.error.context.contains("status=-44")
+    check backend.deactivate().isOk
+
   test "configuration acknowledgement preserves a newer notification":
     var openedControls = openFakeJackControls()
     require openedControls.isOk

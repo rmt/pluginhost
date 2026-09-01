@@ -59,6 +59,18 @@ proc currentSlot(reactor: var MainReactor; token: ReactorToken):
     return nil
   slot
 
+proc now*(reactor: var MainReactor): Result[MonotonicNanos] =
+  if reactor.closed or reactor.driver == nil:
+    return failure[MonotonicNanos](reactorError(
+      "cannot read time from a closed main reactor"))
+  var current = reactor.driver.now()
+  if not current.isOk:
+    return current
+  if current.value.int64Value < 0:
+    return failure[MonotonicNanos](reactorError(
+      "reactor driver returned a negative monotonic time"))
+  current
+
 proc isCurrent*(reactor: var MainReactor; token: ReactorToken): bool =
   reactor.currentSlot(token) != nil
 

@@ -2,7 +2,7 @@
 
 `pluginhost` is an in-progress standalone Linux JACK host for native CLAP plugins, implemented in Nim. Its intended role is similar to `carla-single`, with one plugin instance and one JACK client per process.
 
-The current development version is **0.0.8-dev**. The implementation includes checked CLAP ownership/catalog/lifecycle, human/JSON `list` and recursive `scan`, grouped zero-copy JACK audio, and a fixed-capacity sample-accurate JACK MIDI/CLAP event bridge. The canonical public command now runs one plugin headlessly under an `epoll`/`signalfd` main reactor, handles orderly signals and JACK/process failures, services CLAP main-thread callbacks, refreshes runtime audio configuration, and owns an optional atomic PID file. GUI, state, parameters, restart, and later host extensions remain unavailable.
+The current development version is **0.0.9-dev**. The implementation includes checked CLAP ownership/catalog/lifecycle, human/JSON `list` and recursive `scan`, grouped zero-copy JACK audio, and a fixed-capacity sample-accurate JACK MIDI/CLAP event bridge. The canonical public command runs one plugin headlessly under an `epoll`/`signalfd` main reactor, handles orderly signals and JACK/process failures, services CLAP main-thread callbacks plus generation-safe plugin timers and POSIX FDs, reflects plugin latency through JACK, tracks dirty-state notification, refreshes runtime audio configuration, and owns an optional atomic PID file. State serialization, parameters, restart/rescans, GUI, and later host extensions remain unavailable.
 
 ## Build
 
@@ -53,7 +53,7 @@ unchanged but are not part of pluginhost's bound or supported ABI surface.
 statuses, callback registration, transactional ports, quiescence, role exclusivity, and
 fake silence/copy/deterministic processing without requiring a JACK server.
 
-`nimble testFixtures` independently compiles synthetic CLAP libraries and checks entry/factory ownership, descriptor validation, instance cleanup, deactivated port inspection, render negotiation, internal grouped float32 audio, and the fixed-capacity event bridge. Event cases cover global ordering, equal timestamps, raw MIDI/SysEx lifetime, CLAP-only note conversion, malformed events, exact capacity, output reserve failure, recovery, and MIDI2-only rejection.
+`nimble testFixtures` independently compiles synthetic CLAP libraries and checks entry/factory ownership, descriptor validation, instance cleanup, deactivated port inspection, render negotiation, internal grouped float32 audio, fixed-capacity event translation, and main-thread timer/FD/dirty/latency services. Event cases cover global ordering, equal timestamps, raw MIDI/SysEx lifetime, CLAP-only note conversion, malformed events, exact capacity, output reserve failure, recovery, and MIDI2-only rejection.
 
 All builds share `--mm:arc --threads:on --panics:on -d:noSignalHandler` through
 `config.nims`. Foreign callbacks additionally disable checks and trace setup locally

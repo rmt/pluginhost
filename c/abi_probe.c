@@ -7,6 +7,10 @@
 #include <clap/ext/audio-ports.h>
 #include <clap/ext/note-ports.h>
 #include <clap/ext/render.h>
+#include <clap/ext/state.h>
+#include <clap/ext/latency.h>
+#include <clap/ext/timer-support.h>
+#include <clap/ext/posix-fd-support.h>
 #include <clap/factory/plugin-factory.h>
 #include <clap/host.h>
 #include <clap/ext/log.h>
@@ -101,6 +105,26 @@ ABI_ASSERT_FIELD(clap_plugin_render_t, has_hard_realtime_requirement,
 ABI_ASSERT_FIELD(clap_plugin_render_t, set,
                  bool(CLAP_ABI *)(const clap_plugin_t *,
                                    clap_plugin_render_mode));
+ABI_ASSERT_FIELD(clap_host_state_t, mark_dirty,
+                 void(CLAP_ABI *)(const clap_host_t *));
+ABI_ASSERT_FIELD(clap_plugin_latency_t, get,
+                 uint32_t(CLAP_ABI *)(const clap_plugin_t *));
+ABI_ASSERT_FIELD(clap_host_latency_t, changed,
+                 void(CLAP_ABI *)(const clap_host_t *));
+ABI_ASSERT_FIELD(clap_plugin_timer_support_t, on_timer,
+                 void(CLAP_ABI *)(const clap_plugin_t *, clap_id));
+ABI_ASSERT_FIELD(clap_host_timer_support_t, register_timer,
+                 bool(CLAP_ABI *)(const clap_host_t *, uint32_t, clap_id *));
+ABI_ASSERT_FIELD(clap_host_timer_support_t, unregister_timer,
+                 bool(CLAP_ABI *)(const clap_host_t *, clap_id));
+ABI_ASSERT_FIELD(clap_plugin_posix_fd_support_t, on_fd,
+                 void(CLAP_ABI *)(const clap_plugin_t *, int, clap_posix_fd_flags_t));
+ABI_ASSERT_FIELD(clap_host_posix_fd_support_t, register_fd,
+                 bool(CLAP_ABI *)(const clap_host_t *, int, clap_posix_fd_flags_t));
+ABI_ASSERT_FIELD(clap_host_posix_fd_support_t, modify_fd,
+                 bool(CLAP_ABI *)(const clap_host_t *, int, clap_posix_fd_flags_t));
+ABI_ASSERT_FIELD(clap_host_posix_fd_support_t, unregister_fd,
+                 bool(CLAP_ABI *)(const clap_host_t *, int));
 
 /* JACK callback and function signatures used by the raw module. */
 _Static_assert(__builtin_types_compatible_p(JackProcessCallback,
@@ -217,6 +241,13 @@ uint64_t pluginhost_abi_size(int32_t type_id) {
       ABI_TYPE_CASE(34, clap_host_thread_check_t);
       ABI_TYPE_CASE(35, clap_plugin_render_t);
       ABI_TYPE_CASE(36, clap_plugin_render_mode);
+      ABI_TYPE_CASE(37, clap_host_state_t);
+      ABI_TYPE_CASE(38, clap_plugin_latency_t);
+      ABI_TYPE_CASE(39, clap_host_latency_t);
+      ABI_TYPE_CASE(40, clap_plugin_timer_support_t);
+      ABI_TYPE_CASE(41, clap_host_timer_support_t);
+      ABI_TYPE_CASE(42, clap_plugin_posix_fd_support_t);
+      ABI_TYPE_CASE(43, clap_host_posix_fd_support_t);
       ABI_TYPE_CASE(27, clap_id);
       ABI_TYPE_CASE(28, clap_beattime);
       ABI_TYPE_CASE(29, clap_sectime);
@@ -275,6 +306,13 @@ uint64_t pluginhost_abi_align(int32_t type_id) {
       ABI_ALIGN_CASE(34, clap_host_thread_check_t);
       ABI_ALIGN_CASE(35, clap_plugin_render_t);
       ABI_ALIGN_CASE(36, clap_plugin_render_mode);
+      ABI_ALIGN_CASE(37, clap_host_state_t);
+      ABI_ALIGN_CASE(38, clap_plugin_latency_t);
+      ABI_ALIGN_CASE(39, clap_host_latency_t);
+      ABI_ALIGN_CASE(40, clap_plugin_timer_support_t);
+      ABI_ALIGN_CASE(41, clap_host_timer_support_t);
+      ABI_ALIGN_CASE(42, clap_plugin_posix_fd_support_t);
+      ABI_ALIGN_CASE(43, clap_host_posix_fd_support_t);
       ABI_ALIGN_CASE(27, clap_id);
       ABI_ALIGN_CASE(28, clap_beattime);
       ABI_ALIGN_CASE(29, clap_sectime);
@@ -447,6 +485,16 @@ uint64_t pluginhost_abi_offset(int32_t field_id) {
       ABI_FIELD_CASE(34, 2, clap_host_thread_check_t, is_audio_thread);
       ABI_FIELD_CASE(35, 1, clap_plugin_render_t, has_hard_realtime_requirement);
       ABI_FIELD_CASE(35, 2, clap_plugin_render_t, set);
+      ABI_FIELD_CASE(37, 1, clap_host_state_t, mark_dirty);
+      ABI_FIELD_CASE(38, 1, clap_plugin_latency_t, get);
+      ABI_FIELD_CASE(39, 1, clap_host_latency_t, changed);
+      ABI_FIELD_CASE(40, 1, clap_plugin_timer_support_t, on_timer);
+      ABI_FIELD_CASE(41, 1, clap_host_timer_support_t, register_timer);
+      ABI_FIELD_CASE(41, 2, clap_host_timer_support_t, unregister_timer);
+      ABI_FIELD_CASE(42, 1, clap_plugin_posix_fd_support_t, on_fd);
+      ABI_FIELD_CASE(43, 1, clap_host_posix_fd_support_t, register_fd);
+      ABI_FIELD_CASE(43, 2, clap_host_posix_fd_support_t, modify_fd);
+      ABI_FIELD_CASE(43, 3, clap_host_posix_fd_support_t, unregister_fd);
       ABI_FIELD_CASE(109, 1, jack_latency_range_t, min);
       ABI_FIELD_CASE(109, 2, jack_latency_range_t, max);
       ABI_FIELD_CASE(110, 1, jack_midi_event_t, time);
@@ -530,6 +578,9 @@ int64_t pluginhost_abi_constant(int32_t constant_id) {
       case 67: return CLAP_LOG_PLUGIN_MISBEHAVING;
       case 68: return CLAP_RENDER_REALTIME;
       case 69: return CLAP_RENDER_OFFLINE;
+      case 70: return CLAP_POSIX_FD_READ;
+      case 71: return CLAP_POSIX_FD_WRITE;
+      case 72: return CLAP_POSIX_FD_ERROR;
       case 101: return JACK_MAX_FRAMES;
       case 102: return JackNullOption;
       case 103: return JackNoStartServer;
@@ -571,6 +622,10 @@ const char *pluginhost_abi_string(int32_t string_id) {
       case 6: return CLAP_EXT_LOG;
       case 7: return CLAP_EXT_THREAD_CHECK;
       case 8: return CLAP_EXT_RENDER;
+      case 9: return CLAP_EXT_STATE;
+      case 10: return CLAP_EXT_LATENCY;
+      case 11: return CLAP_EXT_TIMER_SUPPORT;
+      case 12: return CLAP_EXT_POSIX_FD_SUPPORT;
       case 101: return JACK_DEFAULT_AUDIO_TYPE;
       case 102: return JACK_DEFAULT_MIDI_TYPE;
       default: return NULL;

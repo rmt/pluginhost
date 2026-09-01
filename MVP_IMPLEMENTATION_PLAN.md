@@ -3,7 +3,7 @@
 **Plan version:** 1.0.0  
 **Target product release:** `pluginhost` 0.1.0  
 **Initial development version:** 0.0.1-dev  
-**Status:** Approved through Increment 6; Increment 7 implemented and awaiting review
+**Status:** Approved through review unit 8A; review unit 8B not started
 **Companion documents:** [`REQUIREMENTS.md`](REQUIREMENTS.md), [`DESIGN.md`](DESIGN.md)
 
 ## 1. Purpose
@@ -495,7 +495,7 @@ Review independent live JACK MIDI injection/capture, sample offsets, repeated li
 ## 14. Increment 7 — Main reactor, signals, and orderly process control
 
 **Planned version:** 0.0.8-dev
-**Status:** Implementation complete; awaiting review.
+**Status:** Approved.
 
 ### Goal
 
@@ -542,54 +542,78 @@ Review signal safety, reactor reentrancy, timing guarantees, generation tokens, 
 ## 15. Increment 8 — Host extensions, parameters, latency, and restart
 
 **Planned version:** 0.0.9-dev
+**Review split:** 8A approved; 8B not started
 
 ### Goal
 
 Implement the stable host services needed for broad plugin correctness before adding state and GUI.
 
-### Implementation
+### Review unit 8A — main-thread services and latency
 
-- Implement host extensions only as their complete callbacks become available:
-  - `clap.log`
-  - `clap.params`
-  - `clap.state` dirty notification
-  - `clap.latency`
-  - `clap.audio-ports`
-  - `clap.note-ports`
-  - `clap.timer-support`
-  - `clap.posix-fd-support`
-  - `clap.thread-check`
-- Handle parameter output, gestures, rescans, cookie invalidation, and flush scheduling.
-- Ensure parameter `flush()` never overlaps `process()`.
-- Implement plugin timers and POSIX FD dispatch through the main reactor.
+**Status:** Approved.
+
+#### Implementation
+
+- Add exact stable CLAP ABI declarations for `clap.state` dirty notification, `clap.latency`, `clap.timer-support`, and `clap.posix-fd-support`.
+- Advertise timer/FD extensions only when a complete application service table is attached before plugin creation; retain stable vtable/context storage through plugin destruction.
+- Add an application-owned fixed-capacity registry for 256 timers and 256 POSIX FDs, mapped to generation-safe reactor tokens.
+- Dispatch periodic timers and level-triggered FD read/write/error readiness only on the original CLAP main thread.
+- Reject duplicate/stale registrations, support self-unregistration, and remove registrations after audio quiescence but before plugin destruction.
+- Coalesce `clap.state.mark_dirty()` without implementing state serialization.
+- Query plugin latency after activation, publish it atomically to the JACK latency callback, and invoke total-latency recomputation only from the control plane.
+- Keep `clap.params`, host audio/note rescans, restart, reconnection, and sleep/wake unadvertised or explicitly deferred.
+
+#### Tests
+
+- C/Nim layout, field-offset, constant, and function-pointer ABI checks for every new bound type.
+- Stable extension advertisement with and without a complete service table.
+- Main-thread callback context, dirty/latency coalescing, and foreign-thread rejection.
+- Timer exact capacity, overflow/recovery, periodic rearm, self-cancellation, and stale IDs.
+- FD duplicate/modify/unregister, level-trigger mapping, stale events, and repeated cleanup.
+- Independent CLAP fixture registration during `plugin.init()`, real epoll dispatch, dirty notification, 257-frame latency, and teardown ordering.
+- JACK latency direction, saturation, and control-plane recomputation.
+- Product-profile generated-C callback audit and live PipeWire-JACK regression/instrumentation.
+
+#### Manual verification
+
+Run the public headless host with an independent plugin, inspect its JACK ports/latency, and verify clean signal shutdown. The fixture task provides deterministic timer/FD controls.
+
+#### Human review gate 8A
+
+Approved by owner review. Before work begins on 8B, present and obtain approval for
+a fresh pre-code package covering its parameter concurrency, restart, rescan,
+reconnection, and sleep/wake boundaries.
+
+### Review unit 8B — parameters, restart, rescans, and sleep/wake
+
+**Status:** Not started.
+
+#### Implementation
+
+- Implement complete `clap.params`, including parameter output, gestures, rescans, cookie invalidation, dirty tracking, and flush scheduling without overlap with `process()`.
 - Implement `request_restart`, `request_process`, and process sleep/wake policy.
 - Implement safe stop/deactivate/rescan/rebuild/reactivate restart sequence.
-- Implement audio/note name and structural rescans.
-- Reflect plugin latency through JACK latency ranges.
+- Advertise complete `clap.audio-ports` and `clap.note-ports` host extensions and implement name/structural rescans.
 - Preserve/reconnect compatible JACK connections when practical; otherwise report losses clearly per requirements.
 - Add restart-loop coalescing/rate protection.
-- Expand fixture behavior for every extension and callback context.
+- Expand fixture behavior for every request, active/inactive flush context, rescan, and restart failure.
 
-### Tests
+#### Tests
 
-- Each host extension advertised only when complete.
-- Callback context/thread checks and stable vtable pointers.
-- Active versus inactive parameter flush.
-- Parameter output/dirty state and bounded queue overflow.
-- Plugin timer and level-triggered FD behavior, including unregister during callback.
+- Parameter extension advertisement, active/inactive flush, output/dirty transport, bounded overflow, rescans, and cookie invalidation.
 - Sleep, event/request wake, and connected-audio conservative policy.
 - Restart caused by plugin, sample rate, block size, and structural port rescan.
 - Restart failure leaves silence and exits/recovers according to policy.
-- Latency range updates and latency-change request.
 - Repeated restart requests cannot create a tight main-loop cycle.
+- Structural port rebuild quiescence and explicit connection preservation/loss evidence.
 
-### Manual verification
+#### Manual verification
 
-Use the fixture to trigger every request/extension while processing. Smoke-test one real plugin that uses parameters and one that uses timer or POSIX FD support.
+Use the fixture to trigger every parameter/request/rescan path while processing. Smoke-test one real parameter-using plugin.
 
-### Human review gate 8
+#### Human review gate 8B
 
-Review each extension against its official header, concurrency rules, flush/process exclusion, restart state machine, dynamic port behavior, latency mapping, and loop protection.
+Review parameter concurrency and flush/process exclusion, restart state machine, dynamic port behavior, reconnection policy, sleep/wake behavior, and loop protection before approving Increment 8.
 
 ## 16. Increment 9 — State load/save transactions
 
@@ -754,8 +778,8 @@ This table is updated only when work is reviewed.
 | 4 — JACK/RT harness | Approved | Review units 4A, 4B, and 4C | Checked loading, fake-backed mechanics, live PipeWire-JACK integration, and strengthened RT evidence accepted |
 | 5 — Audio vertical slice | Approved | Review unit 5 | Internal grouped zero-copy CLAP/JACK float32 slice, lifecycle rollback, live capture, and RT evidence accepted |
 | 6 — MIDI/events | Approved | Review units 6A and 6B | Fixed-capacity event bridge and isolated live multi-port MIDI/SysEx evidence accepted |
-| 7 — Reactor/signals | In progress | Increment 7 review candidate | Public headless run, epoll/signalfd reactor, orderly shutdown, main-thread callbacks, and atomic PID files implemented |
-| 8 — Host extensions/restart | Not started | — | — |
+| 7 — Reactor/signals | Approved | Increment 7 review | Public headless run, epoll/signalfd reactor, orderly shutdown, main-thread callbacks, and atomic PID files accepted |
+| 8 — Host extensions/restart | In progress | Review unit 8A approved; 8B pre-code gate | Main-thread timer/FD services, dirty notification, and JACK latency accepted; parameters/restart/rescans remain in 8B |
 | 9 — State | Not started | — | — |
 | 10 — GUI | Not started | — | Split into 10A/10B reviews |
 | 11 — Release candidate | Not started | — | — |
@@ -803,4 +827,4 @@ Each candidate requires requirements/design updates and, where architectural, an
 
 ## 23. First action after each review gate
 
-After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 6 is approved and Increment 7 is implemented awaiting review. Stop at the Increment 7 review gate; do not mark it approved, advance to `0.0.9-dev`, prepare the Increment 8 pre-code package, or begin host-extension/restart work without explicit owner approval.
+After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 8A is approved and 8B has not started. The next session must inspect the approved baseline and present a fresh 8B pre-code package. Do not begin parameter, restart, rescan, reconnection, or sleep/wake implementation until the owner explicitly approves that package.

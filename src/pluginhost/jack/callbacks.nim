@@ -276,6 +276,17 @@ proc configurationChangePending*(context: ptr JackCallbackContext): bool {.
     inline.} =
   context != nil and context.configurationPending.loadAcquire() != 0'u32
 
+proc setPluginLatency*(context: ptr JackCallbackContext; frames: uint32): bool =
+  if context == nil:
+    return false
+  context.latencyFrames.storeRelease(frames)
+  true
+
+proc pluginLatency*(context: ptr JackCallbackContext): uint32 =
+  if context == nil:
+    return 0'u32
+  context.latencyFrames.loadAcquire()
+
 proc audioRolePointer*(context: ptr JackCallbackContext): ptr AudioRoleGuard {.
     inline.} =
   if context == nil:

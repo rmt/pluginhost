@@ -1,6 +1,7 @@
 import std/math
 
-import ./[audio_process, ffi, host_bridge, loader, port_inspector]
+import ./[audio_process, ffi, host_bridge, loader, main_thread_services,
+          port_inspector]
 import ../domain/[errors, plugin_catalog, port_plan, result]
 import ../rt/role_guard
 
@@ -17,6 +18,9 @@ type
     audioPorts*: ptr ClapPluginAudioPorts
     notePorts*: ptr ClapPluginNotePorts
     render*: ptr ClapPluginRender
+    latency*: ptr ClapPluginLatency
+    timerSupport*: ptr ClapPluginTimerSupport
+    posixFdSupport*: ptr ClapPluginPosixFdSupport
 
   ClapInstance* = object
     module: ClapModule
@@ -116,9 +120,11 @@ proc invalidCreatedDescriptor(plugin: ptr ClapPlugin;
   ""
 
 proc createClapInstance*(module: sink ClapModule;
-                         descriptor: sink PluginDescriptor): Result[ClapInstance] =
+                         descriptor: sink PluginDescriptor;
+                         mainServices: ptr ClapMainThreadServices = nil):
+                         Result[ClapInstance] =
   var ownedModule = move(module)
-  let bridge = newClapHostBridge()
+  let bridge = newClapHostBridge(mainServices)
   let created = ownedModule.createPlugin(
     bridge.hostPointer, descriptor.id)
   if not created.isOk:
@@ -165,6 +171,12 @@ proc createClapInstance*(module: sink ClapModule;
       plugin.getExtension(plugin, ClapExtNotePorts.cstring)),
     render: cast[ptr ClapPluginRender](
       plugin.getExtension(plugin, ClapExtRender.cstring)),
+    latency: cast[ptr ClapPluginLatency](
+      plugin.getExtension(plugin, ClapExtLatency.cstring)),
+    timerSupport: cast[ptr ClapPluginTimerSupport](
+      plugin.getExtension(plugin, ClapExtTimerSupport.cstring)),
+    posixFdSupport: cast[ptr ClapPluginPosixFdSupport](
+      plugin.getExtension(plugin, ClapExtPosixFdSupport.cstring)),
   )
 
   success(ClapInstance(
@@ -429,6 +441,59 @@ proc tryPopLog*(instance: ClapInstance;
 
 proc takeDroppedLogs*(instance: ClapInstance): uint64 {.gcsafe, raises: [].} =
   instance.bridge.takeDroppedLogs()
+
+proc takeStateDirty*(instance: ClapInstance): bool {.gcsafe, raises: [].} =
+  instance.bridge.takeStateDirty()
+
+proc takeLatencyChanged*(instance: ClapInstance): bool {.gcsafe, raises: [].} =
+  instance.bridge.takeLatencyChanged()
+
+proc latencyFrames*(instance: var ClapInstance): Result[uint32] =
+  if instance.state notin {cisActivated, cisProcessing} or
+      not instance.bridge.isMainThread:
+    return failure[uint32](instanceError(
+      hekClapPlugin,
+      "CLAP latency inspection requires an active plugin on the main thread",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id & "; state=" & $instance.state,
+    ))
+  if instance.extensions.latency == nil:
+    discard instance.bridge.takeLatencyChanged()
+    return success(0'u32)
+  if instance.extensions.latency.get == nil:
+    return failure[uint32](instanceError(
+      hekClapPlugin,
+      "CLAP latency extension has a missing get callback",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id,
+    ))
+  let frames = instance.extensions.latency.get(instance.plugin)
+  discard instance.bridge.takeLatencyChanged()
+  success(frames)
+
+proc callOnTimer*(instance: var ClapInstance; timerId: uint32): Result[Unit] =
+  if instance.state notin {cisInitialized, cisActivated, cisProcessing} or
+      not instance.bridge.isMainThread or instance.extensions.timerSupport == nil or
+      instance.extensions.timerSupport.onTimer == nil:
+    return failure[Unit](instanceError(
+      hekClapPlugin, "CLAP timer callback is unavailable",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id & "; timer-id=" & $timerId,
+    ))
+  instance.extensions.timerSupport.onTimer(instance.plugin, timerId)
+  success()
+
+proc callOnFd*(instance: var ClapInstance; fd: int32; flags: uint32): Result[Unit] =
+  if instance.state notin {cisInitialized, cisActivated, cisProcessing} or
+      not instance.bridge.isMainThread or instance.extensions.posixFdSupport == nil or
+      instance.extensions.posixFdSupport.onFd == nil:
+    return failure[Unit](instanceError(
+      hekClapPlugin, "CLAP POSIX FD callback is unavailable",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id & "; fd=" & $fd,
+    ))
+  instance.extensions.posixFdSupport.onFd(instance.plugin, cint(fd), flags)
+  success()
 
 proc callOnMainThread*(instance: var ClapInstance): Result[Unit] =
   if instance.state notin {cisInitialized, cisActivated, cisProcessing} or

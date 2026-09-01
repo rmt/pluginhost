@@ -1,10 +1,11 @@
-## Internal Increment 5 composition owner.
+## Owned CLAP/JACK audio composition for one host session.
 ##
-## This owner connects one initialized CLAP instance, its frozen audio process
-## view, and one configured JACK backend. It is intentionally not used by the
-## public run command until the reactor/signal increment installs process control.
+## This owner connects one initialized CLAP instance, its frozen audio/event
+## process view, and one configured JACK backend. HostSession moves exactly one
+## instance of this owner into the public runtime.
 
-import ../clap/[audio_process, event_bridge, ffi, host_bridge, instance, loader]
+import ../clap/[audio_process, event_bridge, ffi, host_bridge, instance, loader,
+                main_thread_services]
 import ../domain/[errors, plugin_catalog, result]
 import ../jack/backend
 
@@ -132,6 +133,18 @@ proc controlRequests*(slice: var InternalAudioSlice): InternalControlRequests =
     flush: (requests and ClapRequestFlush) != 0'u32,
   )
 
+proc takeStateDirty*(slice: var InternalAudioSlice): bool =
+  slice.instance.takeStateDirty()
+
+proc takeLatencyChanged*(slice: var InternalAudioSlice): bool =
+  slice.instance.takeLatencyChanged()
+
+proc callOnTimer*(slice: var InternalAudioSlice; timerId: uint32): Result[Unit] =
+  slice.instance.callOnTimer(timerId)
+
+proc callOnFd*(slice: var InternalAudioSlice; fd: int32; flags: uint32): Result[Unit] =
+  slice.instance.callOnFd(fd, flags)
+
 proc callOnMainThread*(slice: var InternalAudioSlice): Result[Unit] =
   slice.instance.callOnMainThread()
 
@@ -176,10 +189,12 @@ proc pluginId*(slice: InternalAudioSlice): string =
 
 proc openInternalAudioSlice*(module: sink ClapModule;
                              descriptor: sink PluginDescriptor;
-                             backendConfig: JackBackendOpenConfig):
+                             backendConfig: JackBackendOpenConfig;
+                             mainServices: ptr ClapMainThreadServices = nil):
     Result[InternalAudioSlice] =
   var slice = InternalAudioSlice(stateValue: iassEmpty)
-  var created = createClapInstance(move(module), move(descriptor))
+  var created = createClapInstance(
+    move(module), move(descriptor), mainServices)
   if not created.isOk:
     return failure[InternalAudioSlice](move(created.error))
   slice.instance = move(created.value)
@@ -236,6 +251,15 @@ proc start*(slice: var InternalAudioSlice): Result[Unit] =
   if not activated.isOk:
     return activated
 
+  var latency = slice.instance.latencyFrames()
+  if not latency.isOk:
+    discard slice.instance.deactivate()
+    return failure[Unit](move(latency.error))
+  var latencySet = slice.backend.setPluginLatency(latency.value)
+  if not latencySet.isOk:
+    discard slice.instance.deactivate()
+    return latencySet
+
   var started = slice.instance.startProcessing(slice.backend.audioRoleGuard())
   if not started.isOk:
     var deactivated = slice.instance.deactivate()
@@ -256,6 +280,15 @@ proc start*(slice: var InternalAudioSlice): Result[Unit] =
     discard slice.instance.hostBridge.detachAudioRole(
       slice.backend.audioRoleGuard())
     return backendActive
+
+  var recomputed = slice.backend.recomputeLatencies()
+  if not recomputed.isOk:
+    discard slice.backend.deactivate()
+    discard slice.instance.stopProcessing(slice.backend.audioRoleGuard())
+    discard slice.instance.deactivate()
+    discard slice.instance.hostBridge.detachAudioRole(
+      slice.backend.audioRoleGuard())
+    return recomputed
 
   slice.stateValue = iassActive
   success()

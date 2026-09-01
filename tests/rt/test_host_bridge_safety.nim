@@ -1,11 +1,38 @@
 import std/unittest
 
-import pluginhost/clap/[ffi, host_bridge]
+import pluginhost/clap/[ffi, host_bridge, main_thread_services]
 import pluginhost/platform/linux/dynlib
 import ../fixtures/ffi/fixture_api
 
 when not defined(nimAllocStats):
   {.error: "host bridge safety tests require -d:nimAllocStats".}
+
+proc rejectTimerRegistration(context: pointer; periodMs: uint32;
+                             timerId: ptr uint32): bool {.
+    cdecl, gcsafe, raises: [].} =
+  discard context
+  discard periodMs
+  discard timerId
+  false
+
+proc rejectTimerUnregistration(context: pointer; timerId: uint32): bool {.
+    cdecl, gcsafe, raises: [].} =
+  discard context
+  discard timerId
+  false
+
+proc rejectFdRegistration(context: pointer; fd: int32; flags: uint32): bool {.
+    cdecl, gcsafe, raises: [].} =
+  discard context
+  discard fd
+  discard flags
+  false
+
+proc rejectFdUnregistration(context: pointer; fd: int32): bool {.
+    cdecl, gcsafe, raises: [].} =
+  discard context
+  discard fd
+  false
 
 {.push checks: off, stackTrace: off, lineTrace: off.}
 proc pluginhostHostCallbacksProbe(value: int32; context: pointer): int32 {.
@@ -23,10 +50,22 @@ proc pluginhostHostCallbacksProbe(value: int32; context: pointer): int32 {.
     host.getExtension(host, ClapExtLog.cstring))
   let threadCheck = cast[ptr ClapHostThreadCheck](
     host.getExtension(host, ClapExtThreadCheck.cstring))
+  let state = cast[ptr ClapHostState](
+    host.getExtension(host, ClapExtState.cstring))
+  let latency = cast[ptr ClapHostLatency](
+    host.getExtension(host, ClapExtLatency.cstring))
+  let timer = cast[ptr ClapHostTimerSupport](
+    host.getExtension(host, ClapExtTimerSupport.cstring))
+  let posixFd = cast[ptr ClapHostPosixFdSupport](
+    host.getExtension(host, ClapExtPosixFdSupport.cstring))
   let unsupported = host.getExtension(host, "clap.unsupported")
   if log == nil or log.log == nil or threadCheck == nil or
       threadCheck.isMainThread == nil or threadCheck.isAudioThread == nil or
-      unsupported != nil:
+      state == nil or state.markDirty == nil or latency == nil or
+      latency.changed == nil or timer == nil or posixFd == nil or
+      timer.registerTimer == nil or timer.unregisterTimer == nil or
+      posixFd.registerFd == nil or posixFd.modifyFd == nil or
+      posixFd.unregisterFd == nil or unsupported != nil:
     return -3
   if threadCheck.isMainThread(host) or threadCheck.isAudioThread(host):
     return -4
@@ -35,6 +74,15 @@ proc pluginhostHostCallbacksProbe(value: int32; context: pointer): int32 {.
   host.requestProcess(host)
   host.requestCallback(host)
   log.log(host, ClapLogInfo, "foreign allocation-free callback")
+  state.markDirty(host)
+  latency.changed(host)
+  var timerId = ClapInvalidId
+  if timer.registerTimer(host, 34'u32, addr timerId) or
+      timer.unregisterTimer(host, 0'u32) or
+      posixFd.registerFd(host, 9, ClapPosixFdRead) or
+      posixFd.modifyFd(host, 9, ClapPosixFdWrite) or
+      posixFd.unregisterFd(host, 9):
+    return -6
   let after = getAllocStats()
   if before != after:
     return -5
@@ -71,7 +119,16 @@ suite "CLAP host callback safety":
       library, "pluginhost_fixture_call_on_thread")
     require threadResult.isOk
 
-    let bridge = newClapHostBridge()
+    var serviceContext = 1'u32
+    var services = ClapMainThreadServices(
+      context: addr serviceContext,
+      registerTimer: rejectTimerRegistration,
+      unregisterTimer: rejectTimerUnregistration,
+      registerFd: rejectFdRegistration,
+      modifyFd: rejectFdRegistration,
+      unregisterFd: rejectFdUnregistration,
+    )
+    let bridge = newClapHostBridge(addr services)
     var callbackResult = -1'i32
     var usedForeignThread = 0'i32
     let status = threadResult.value(
@@ -91,5 +148,7 @@ suite "CLAP host callback safety":
     check bridge.tryPopLog(record)
     check record.logMessage == "foreign allocation-free callback"
     check not bridge.tryPopLog(record)
+    check not bridge.takeStateDirty()
+    check not bridge.takeLatencyChanged()
 
     check library.close().isOk

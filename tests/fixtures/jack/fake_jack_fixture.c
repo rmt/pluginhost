@@ -102,6 +102,7 @@ typedef struct fake_jack_state {
    int alias_attempts;
    int failed_alias_attempt;
    int recompute_count;
+   int recompute_status;
 } fake_jack_state_t;
 
 static fake_jack_state_t state;
@@ -195,6 +196,11 @@ pluginhost_fake_jack_set_close_status(int status) {
 }
 
 PLUGINHOST_FIXTURE_EXPORT void
+pluginhost_fake_jack_set_recompute_status(int status) {
+   state.recompute_status = status;
+}
+
+PLUGINHOST_FIXTURE_EXPORT void
 pluginhost_fake_jack_set_client_name_size(int size) {
    state.client_name_size = size;
 }
@@ -241,6 +247,31 @@ PLUGINHOST_FIXTURE_EXPORT int pluginhost_fake_jack_activate_count(void) {
 
 PLUGINHOST_FIXTURE_EXPORT int pluginhost_fake_jack_deactivate_count(void) {
    return state.deactivate_count;
+}
+
+PLUGINHOST_FIXTURE_EXPORT int pluginhost_fake_jack_recompute_count(void) {
+   return state.recompute_count;
+}
+
+PLUGINHOST_FIXTURE_EXPORT uint32_t pluginhost_fake_jack_port_latency(
+   int index, int mode, int maximum) {
+   if (index < 0 || index >= state.successful_registrations)
+      return UINT32_MAX;
+   const jack_latency_range_t *range = mode == JackCaptureLatency
+      ? &state.ports[index].capture_latency
+      : &state.ports[index].playback_latency;
+   return maximum ? range->max : range->min;
+}
+
+PLUGINHOST_FIXTURE_EXPORT void pluginhost_fake_jack_set_port_latency(
+   int index, int mode, uint32_t minimum, uint32_t maximum) {
+   if (index < 0 || index >= state.successful_registrations)
+      return;
+   jack_latency_range_t *range = mode == JackCaptureLatency
+      ? &state.ports[index].capture_latency
+      : &state.ports[index].playback_latency;
+   range->min = minimum;
+   range->max = maximum;
 }
 
 PLUGINHOST_FIXTURE_EXPORT int pluginhost_fake_jack_is_active(void) {
@@ -866,7 +897,7 @@ jack_recompute_total_latencies(jack_client_t *client) {
    if (client != &state.client)
       return -1;
    state.recompute_count++;
-   return 0;
+   return state.recompute_status;
 }
 
 PLUGINHOST_FIXTURE_EXPORT uint32_t
