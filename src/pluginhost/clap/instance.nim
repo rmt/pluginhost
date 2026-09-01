@@ -408,7 +408,8 @@ proc deactivate*(instance: var ClapInstance): Result[Unit] =
   success()
 
 proc newAudioProcess*(instance: var ClapInstance; plan: PortPlan;
-                      maxFrames: uint32): Result[ClapAudioProcess] =
+                      maxFrames: uint32; role: ptr AudioRoleGuard):
+    Result[ClapAudioProcess] =
   if instance.state != cisInitialized or not instance.bridge.isMainThread:
     return failure[ClapAudioProcess](instanceError(
       hekClapProcess,
@@ -416,7 +417,7 @@ proc newAudioProcess*(instance: var ClapInstance; plan: PortPlan;
       instance.module.modulePath,
       "id=" & instance.descriptor.id & "; state=" & $instance.state,
     ))
-  newClapAudioProcess(instance.plugin, plan, maxFrames,
+  newClapAudioProcess(instance.plugin, plan, maxFrames, role,
                       instance.module.modulePath, instance.descriptor.id)
 
 proc takeRequests*(instance: ClapInstance): uint32 {.gcsafe, raises: [].} =

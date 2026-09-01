@@ -3,7 +3,7 @@
 **Plan version:** 1.0.0  
 **Target product release:** `pluginhost` 0.1.0  
 **Initial development version:** 0.0.1-dev  
-**Status:** Approved through Increment 4; Increment 5 not started
+**Status:** Approved through review unit 6A; review unit 6B not started
 **Companion documents:** [`REQUIREMENTS.md`](REQUIREMENTS.md), [`DESIGN.md`](DESIGN.md)
 
 ## 1. Purpose
@@ -395,6 +395,7 @@ Review 4A's compile/ABI/DSO boundary before 4B. Review 4B's callback and ownersh
 ## 12. Increment 5 — First end-to-end CLAP audio host
 
 **Planned version:** 0.0.6-dev
+**Status:** Approved.
 
 ### Goal
 
@@ -438,6 +439,7 @@ Review the complete lifecycle sequence, zero-copy proof, audio grouping, failure
 ## 13. Increment 6 — JACK MIDI and CLAP note/event bridge
 
 **Planned version:** 0.0.7-dev
+**Status:** Review unit 6A approved; review unit 6B not started.
 
 ### Goal
 
@@ -470,11 +472,15 @@ Add sample-accurate MIDI input/output and required CLAP note-dialect conversion 
 
 ### Manual verification
 
-Connect a JACK MIDI generator/keyboard to the fixture or real synth and verify audio response. Connect fixture MIDI output to a JACK MIDI monitor.
+Review unit 6A uses strict fake-JACK and independent CLAP event fixtures. After 6A approval, review unit 6B will connect an independent JACK MIDI peer under the disposable PipeWire-JACK server and verify live injection/capture plus callback instrumentation.
 
-### Human review gate 6
+### Human review gate 6A
 
-Review event layout/alignment, sorting algorithm, pointer lifetimes, SysEx copies, dialect policy, overflow behavior, and RT test coverage.
+Review event layout/alignment, sorting algorithm, pointer lifetimes, SysEx copies, dialect policy, overflow behavior, and RT test coverage before beginning live MIDI work.
+
+### Human review gate 6B
+
+Review independent live JACK MIDI injection/capture, sample offsets, repeated lifecycle behavior, and live callback instrumentation before approving Increment 6.
 
 ## 14. Increment 7 — Main reactor, signals, and orderly process control
 
@@ -729,8 +735,8 @@ This table is updated only when work is reviewed.
 | 2 — CLAP catalog | Approved | Review unit 2B | Loader, catalog, `list`, discovery, and `scan` accepted |
 | 3 — CLAP lifecycle | Approved | Review unit 3B | Host bridge, instance lifecycle, immutable port plans, and render negotiation accepted |
 | 4 — JACK/RT harness | Approved | Review units 4A, 4B, and 4C | Checked loading, fake-backed mechanics, live PipeWire-JACK integration, and strengthened RT evidence accepted |
-| 5 — Audio vertical slice | Not started | — | — |
-| 6 — MIDI/events | Not started | — | — |
+| 5 — Audio vertical slice | Approved | Review unit 5 | Internal grouped zero-copy CLAP/JACK float32 slice, lifecycle rollback, live capture, and RT evidence accepted |
+| 6 — MIDI/events | In progress | Review unit 6A | Fake-backed fixed-capacity event bridge approved; live review unit 6B not started |
 | 7 — Reactor/signals | Not started | — | — |
 | 8 — Host extensions/restart | Not started | — | — |
 | 9 — State | Not started | — | — |
@@ -780,4 +786,4 @@ Each candidate requires requirements/design updates and, where architectural, an
 
 ## 23. First action after each review gate
 
-After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 4 is approved and Increment 5 has not started. The next fresh session must present the Increment 5 pre-code package before changing CLAP activation, process, grouped audio-buffer, or internal composition behavior; do not begin implementation without explicit approval.
+After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Review unit 6A is approved. The next fresh session must present the Increment 6B pre-code package before changing live MIDI integration behavior; do not begin implementation without explicit approval.

@@ -193,3 +193,5 @@ type
   JackMidiEventWriteProc* = proc(portBuffer: pointer; time: JackNFrames;
       data: ptr JackMidiData; dataSize: csize_t): cint {.
     cdecl, gcsafe, raises: [].}
+  JackMidiGetLostEventCountProc* = proc(portBuffer: pointer): uint32 {.
+    cdecl, gcsafe, raises: [].}

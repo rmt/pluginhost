@@ -20,6 +20,8 @@ JACK_ROOTS = (
     "pluginhost_audio_role_leave",
     "pluginhost_rt_set_audio_input",
     "pluginhost_rt_set_audio_output",
+    "pluginhost_rt_set_midi_input",
+    "pluginhost_rt_set_midi_output",
     "pluginhost_rt_zero_outputs",
     "pluginhost_rt_process_fake",
     "pluginhost_rt_process",
@@ -31,6 +33,11 @@ JACK_ROOTS = (
     "pluginhost_jack_xrun_callback",
     "pluginhost_jack_freewheel_callback",
     "pluginhost_jack_latency_callback",
+    "pluginhost_jack_midi_event_count",
+    "pluginhost_jack_midi_event_get",
+    "pluginhost_jack_midi_clear",
+    "pluginhost_jack_midi_reserve",
+    "pluginhost_jack_midi_lost_event_count",
 )
 
 CLAP_ROOTS = (
@@ -45,9 +52,15 @@ CLAP_ROOTS = (
 
 CLAP_PROCESS_ROOTS = (
     "pluginhost_clap_process_audio",
-    "pluginhost_clap_empty_input_size",
-    "pluginhost_clap_empty_input_get",
-    "pluginhost_clap_reject_output_event",
+)
+
+CLAP_EVENT_ROOTS = (
+    "pluginhost_clap_input_event_size",
+    "pluginhost_clap_input_event_get",
+    "pluginhost_clap_output_event_try_push",
+    "pluginhost_clap_event_cycle_begin",
+    "pluginhost_clap_event_cycle_end",
+    "pluginhost_clap_event_cycle_active",
 )
 
 PROBE_ROOTS = (
@@ -91,17 +104,21 @@ ALLOWED_EXTERNALS = {
     "memcpy", "memset", "pthread_self", "pthread_equal", "callback", "processProc",
     "N_CDECL", "N_INLINE", "N_NIMCALL", "IL64",
     "__builtin_unreachable", "portGetBuffer", "portGetLatencyRange",
-    "portSetLatencyRange",
+    "portSetLatencyRange", "midiGetEventCount", "midiEventGet",
+    "midiClearBuffer", "midiEventReserve", "midiGetLostEventCount",
+    "eventCount", "eventGet", "clear", "reserve", "lostEventCount",
 }
 ALLOWED_EXTERNAL_PREFIXES = (
     "pluginhost_rt_atomic_",
     "pluginhost_audio_role_",
     "pluginhost_rt_set_audio_",
+    "pluginhost_rt_set_midi_",
     "pluginhost_rt_zero_outputs",
     "pluginhost_rt_process_fake",
     "pluginhost_rt_process",
     "initAudioRoleGuard__",
     "initRtEngine__",
+    "pluginhost_clap_event_cycle_",
 )
 
 
@@ -260,7 +277,7 @@ def audit_main(nimcache: Path) -> int:
         audited.add(path)
         failures.extend(audit_complete_module(path, source))
 
-    all_roots = JACK_ROOTS + CLAP_ROOTS + CLAP_PROCESS_ROOTS
+    all_roots = JACK_ROOTS + CLAP_ROOTS + CLAP_PROCESS_ROOTS + CLAP_EVENT_ROOTS
     for root in all_roots:
         matches = find_marker(sources, root)
         if len(matches) != 1:
@@ -298,6 +315,20 @@ def audit_main(nimcache: Path) -> int:
             audio_path, audio_source, CLAP_PROCESS_ROOTS)
         failures.extend(audio_failures)
 
+    event_matches = [(path, source) for path, source in sources.items()
+                     if path.name == "@ppluginhost@sclap@sevent_bridge.nim.c"]
+    event_count = 0
+    if len(event_matches) != 1:
+        failures.append(
+            "expected one generated CLAP event bridge module, "
+            f"found {len(event_matches)}"
+        )
+    else:
+        event_path, event_source = event_matches[0]
+        audited.add(event_path)
+        event_failures, event_count = audit_closure(
+            event_path, event_source, CLAP_EVENT_ROOTS)
+        failures.extend(event_failures)
 
     failures.extend(audit_atomic_header())
 
@@ -311,7 +342,7 @@ def audit_main(nimcache: Path) -> int:
     paths += ", c/rt_atomic.h"
     print(
         "Complete generated callback audit passed "
-        f"({bridge_count + audio_count} CLAP callback/helper functions): {paths}"
+        f"({bridge_count + audio_count + event_count} CLAP callback/helper functions): {paths}"
     )
     return 0
 

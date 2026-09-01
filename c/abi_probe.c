@@ -175,6 +175,7 @@ ABI_ASSERT_SYMBOL(jack_midi_event_reserve,
                   jack_midi_data_t *(*)(void *, jack_nframes_t, size_t));
 ABI_ASSERT_SYMBOL(jack_midi_event_write,
                   int (*)(void *, jack_nframes_t, const jack_midi_data_t *, size_t));
+ABI_ASSERT_SYMBOL(jack_midi_get_lost_event_count, uint32_t (*)(void *));
 
 uint64_t pluginhost_abi_size(int32_t type_id) {
    switch (type_id) {

@@ -7,8 +7,8 @@
 import std/typetraits
 
 import ../domain/[errors, port_plan, result]
-import ../rt/[atomic_pod, engine]
-import ./ffi
+import ../rt/[atomic_pod, engine, role_guard]
+import ./[event_bridge, ffi]
 
 const
   ClapAudioProcessMaxGroupsPerDirection* = 1_024
@@ -30,13 +30,11 @@ type
       ptr UncheckedArray[cfloat]]
     outputPointers: array[ClapAudioProcessMaxChannelsPerDirection,
       ptr UncheckedArray[cfloat]]
-    inputEvents: ClapInputEvents
-    outputEvents: ClapOutputEvents
+    events: ClapEventBridge
     process: ClapProcess
     steadyTime: int64
     processCalls: uint64
     lastStatus: int32
-    outputEventDrops: RtAtomicU64
     callsInFlight: RtAtomicU32
 
   ClapAudioProcess* = object
@@ -70,27 +68,6 @@ proc audioProcessError(kind: HostErrorKind; message, path, pluginId,
   hostError(hsClap, kind, message, context)
 
 {.push checks: off, stackTrace: off, lineTrace: off.}
-proc emptyInputSize(list: ptr ClapInputEvents): uint32 {.
-    exportc: "pluginhost_clap_empty_input_size", cdecl, gcsafe, raises: [].} =
-  discard list
-  0'u32
-
-proc emptyInputGet(list: ptr ClapInputEvents;
-                   index: uint32): ptr ClapEventHeader {.
-    exportc: "pluginhost_clap_empty_input_get", cdecl, gcsafe, raises: [].} =
-  discard list
-  discard index
-  nil
-
-proc rejectOutputEvent(list: ptr ClapOutputEvents;
-                       event: ptr ClapEventHeader): bool {.
-    exportc: "pluginhost_clap_reject_output_event", cdecl, gcsafe,
-    raises: [].} =
-  if list == nil or event == nil or cast[pointer](list.ctx) == nil:
-    return false
-  let context = cast[ptr ClapAudioProcessContext](list.ctx)
-  discard context.outputEventDrops.fetchAddRelaxed(1'u64)
-  false
 
 proc bindGroup(context: ptr ClapAudioProcessContext; group: AudioGroup;
                direction: PortDirection; groupIndex: uint32;
@@ -158,6 +135,10 @@ proc processClapAudio*(argument: pointer; engine: ptr RtEngine;
     if status == RtProcessOk:
       status = zeroRtOutputs(engine, nframes)
 
+    if status == RtProcessOk and
+        not beginEventCycle(addr context.events, engine, nframes):
+      status = RtProcessEndpointFailure
+
     if status == RtProcessOk:
       if context.steadyTime < 0 or
           context.steadyTime > high(int64) - int64(nframes):
@@ -167,6 +148,7 @@ proc processClapAudio*(argument: pointer; engine: ptr RtEngine;
         context.process.framesCount = nframes
         let rawStatus = context.processProc(
           context.plugin, addr context.process)
+        endEventCycle(addr context.events)
         context.lastStatus = rawStatus
         context.steadyTime += int64(nframes)
         context.processCalls += 1'u64
@@ -181,6 +163,8 @@ proc processClapAudio*(argument: pointer; engine: ptr RtEngine;
           discard zeroRtOutputs(engine, nframes)
           status = RtProcessEndpointFailure
 
+  if isEventCycleActive(addr context.events):
+    endEventCycle(addr context.events)
   if status != RtProcessOk:
     discard zeroRtOutputs(engine, nframes)
   discard context.callsInFlight.fetchSubRelease(1'u32)
@@ -188,8 +172,8 @@ proc processClapAudio*(argument: pointer; engine: ptr RtEngine;
 {.pop.}
 
 proc newClapAudioProcess*(plugin: ptr ClapPlugin; plan: PortPlan;
-                          maxFrames: uint32; path, pluginId: string):
-    Result[ClapAudioProcess] =
+                          maxFrames: uint32; role: ptr AudioRoleGuard;
+                          path, pluginId: string): Result[ClapAudioProcess] =
   if plugin == nil or plugin.process == nil:
     return failure[ClapAudioProcess](audioProcessError(
       hekClapProcess,
@@ -200,11 +184,6 @@ proc newClapAudioProcess*(plugin: ptr ClapPlugin; plan: PortPlan;
       hekClapActivation,
       "JACK buffer size is outside the CLAP activation range",
       path, pluginId, "max-frames=" & $maxFrames))
-  if plan.notePortCount != 0:
-    return failure[ClapAudioProcess](audioProcessError(
-      hekClapProcess,
-      "the Increment 5 audio endpoint does not translate note ports",
-      path, pluginId, "note-ports=" & $plan.notePortCount))
 
   var context = cast[ptr ClapAudioProcessContext](
     allocShared0(sizeof(ClapAudioProcessContext)))
@@ -217,15 +196,11 @@ proc newClapAudioProcess*(plugin: ptr ClapPlugin; plan: PortPlan;
   context.plugin = plugin
   context.processProc = plugin.process
   context.maxFrames = maxFrames
-  context.inputEvents = ClapInputEvents(
-    ctx: cast[pointer](context),
-    size: emptyInputSize,
-    get: emptyInputGet,
-  )
-  context.outputEvents = ClapOutputEvents(
-    ctx: cast[pointer](context),
-    tryPush: rejectOutputEvent,
-  )
+  var initializedEvents = initClapEventBridge(
+    addr context.events, plan, role, path, pluginId)
+  if not initializedEvents.isOk:
+    deallocShared(context)
+    return failure[ClapAudioProcess](move(initializedEvents.error))
   context.process = ClapProcess(
     steadyTime: 0,
     framesCount: 0,
@@ -234,10 +209,9 @@ proc newClapAudioProcess*(plugin: ptr ClapPlugin; plan: PortPlan;
     audioOutputs: nil,
     audioInputsCount: 0,
     audioOutputsCount: 0,
-    inEvents: addr context.inputEvents,
-    outEvents: addr context.outputEvents,
+    inEvents: addr context.events.inputEvents,
+    outEvents: addr context.events.outputEvents,
   )
-  context.outputEventDrops.storeRelaxed(0'u64)
   context.callsInFlight.storeRelaxed(0'u32)
 
   var inputChannels = 0'u32
@@ -324,9 +298,9 @@ proc processCalls*(process: ClapAudioProcess): uint64 {.inline.} =
 proc lastStatus*(process: ClapAudioProcess): int32 {.inline.} =
   if process.context == nil: ClapProcessError else: process.context.lastStatus
 
-proc droppedOutputEvents*(process: ClapAudioProcess): uint64 {.inline.} =
-  if process.context == nil: 0'u64 else:
-    process.context.outputEventDrops.loadAcquire()
+proc takeEventMetrics*(process: ClapAudioProcess): ClapEventMetrics =
+  if process.context == nil: ClapEventMetrics() else:
+    event_bridge.takeEventMetrics(addr process.context.events)
 
 proc close*(process: var ClapAudioProcess): Result[Unit] =
   if process.context == nil:

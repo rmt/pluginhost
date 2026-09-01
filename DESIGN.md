@@ -192,35 +192,23 @@ The Increment 4B backend is internal/test-only. It has explicit `Closed`, `Open`
 `Configured`, and `Active` states and owns one stable shared callback context. JACK
 deactivation is the process-callback quiescence boundary; the immutable map remains
 alive afterward. `jack_client_close` is the all-callback quiescence boundary, after
-which callback storage may be freed and the JACK DSO may be unloaded. Increment 5's
-internal `InternalAudioSlice` composes this backend with `ClapInstance` and owns the
-preallocated CLAP audio process view; public session execution remains disabled.
+which callback storage may be freed and the JACK DSO may be unloaded. Increment 5's internal `InternalAudioSlice` composes this backend with `ClapInstance` and owns the preallocated CLAP audio process view. Increment 6A extends that same internal owner with `ClapEventBridge`; public session execution remains disabled.
 
-Increment 4C proves this boundary against a private PipeWire-JACK core at a fixed
-48 kHz/64-frame quantum. A separate process owns the observing JACK client, validates
-realized audio/MIDI ports and deterministic samples, witnesses continued server cycles
-after backend deactivation and close, and verifies that client-close removes every host
-port. The integration remains test-only and does
-not connect the public session stub.
+Increment 4C/5 prove the audio boundary against a private PipeWire-JACK core at a fixed 48 kHz/64-frame quantum. A separate process owns the observing JACK client, validates realized audio/MIDI ports and deterministic audio samples, witnesses continued server cycles after backend deactivation and close, and verifies that client-close removes every host port. Increment 6A's MIDI event traffic is deliberately fake-backed; independent live injection/capture belongs to review unit 6B.
 
 ### 5.5 `RtEngine`
 
 `RtEngine` is a fixed-layout, explicitly owned structure reachable from the JACK callback through an opaque pointer. It contains only real-time-safe data:
 
 - Frozen audio and note port maps.
-- Preallocated CLAP audio buffer descriptors and channel-pointer arrays.
-- Preallocated input event slots and merge workspace.
-- Current output MIDI buffer handles valid only during a cycle.
-- A prevalidated CLAP process function/instance pointer.
-- Atomic request, error, wake, and metric fields.
-- Bounded queues for records that must reach the main thread.
+- Current JACK audio and MIDI buffer pointers, valid only during a cycle.
+- A backend-neutral `RtMidiIo` table of prevalidated POD callback adapters.
+- A prevalidated endpoint pointer/function used by the active CLAP process adapter.
+- Atomic request, error, generation, and metric fields.
 
 It contains no managed strings, sequences, tables, closures, exceptions, GUI objects, dynamic-library handles, or ownership of foreign resources.
 
-The 4B skeleton implements fixed audio-buffer pointer arrays, a fake process mode,
-and bounded silence/copy/deterministic loops. Increment 5 adds a separate CLAP audio
-adapter with preallocated grouped descriptors and channel-pointer storage. Event
-arenas and note/event translation remain absent until Increment 6.
+The 4B skeleton implements fixed audio-buffer pointer arrays, a fake process mode, and bounded silence/copy/deterministic loops. Increment 5 adds the CLAP audio adapter with preallocated grouped descriptors and channel-pointer storage. Increment 6A adds backend-neutral MIDI buffer binding while `ClapEventBridge`, adjacent to the stable CLAP process context, owns its fixed event slots and merge heap.
 
 The JACK callback reaches it through a non-capturing `{.cdecl.}` trampoline. The hot path uses direct procedures/function pointers rather than runtime object dispatch.
 
@@ -562,20 +550,15 @@ bounds. Exact-capacity, overflow, and recovery behavior is fixture-tested.
 
 ### 11.2 Input event arena
 
-A fixed-capacity `InputEventArena` contains aligned slots large enough for supported core event structures. It has no ownership of JACK buffers. SysEx event structures point to JACK-owned event bytes whose lifetime covers the current `process()` call.
+Increment 6A's `ClapEventBridge` owns 4,096 fixed, suitably aligned event slots and a 1,024-port merge heap. It never owns JACK input bytes. SysEx structures borrow JACK-owned bytes only until the current plugin `process()` returns; chunks are neither retained nor reassembled.
 
-JACK events are ordered within each MIDI port, but CLAP requires one globally ordered input list. A preallocated k-way merge workspace merges events by frame offset and stable port order without allocating. The configured hard capacity is checked before writing each slot.
+JACK events are ordered within each MIDI port, but CLAP requires one globally ordered input list. The heap merges by frame offset, note-port index, then original event index without allocating. Raw MIDI is preserved for MIDI/MPE-capable ports; supported note-on, note-off, velocity-zero note-off, and polyphonic pressure messages translate for CLAP-only ports. MIDI2-only and otherwise unsupported note configurations fail before activation.
 
 ### 11.3 Output event sink
 
-The CLAP `try_push()` callback is valid only during `process()` or `flush()` and receives a context identifying the current role:
+Increment 6A exposes `try_push()` only during the plugin `process()` call and only to the exclusive audio role. It validates core event space, declared size before typed access, port index, timestamp, ordering, finite/ranged note fields, dialect capability, MIDI status/size/data bytes, and SysEx pointers.
 
-- MIDI/SysEx events during JACK processing are validated and copied immediately into the correct current JACK MIDI output buffer.
-- Parameter and gesture events are copied into a bounded record queue or applied directly when already on the main thread.
-- Note events are converted when safely representable.
-- Unsupported, invalid, unsorted, or over-capacity events return `false` and increment a metric.
-
-The sink never stores a plugin-owned SysEx pointer after `try_push()` returns.
+MIDI and SysEx are copied immediately into JACK-reserved output storage. Safely representable CLAP note-on/note-off events convert to MIDI 1.0 on MIDI-capable output ports. A port may emit any dialect it advertised, not merely its preferred dialect. Unsupported, malformed, out-of-order, or capacity-rejected events return `false` and increment bounded metrics. The sink never retains a plugin-owned SysEx pointer after `try_push()` returns. Parameter/gesture output and main-thread `flush()` remain deferred rather than partially exposed.
 
 ### 11.4 Sleeping, tail, and wake policy
 

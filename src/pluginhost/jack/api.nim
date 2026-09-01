@@ -51,6 +51,7 @@ type
     midiMaxEventSize*: JackMidiMaxEventSizeProc
     midiEventReserve*: JackMidiEventReserveProc
     midiEventWrite*: JackMidiEventWriteProc
+    midiGetLostEventCount*: JackMidiGetLostEventCountProc
 
   JackApi* = object
     ## Move-only owner for libjack and every required MVP procedure.
@@ -197,5 +198,7 @@ proc openJackApi*(path = JackLibrary): Result[JackApi] =
     "jack_midi_event_reserve")
   resolveRequired(midiEventWrite, JackMidiEventWriteProc,
     "jack_midi_event_write")
+  resolveRequired(midiGetLostEventCount, JackMidiGetLostEventCountProc,
+    "jack_midi_get_lost_event_count")
 
   success(move(api))

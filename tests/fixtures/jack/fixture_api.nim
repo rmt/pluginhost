@@ -34,6 +34,23 @@ type
   FakeInvokeProcessOnThreadProc* = proc(frames: uint32; force: cint;
                                          callbackResult: ptr cint): cint {.
     cdecl, gcsafe, raises: [].}
+  FakeAddMidiEventProc* = proc(portIndex: cint; time: uint32;
+                                data: ptr uint8; size: uint32): cint {.
+    cdecl, gcsafe, raises: [].}
+  FakeSetMidiValueProc* = proc(portIndex: cint; value: uint32) {.
+    cdecl, gcsafe, raises: [].}
+  FakeSetMidiEventValueProc* = proc(portIndex: cint; eventIndex, value: uint32) {.
+    cdecl, gcsafe, raises: [].}
+  FakeSetMidiFailureProc* = proc(portIndex, eventIndex: cint) {.
+    cdecl, gcsafe, raises: [].}
+  FakeGetMidiCountProc* = proc(portIndex: cint): uint32 {.
+    cdecl, gcsafe, raises: [].}
+  FakeGetMidiValueProc* = proc(portIndex: cint; eventIndex: uint32): uint32 {.
+    cdecl, gcsafe, raises: [].}
+  FakeGetMidiByteProc* = proc(portIndex: cint; eventIndex, byteIndex: uint32):
+      cint {.cdecl, gcsafe, raises: [].}
+  FakeGetMidiAddressProc* = proc(portIndex: cint; eventIndex: uint32): uint64 {.
+    cdecl, gcsafe, raises: [].}
   FakeInvokeShutdownProc* = proc(status: cint; reason: cstring) {.
     cdecl, gcsafe, raises: [].}
 
@@ -72,6 +89,18 @@ type
     setAudioSample*: FakeSetAudioSampleProc
     audioSample*: FakeGetAudioSampleProc
     audioAddress*: FakeGetAudioAddressProc
+    addMidiEvent*: FakeAddMidiEventProc
+    clearMidiEvents*: FakeSetIntProc
+    setMidiCapacity*: FakeSetMidiValueProc
+    setMidiLostEvents*: FakeSetMidiValueProc
+    setMidiEventTime*: FakeSetMidiEventValueProc
+    setMidiEventSize*: FakeSetMidiEventValueProc
+    setMidiGetFailure*: FakeSetMidiFailureProc
+    midiEventCount*: FakeGetMidiCountProc
+    midiEventTime*: FakeGetMidiValueProc
+    midiEventSize*: FakeGetMidiValueProc
+    midiEventByte*: FakeGetMidiByteProc
+    midiEventAddress*: FakeGetMidiAddressProc
     invokeProcess*: FakeInvokeProcessProc
     forceProcess*: FakeInvokeProcessProc
     invokeProcessOnThread*: FakeInvokeProcessOnThreadProc
@@ -127,6 +156,18 @@ proc `=sink`*(destination: var FakeJackControls; source: FakeJackControls) =
   destination.setAudioSample = source.setAudioSample
   destination.audioSample = source.audioSample
   destination.audioAddress = source.audioAddress
+  destination.addMidiEvent = source.addMidiEvent
+  destination.clearMidiEvents = source.clearMidiEvents
+  destination.setMidiCapacity = source.setMidiCapacity
+  destination.setMidiLostEvents = source.setMidiLostEvents
+  destination.setMidiEventTime = source.setMidiEventTime
+  destination.setMidiEventSize = source.setMidiEventSize
+  destination.setMidiGetFailure = source.setMidiGetFailure
+  destination.midiEventCount = source.midiEventCount
+  destination.midiEventTime = source.midiEventTime
+  destination.midiEventSize = source.midiEventSize
+  destination.midiEventByte = source.midiEventByte
+  destination.midiEventAddress = source.midiEventAddress
   destination.invokeProcess = source.invokeProcess
   destination.forceProcess = source.forceProcess
   destination.invokeProcessOnThread = source.invokeProcessOnThread
@@ -236,6 +277,30 @@ proc openFakeJackControls*(): Result[FakeJackControls] =
     "pluginhost_fake_jack_audio_sample")
   resolve(audioAddress, FakeGetAudioAddressProc,
     "pluginhost_fake_jack_audio_address")
+  resolve(addMidiEvent, FakeAddMidiEventProc,
+    "pluginhost_fake_jack_add_midi_event")
+  resolve(clearMidiEvents, FakeSetIntProc,
+    "pluginhost_fake_jack_clear_midi_events")
+  resolve(setMidiCapacity, FakeSetMidiValueProc,
+    "pluginhost_fake_jack_set_midi_capacity")
+  resolve(setMidiLostEvents, FakeSetMidiValueProc,
+    "pluginhost_fake_jack_set_midi_lost_events")
+  resolve(setMidiEventTime, FakeSetMidiEventValueProc,
+    "pluginhost_fake_jack_set_midi_event_time")
+  resolve(setMidiEventSize, FakeSetMidiEventValueProc,
+    "pluginhost_fake_jack_set_midi_event_size")
+  resolve(setMidiGetFailure, FakeSetMidiFailureProc,
+    "pluginhost_fake_jack_set_midi_get_failure")
+  resolve(midiEventCount, FakeGetMidiCountProc,
+    "pluginhost_fake_jack_midi_event_count")
+  resolve(midiEventTime, FakeGetMidiValueProc,
+    "pluginhost_fake_jack_midi_event_time")
+  resolve(midiEventSize, FakeGetMidiValueProc,
+    "pluginhost_fake_jack_midi_event_size")
+  resolve(midiEventByte, FakeGetMidiByteProc,
+    "pluginhost_fake_jack_midi_event_byte")
+  resolve(midiEventAddress, FakeGetMidiAddressProc,
+    "pluginhost_fake_jack_midi_event_address")
   resolve(invokeProcess, FakeInvokeProcessProc,
     "pluginhost_fake_jack_invoke_process")
   resolve(forceProcess, FakeInvokeProcessProc,

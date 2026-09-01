@@ -104,3 +104,4 @@ suite "JACK raw ABI":
     checkFunctionPointer(JackMidiMaxEventSizeProc)
     checkFunctionPointer(JackMidiEventReserveProc)
     checkFunctionPointer(JackMidiEventWriteProc)
+    checkFunctionPointer(JackMidiGetLostEventCountProc)

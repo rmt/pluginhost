@@ -55,6 +55,7 @@ suite "checked JACK dynamic API ownership":
     check api.functions.setXrunCallback != nil
     check api.functions.setFreewheelCallback != nil
     check api.functions.midiEventWrite != nil
+    check api.functions.midiGetLostEventCount != nil
 
     var major, minor, micro, protocol: cint
     api.functions.getVersion(addr major, addr minor, addr micro, addr protocol)

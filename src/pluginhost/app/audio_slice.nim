@@ -4,7 +4,7 @@
 ## view, and one configured JACK backend. It is intentionally not used by the
 ## public run command until the reactor/signal increment installs process control.
 
-import ../clap/[audio_process, host_bridge, instance, loader]
+import ../clap/[audio_process, event_bridge, host_bridge, instance, loader]
 import ../domain/[errors, plugin_catalog, result]
 import ../jack/backend
 
@@ -89,6 +89,9 @@ proc state*(slice: InternalAudioSlice): InternalAudioSliceState {.inline.} =
 proc jackBackend*(slice: var InternalAudioSlice): var JackBackend =
   slice.backend
 
+proc takeEventMetrics*(slice: var InternalAudioSlice): ClapEventMetrics =
+  slice.process.takeEventMetrics()
+
 proc openInternalAudioSlice*(module: sink ClapModule;
                              descriptor: sink PluginDescriptor;
                              backendConfig: JackBackendOpenConfig):
@@ -117,7 +120,7 @@ proc openInternalAudioSlice*(module: sink ClapModule;
   slice.backend = move(openedBackend.value)
 
   var processResult = slice.instance.newAudioProcess(
-    plan, slice.backend.bufferSize)
+    plan, slice.backend.bufferSize, slice.backend.audioRoleGuard())
   if not processResult.isOk:
     return failure[InternalAudioSlice](slice.cleanupConstructionFailure(
       move(processResult.error)))

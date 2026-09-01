@@ -4,7 +4,7 @@
 
 import std/typetraits
 
-import ../rt/[atomic_pod, engine, role_guard]
+import ../rt/[atomic_pod, engine, midi_io, role_guard]
 import ./[api, ffi, ports]
 
 const ShutdownReasonBytes* = 256
@@ -14,6 +14,11 @@ type
     portGetBuffer: JackPortGetBufferProc
     portGetLatencyRange: JackPortGetLatencyRangeProc
     portSetLatencyRange: JackPortSetLatencyRangeProc
+    midiGetEventCount: JackMidiGetEventCountProc
+    midiEventGet: JackMidiEventGetProc
+    midiClearBuffer: JackMidiClearBufferProc
+    midiEventReserve: JackMidiEventReserveProc
+    midiGetLostEventCount: JackMidiGetLostEventCountProc
 
   JackNotifications = object
     shutdownCount: RtAtomicU64
@@ -81,6 +86,11 @@ proc initJackCallbackContext*(context: ptr JackCallbackContext;
     portGetBuffer: functions.portGetBuffer,
     portGetLatencyRange: functions.portGetLatencyRange,
     portSetLatencyRange: functions.portSetLatencyRange,
+    midiGetEventCount: functions.midiGetEventCount,
+    midiEventGet: functions.midiEventGet,
+    midiClearBuffer: functions.midiClearBuffer,
+    midiEventReserve: functions.midiEventReserve,
+    midiGetLostEventCount: functions.midiGetLostEventCount,
   )
   context.role.initAudioRoleGuard()
   context.processEnabled.storeRelaxed(0'u32)
@@ -111,6 +121,73 @@ proc initJackCallbackContext*(context: ptr JackCallbackContext;
 proc callbackArgument*(context: ptr JackCallbackContext): pointer {.inline.} =
   cast[pointer](context)
 
+proc jackMidiEventCountAdapter(rawContext, portBuffer: pointer): uint32 {.
+    exportc: "pluginhost_jack_midi_event_count", cdecl, gcsafe, raises: [].} =
+  if rawContext == nil or portBuffer == nil:
+    return 0'u32
+  let context = cast[ptr JackCallbackContext](rawContext)
+  if context.functions.midiGetEventCount == nil:
+    return 0'u32
+  context.functions.midiGetEventCount(portBuffer)
+
+proc jackMidiEventGetAdapter(rawContext, portBuffer: pointer; index: uint32;
+                              event: ptr RtMidiEventView): bool {.
+    exportc: "pluginhost_jack_midi_event_get", cdecl, gcsafe, raises: [].} =
+  if rawContext == nil or portBuffer == nil or event == nil:
+    return false
+  let context = cast[ptr JackCallbackContext](rawContext)
+  if context.functions.midiEventGet == nil:
+    return false
+  var raw: JackMidiEvent
+  if context.functions.midiEventGet(addr raw, portBuffer, index) != 0 or
+      raw.size > csize_t(high(uint32)) or
+      (raw.size != 0 and raw.buffer == nil):
+    return false
+  event.time = raw.time
+  event.size = uint32(raw.size)
+  event.data = cast[ptr UncheckedArray[uint8]](raw.buffer)
+  true
+
+proc jackMidiClearAdapter(rawContext, portBuffer: pointer) {.
+    exportc: "pluginhost_jack_midi_clear", cdecl, gcsafe, raises: [].} =
+  if rawContext == nil or portBuffer == nil:
+    return
+  let context = cast[ptr JackCallbackContext](rawContext)
+  if context.functions.midiClearBuffer != nil:
+    context.functions.midiClearBuffer(portBuffer)
+
+proc jackMidiReserveAdapter(rawContext, portBuffer: pointer; time, size: uint32):
+    ptr UncheckedArray[uint8] {.
+    exportc: "pluginhost_jack_midi_reserve", cdecl, gcsafe, raises: [].} =
+  if rawContext == nil or portBuffer == nil or size == 0'u32:
+    return nil
+  let context = cast[ptr JackCallbackContext](rawContext)
+  if context.functions.midiEventReserve == nil:
+    return nil
+  cast[ptr UncheckedArray[uint8]](
+    context.functions.midiEventReserve(portBuffer, time, csize_t(size)))
+
+proc jackMidiLostEventCountAdapter(rawContext, portBuffer: pointer): uint32 {.
+    exportc: "pluginhost_jack_midi_lost_event_count", cdecl, gcsafe,
+    raises: [].} =
+  if rawContext == nil or portBuffer == nil:
+    return 0'u32
+  let context = cast[ptr JackCallbackContext](rawContext)
+  if context.functions.midiGetLostEventCount == nil:
+    return 0'u32
+  context.functions.midiGetLostEventCount(portBuffer)
+
+proc midiIo(context: ptr JackCallbackContext): RtMidiIo {.
+    inline, gcsafe, raises: [].} =
+  RtMidiIo(
+    context: cast[pointer](context),
+    eventCount: jackMidiEventCountAdapter,
+    eventGet: jackMidiEventGetAdapter,
+    clear: jackMidiClearAdapter,
+    reserve: jackMidiReserveAdapter,
+    lostEventCount: jackMidiLostEventCountAdapter,
+  )
+
 proc configureCallbacks*(context: ptr JackCallbackContext; map: RtPortMap;
                          mode: FakeProcessMode): bool =
   if context == nil or context.processEnabled.loadAcquire() != 0'u32 or
@@ -118,7 +195,8 @@ proc configureCallbacks*(context: ptr JackCallbackContext; map: RtPortMap;
     return false
   context.portMap = map
   context.engine.initRtEngine(
-    mode, map.audioInputCount, map.audioOutputCount)
+    mode, map.audioInputCount, map.audioOutputCount,
+    map.noteInputCount, map.noteOutputCount, context.midiIo())
 
 proc configureEndpointCallbacks*(context: ptr JackCallbackContext;
                                   map: RtPortMap;
@@ -129,7 +207,8 @@ proc configureEndpointCallbacks*(context: ptr JackCallbackContext;
     return false
   if not context.engine.initRtEngineEndpoint(
       map.audioInputCount, map.audioOutputCount,
-      endpoint.maxFrames, endpoint):
+      map.noteInputCount, map.noteOutputCount, endpoint.maxFrames, endpoint,
+      context.midiIo()):
     return false
   context.portMap = map
   true
@@ -270,10 +349,21 @@ proc bindOutputBuffers(context: ptr JackCallbackContext;
     let buffer = if context.functions.portGetBuffer == nil: nil else:
       context.functions.portGetBuffer(
         context.portMap.audioOutputs[int(index)], nframes)
-    if not setAudioOutputBuffer(addr context.engine, index, buffer):
+    if not setAudioOutputBuffer(addr context.engine, index, buffer) or
+        buffer == nil:
       buffersValid = false
-    if buffer == nil:
+    index += 1'u32
+
+  index = 0'u32
+  while index < context.portMap.noteOutputCount:
+    let buffer = if context.functions.portGetBuffer == nil: nil else:
+      context.functions.portGetBuffer(
+        context.portMap.noteOutputs[int(index)], nframes)
+    if not setMidiOutputBuffer(addr context.engine, index, buffer) or
+        buffer == nil or context.engine.midiIo.clear == nil:
       buffersValid = false
+    else:
+      context.engine.midiIo.clear(context.engine.midiIo.context, buffer)
     index += 1'u32
   buffersValid
 
@@ -311,26 +401,24 @@ proc jackProcessCallback*(nframes: JackNFrames; argument: pointer): cint {.
     context.leaveCallback()
     return 0
 
-  var buffersValid = context.functions.portGetBuffer != nil
+  var buffersValid = bindOutputBuffers(context, nframes)
   var index = 0'u32
   while index < context.portMap.audioInputCount:
     let buffer = if context.functions.portGetBuffer == nil: nil else:
       context.functions.portGetBuffer(
         context.portMap.audioInputs[int(index)], nframes)
-    if not setAudioInputBuffer(addr context.engine, index, buffer):
-      buffersValid = false
-    if buffer == nil:
+    if not setAudioInputBuffer(addr context.engine, index, buffer) or
+        buffer == nil:
       buffersValid = false
     index += 1'u32
 
   index = 0'u32
-  while index < context.portMap.audioOutputCount:
+  while index < context.portMap.noteInputCount:
     let buffer = if context.functions.portGetBuffer == nil: nil else:
       context.functions.portGetBuffer(
-        context.portMap.audioOutputs[int(index)], nframes)
-    if not setAudioOutputBuffer(addr context.engine, index, buffer):
-      buffersValid = false
-    if buffer == nil:
+        context.portMap.noteInputs[int(index)], nframes)
+    if not setMidiInputBuffer(addr context.engine, index, buffer) or
+        buffer == nil:
       buffersValid = false
     index += 1'u32
 
@@ -344,6 +432,7 @@ proc jackProcessCallback*(nframes: JackNFrames; argument: pointer): cint {.
 
   var callbackResult = 0.cint
   if status != RtProcessOk:
+    discard bindOutputBuffers(context, nframes)
     discard zeroRtOutputs(addr context.engine, nframes)
     discard context.notifications.processErrors.fetchAddRelaxed(1'u64)
     context.processEnabled.storeRelease(0'u32)

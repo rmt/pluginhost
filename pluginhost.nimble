@@ -1,7 +1,7 @@
 # Nimble 0.20 accepts only dotted numeric package versions and requires a
 # literal assignment. tests/unit/test_version.nim verifies this value against
 # the numeric core of VERSION.
-version       = "0.0.6"
+version       = "0.0.7"
 author        = "pluginhost contributors"
 description   = "A standalone Linux JACK host for CLAP plugins"
 license       = "UNLICENSED"
@@ -166,6 +166,13 @@ proc compileAudioFixtureVariant(name: string; mode: int) =
        "tests/fixtures/clap/audio_fixture.c " &
        "-o build/fixtures/clap/" & name & ".clap"
 
+proc compileEventFixtureVariant(name: string; mode: int) =
+  exec "cc -std=gnu11 -fPIC -shared -fvisibility=hidden " &
+       "-Wall -Wextra -Werror -Wl,-z,defs -Ivendor/clap/include " &
+       "-DPLUGINHOST_EVENT_FIXTURE_MODE=" & $mode & " " &
+       "tests/fixtures/clap/event_fixture.c " &
+       "-o build/fixtures/clap/" & name & ".clap"
+
 proc compileClapFixtures() =
   exec "mkdir -p build/fixtures/clap"
   compileClapFixtureVariant("valid", 0)
@@ -232,6 +239,10 @@ proc compileClapFixtures() =
   compileAudioFixtureVariant("audio_process_sleep", 6)
   compileAudioFixtureVariant("audio_process_tail", 7)
   compileAudioFixtureVariant("audio_process_continue_if_not_quiet", 8)
+  compileEventFixtureVariant("events_raw", 0)
+  compileEventFixtureVariant("events_clap", 1)
+  compileEventFixtureVariant("events_midi2_only", 2)
+  compileEventFixtureVariant("events_malformed_output", 3)
   exec "cc -std=gnu11 -fPIC -shared -fvisibility=hidden " &
        "-Wall -Wextra -Werror -Wl,-z,defs " &
        "tests/fixtures/clap/no_entry_fixture.c " &
@@ -292,10 +303,13 @@ proc runRtTests() =
   exec "mkdir -p build/nimcache/rt-alloc build/test"
   compileFfiFixture()
   compileFakeJackFixture()
+  exec "mkdir -p build/fixtures/clap"
+  compileEventFixtureVariant("events_raw", 0)
   exec "PLUGINHOST_FFI_FIXTURE=$PWD/build/fixtures/" &
        "libpluginhost_ffi_fixture.so " &
        "PLUGINHOST_JACK_FAKE_FIXTURE=$PWD/build/fixtures/" &
        "libpluginhost_jack_fake_fixture.so " &
+       "PLUGINHOST_CLAP_EVENT_FIXTURE_DIR=$PWD/build/fixtures/clap " &
        "nim c -r --hints:off -d:nimAllocStats " &
        "--path:src --path:tests " & dependencyPathsClause() &
        " --nimcache:build/nimcache/rt-alloc --out:build/test/all_rt_tests " &
@@ -311,6 +325,7 @@ proc runClapFixtureTests() =
        "libpluginhost_jack_fake_fixture.so " &
        "PLUGINHOST_CLAP_FIXTURE_DIR=$PWD/build/fixtures/clap " &
        "PLUGINHOST_CLAP_AUDIO_FIXTURE_DIR=$PWD/build/fixtures/clap " &
+       "PLUGINHOST_CLAP_EVENT_FIXTURE_DIR=$PWD/build/fixtures/clap " &
        "nim c -r --hints:off --path:src --path:tests " &
        dependencyPathsClause() & " --nimcache:build/nimcache/fixtures " &
        "--out:build/test/all_fixture_tests tests/fixtures/all_fixture_tests.nim"

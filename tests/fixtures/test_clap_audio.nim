@@ -6,6 +6,7 @@ import pluginhost/clap/ffi
 import pluginhost/clap/[audio_process, host_bridge, instance, loader]
 import pluginhost/domain/[errors, lifecycle, plugin_catalog, port_plan, result]
 import pluginhost/jack/backend
+import pluginhost/rt/role_guard
 import pluginhost/platform/linux/dynlib
 import ./jack/fixture_api
 import ./clap/audio_fixture_api
@@ -110,7 +111,8 @@ proc startAudio(variant: string; controls: var FakeJackControls;
   if not inspected.isOk:
     return false
   let plan = inspected.value
-  var processResult = instance.newAudioProcess(plan, backend.bufferSize)
+  var processResult = instance.newAudioProcess(
+    plan, backend.bufferSize, backend.audioRoleGuard())
   if not processResult.isOk:
     return false
   process = move(processResult.value)
@@ -306,7 +308,7 @@ suite "internal CLAP float32 audio endpoint":
     check controls.audioSample(1, 0) == 2_000.0
     check controls.audioSample(1, 7) == 2_007.0
     check fixture.processCalls() == 1
-    check process.droppedOutputEvents() == 1
+    check process.takeEventMetrics().droppedOutput == 1
     check (instance.takeRequests() and ClapRequestProcess) != 0
     var logRecord: ClapHostLogRecord
     check instance.tryPopLog(logRecord)
@@ -326,7 +328,7 @@ suite "internal CLAP float32 audio endpoint":
     check foreignResult == 0
     check fixture.processCalls() == 2
     check fixture.lastSteadyTime() == 8
-    check process.droppedOutputEvents() == 2
+    check process.takeEventMetrics().droppedOutput == 1
 
     check controls.forceProcess(129) != 0
     check controls.audioSample(0, 0) == 0.0
@@ -466,8 +468,8 @@ suite "internal CLAP float32 audio endpoint":
       var backend = openBackend()
       let inspected = instance.inspectPortPlan()
       require inspected.isOk
-      var processResult = instance.newAudioProcess(inspected.value,
-                                                    backend.bufferSize)
+      var processResult = instance.newAudioProcess(
+        inspected.value, backend.bufferSize, backend.audioRoleGuard())
       require processResult.isOk
       var process = move(processResult.value)
       require backend.configure(inspected.value, process.endpoint).isOk
@@ -491,6 +493,8 @@ suite "internal CLAP float32 audio endpoint":
     var opened = openInstance("audio_tone")
     var instance = move(opened.instance)
     var observer = move(opened.observer)
+    var role: AudioRoleGuard
+    role.initAudioRoleGuard()
     defer:
       doAssert instance.close().isOk
       doAssert observer.close().isOk
@@ -501,7 +505,7 @@ suite "internal CLAP float32 audio endpoint":
       uint32(ClapAudioProcessMaxChannelsPerDirection div
         ClapAudioProcessMaxGroupsPerDirection),
     )
-    var exact = instance.newAudioProcess(exactPlan, 128)
+    var exact = instance.newAudioProcess(exactPlan, 128, addr role)
     require exact.isOk
     var exactProcess = move(exact.value)
     check exactProcess.close().isOk
@@ -514,7 +518,8 @@ suite "internal CLAP float32 audio endpoint":
     ]:
       let tooManyGroups = capacityPlan(
         counts.inputs, counts.outputs, 1'u32)
-      var rejectedGroups = instance.newAudioProcess(tooManyGroups, 128)
+      var rejectedGroups = instance.newAudioProcess(
+        tooManyGroups, 128, addr role)
       check not rejectedGroups.isOk
       check rejectedGroups.error.kind == hekClapProcess
       check rejectedGroups.error.message.contains("group count")
@@ -526,18 +531,19 @@ suite "internal CLAP float32 audio endpoint":
       let tooManyChannels = capacityPlan(
         counts.inputs, counts.outputs,
         uint32(ClapAudioProcessMaxChannelsPerDirection + 1))
-      var rejectedChannels = instance.newAudioProcess(tooManyChannels, 128)
+      var rejectedChannels = instance.newAudioProcess(
+        tooManyChannels, 128, addr role)
       check not rejectedChannels.isOk
       check rejectedChannels.error.kind == hekClapProcess
       check rejectedChannels.error.message.contains("channel capacity")
 
     var recovered = instance.newAudioProcess(
-      capacityPlan(1'u32, 1'u32, 1'u32), 128)
+      capacityPlan(1'u32, 1'u32, 1'u32), 128, addr role)
     require recovered.isOk
     var recoveredProcess = move(recovered.value)
     check recoveredProcess.close().isOk
 
-  test "audio endpoint rejects note ports until the event increment":
+  test "audio endpoint accepts supported note ports in the event increment":
     var openedControls = openFakeJackControls()
     require openedControls.isOk
     var controls = move(openedControls.value)
@@ -549,8 +555,12 @@ suite "internal CLAP float32 audio endpoint":
     defer:
       doAssert instance.close().isOk
       doAssert observer.close().isOk
+    var role: AudioRoleGuard
+    role.initAudioRoleGuard()
     let plan = newPortPlan(portPlanVersion(1), @[], @[], @[
-      NotePortPlan(direction: pdInput, shortName: "midi_in_1")])
-    let process = instance.newAudioProcess(plan, 128)
-    check not process.isOk
-    check process.error.kind == hekClapProcess
+      NotePortPlan(index: 0, direction: pdInput, shortName: "midi_in_1",
+        supportedDialects: {ndMidi}, preferredDialect: ndMidi)])
+    var process = instance.newAudioProcess(plan, 128, addr role)
+    require process.isOk
+    var owner = move(process.value)
+    check owner.close().isOk

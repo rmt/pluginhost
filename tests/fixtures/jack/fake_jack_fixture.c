@@ -17,10 +17,18 @@
 #define FAKE_MAX_PORTS 128
 #define FAKE_MAX_FRAMES 512
 #define FAKE_MAX_ORDER 32
+#define FAKE_MAX_MIDI_EVENTS 4097
+#define FAKE_MIDI_BYTES 65536
 
 struct _jack_client {
    int marker;
 };
+
+typedef struct fake_midi_event {
+   jack_nframes_t time;
+   uint32_t size;
+   uint32_t offset;
+} fake_midi_event_t;
 
 struct _jack_port {
    int alive;
@@ -30,6 +38,13 @@ struct _jack_port {
    char type[64];
    char alias[256];
    jack_default_audio_sample_t audio[FAKE_MAX_FRAMES];
+   fake_midi_event_t midi_events[FAKE_MAX_MIDI_EVENTS];
+   unsigned char midi_data[FAKE_MIDI_BYTES];
+   uint32_t midi_event_count;
+   uint32_t midi_bytes_used;
+   uint32_t midi_capacity;
+   uint32_t midi_lost_events;
+   int midi_get_failure_index;
    jack_latency_range_t capture_latency;
    jack_latency_range_t playback_latency;
 };
@@ -90,7 +105,6 @@ typedef struct fake_jack_state {
 } fake_jack_state_t;
 
 static fake_jack_state_t state;
-static unsigned char midi_storage[4096];
 static pthread_mutex_t process_gate_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t process_gate_condition = PTHREAD_COND_INITIALIZER;
 static pthread_t blocked_process_thread;
@@ -302,6 +316,115 @@ pluginhost_fake_jack_audio_address(int port_index) {
    if (port_index < 0 || port_index >= state.successful_registrations)
       return 0U;
    return (uint64_t)(uintptr_t)state.ports[port_index].audio;
+}
+
+PLUGINHOST_FIXTURE_EXPORT int pluginhost_fake_jack_add_midi_event(
+   int port_index, uint32_t time, const unsigned char *data, uint32_t size) {
+   if (port_index < 0 || port_index >= state.successful_registrations ||
+       data == NULL || size == 0U)
+      return -1;
+   struct _jack_port *port = &state.ports[port_index];
+   if (port->midi_event_count >= FAKE_MAX_MIDI_EVENTS ||
+       size > port->midi_capacity - port->midi_bytes_used)
+      return -2;
+   if (port->midi_event_count > 0U &&
+       time < port->midi_events[port->midi_event_count - 1U].time)
+      return -3;
+   fake_midi_event_t *event = &port->midi_events[port->midi_event_count++];
+   event->time = time;
+   event->size = size;
+   event->offset = port->midi_bytes_used;
+   memcpy(&port->midi_data[port->midi_bytes_used], data, size);
+   port->midi_bytes_used += size;
+   return 0;
+}
+
+PLUGINHOST_FIXTURE_EXPORT void pluginhost_fake_jack_clear_midi_events(
+   int port_index) {
+   if (port_index < 0 || port_index >= state.successful_registrations)
+      return;
+   state.ports[port_index].midi_event_count = 0U;
+   state.ports[port_index].midi_bytes_used = 0U;
+}
+
+PLUGINHOST_FIXTURE_EXPORT void pluginhost_fake_jack_set_midi_capacity(
+   int port_index, uint32_t capacity) {
+   if (port_index < 0 || port_index >= state.successful_registrations)
+      return;
+   state.ports[port_index].midi_capacity =
+      capacity <= FAKE_MIDI_BYTES ? capacity : FAKE_MIDI_BYTES;
+}
+
+PLUGINHOST_FIXTURE_EXPORT void pluginhost_fake_jack_set_midi_lost_events(
+   int port_index, uint32_t count) {
+   if (port_index >= 0 && port_index < state.successful_registrations)
+      state.ports[port_index].midi_lost_events = count;
+}
+
+PLUGINHOST_FIXTURE_EXPORT void pluginhost_fake_jack_set_midi_event_time(
+   int port_index, uint32_t event_index, uint32_t time) {
+   if (port_index >= 0 && port_index < state.successful_registrations &&
+       event_index < state.ports[port_index].midi_event_count)
+      state.ports[port_index].midi_events[event_index].time = time;
+}
+
+PLUGINHOST_FIXTURE_EXPORT void pluginhost_fake_jack_set_midi_event_size(
+   int port_index, uint32_t event_index, uint32_t size) {
+   if (port_index >= 0 && port_index < state.successful_registrations &&
+       event_index < state.ports[port_index].midi_event_count)
+      state.ports[port_index].midi_events[event_index].size = size;
+}
+
+PLUGINHOST_FIXTURE_EXPORT void pluginhost_fake_jack_set_midi_get_failure(
+   int port_index, int event_index) {
+   if (port_index >= 0 && port_index < state.successful_registrations)
+      state.ports[port_index].midi_get_failure_index = event_index;
+}
+
+PLUGINHOST_FIXTURE_EXPORT uint32_t pluginhost_fake_jack_midi_event_count(
+   int port_index) {
+   if (port_index < 0 || port_index >= state.successful_registrations)
+      return 0U;
+   return state.ports[port_index].midi_event_count;
+}
+
+PLUGINHOST_FIXTURE_EXPORT uint32_t pluginhost_fake_jack_midi_event_time(
+   int port_index, uint32_t event_index) {
+   if (port_index < 0 || port_index >= state.successful_registrations ||
+       event_index >= state.ports[port_index].midi_event_count)
+      return UINT32_MAX;
+   return state.ports[port_index].midi_events[event_index].time;
+}
+
+PLUGINHOST_FIXTURE_EXPORT uint32_t pluginhost_fake_jack_midi_event_size(
+   int port_index, uint32_t event_index) {
+   if (port_index < 0 || port_index >= state.successful_registrations ||
+       event_index >= state.ports[port_index].midi_event_count)
+      return 0U;
+   return state.ports[port_index].midi_events[event_index].size;
+}
+
+PLUGINHOST_FIXTURE_EXPORT int pluginhost_fake_jack_midi_event_byte(
+   int port_index, uint32_t event_index, uint32_t byte_index) {
+   if (port_index < 0 || port_index >= state.successful_registrations ||
+       event_index >= state.ports[port_index].midi_event_count)
+      return -1;
+   const fake_midi_event_t *event =
+      &state.ports[port_index].midi_events[event_index];
+   if (byte_index >= event->size)
+      return -1;
+   return state.ports[port_index].midi_data[event->offset + byte_index];
+}
+
+PLUGINHOST_FIXTURE_EXPORT uint64_t pluginhost_fake_jack_midi_event_address(
+   int port_index, uint32_t event_index) {
+   if (port_index < 0 || port_index >= state.successful_registrations ||
+       event_index >= state.ports[port_index].midi_event_count)
+      return 0U;
+   const fake_midi_event_t *event =
+      &state.ports[port_index].midi_events[event_index];
+   return (uint64_t)(uintptr_t)
+      &state.ports[port_index].midi_data[event->offset];
 }
 
 PLUGINHOST_FIXTURE_EXPORT int
@@ -649,6 +772,8 @@ PLUGINHOST_FIXTURE_EXPORT jack_port_t *jack_port_register(
    struct _jack_port *port = &state.ports[state.successful_registrations++];
    memset(port, 0, sizeof(*port));
    port->alive = 1;
+   port->midi_capacity = FAKE_MIDI_BYTES;
+   port->midi_get_failure_index = -1;
    port->flags = flags;
    copy_text(port->short_name, sizeof(port->short_name), port_name);
    copy_text(port->type, sizeof(port->type), port_type);
@@ -686,7 +811,8 @@ PLUGINHOST_FIXTURE_EXPORT void *jack_port_get_buffer(jack_port_t *raw_port,
          (void)pthread_cond_wait(&process_gate_condition, &process_gate_mutex);
       (void)pthread_mutex_unlock(&process_gate_mutex);
    }
-   return port->audio;
+   return strcmp(port->type, JACK_DEFAULT_MIDI_TYPE) == 0
+      ? (void *)port : (void *)port->audio;
 }
 
 PLUGINHOST_FIXTURE_EXPORT const char *jack_port_name(const jack_port_t *raw_port) {
@@ -745,40 +871,72 @@ jack_recompute_total_latencies(jack_client_t *client) {
 
 PLUGINHOST_FIXTURE_EXPORT uint32_t
 jack_midi_get_event_count(void *port_buffer) {
-   (void)port_buffer;
-   return 0;
+   struct _jack_port *port = port_buffer;
+   return port != NULL ? port->midi_event_count : 0U;
 }
 
 PLUGINHOST_FIXTURE_EXPORT int jack_midi_event_get(
    jack_midi_event_t *event, void *port_buffer, uint32_t event_index) {
-   (void)event;
-   (void)port_buffer;
-   (void)event_index;
-   return -1;
+   struct _jack_port *port = port_buffer;
+   if (event == NULL || port == NULL || event_index >= port->midi_event_count ||
+       (int)event_index == port->midi_get_failure_index)
+      return -1;
+   const fake_midi_event_t *source = &port->midi_events[event_index];
+   event->time = source->time;
+   event->size = source->size;
+   event->buffer = &port->midi_data[source->offset];
+   return 0;
 }
 
 PLUGINHOST_FIXTURE_EXPORT void jack_midi_clear_buffer(void *port_buffer) {
-   (void)port_buffer;
+   struct _jack_port *port = port_buffer;
+   if (port != NULL) {
+      port->midi_event_count = 0U;
+      port->midi_bytes_used = 0U;
+   }
 }
 
 PLUGINHOST_FIXTURE_EXPORT size_t
 jack_midi_max_event_size(void *port_buffer) {
-   (void)port_buffer;
-   return sizeof(midi_storage);
+   struct _jack_port *port = port_buffer;
+   if (port == NULL || port->midi_bytes_used > port->midi_capacity)
+      return 0U;
+   return port->midi_capacity - port->midi_bytes_used;
 }
 
 PLUGINHOST_FIXTURE_EXPORT jack_midi_data_t *jack_midi_event_reserve(
    void *port_buffer, jack_nframes_t time, size_t data_size) {
-   (void)port_buffer;
-   (void)time;
-   return data_size <= sizeof(midi_storage) ? midi_storage : NULL;
+   struct _jack_port *port = port_buffer;
+   if (port == NULL || data_size == 0U || data_size > UINT32_MAX ||
+       port->midi_event_count >= FAKE_MAX_MIDI_EVENTS ||
+       data_size > port->midi_capacity - port->midi_bytes_used ||
+       (port->midi_event_count > 0U &&
+        time < port->midi_events[port->midi_event_count - 1U].time))
+      return NULL;
+   fake_midi_event_t *event = &port->midi_events[port->midi_event_count++];
+   event->time = time;
+   event->size = (uint32_t)data_size;
+   event->offset = port->midi_bytes_used;
+   jack_midi_data_t *destination = &port->midi_data[port->midi_bytes_used];
+   port->midi_bytes_used += (uint32_t)data_size;
+   return destination;
 }
 
 PLUGINHOST_FIXTURE_EXPORT int jack_midi_event_write(
    void *port_buffer, jack_nframes_t time, const jack_midi_data_t *data,
    size_t data_size) {
-   (void)port_buffer;
-   (void)time;
-   (void)data;
-   return data_size <= sizeof(midi_storage) ? 0 : -1;
+   if (data == NULL)
+      return -1;
+   jack_midi_data_t *destination =
+      jack_midi_event_reserve(port_buffer, time, data_size);
+   if (destination == NULL)
+      return -1;
+   memcpy(destination, data, data_size);
+   return 0;
+}
+
+PLUGINHOST_FIXTURE_EXPORT uint32_t
+jack_midi_get_lost_event_count(void *port_buffer) {
+   struct _jack_port *port = port_buffer;
+   return port != NULL ? port->midi_lost_events : 0U;
 }
