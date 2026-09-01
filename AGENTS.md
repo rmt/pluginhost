@@ -50,7 +50,7 @@ As of the latest reviewed state:
 
 - Default/current branch: `main`; inspect `git status` and `git log` before editing.
 - Version: `0.0.7-dev` (`pluginhost.nimble` uses numeric `0.0.7` because of Nimble metadata syntax).
-- Increments 0 through 5 and review unit 6A are approved. Review unit 6B has not started.
+- Increments 0 through 5 and review unit 6A are approved. Review unit 6B is implemented and awaiting review.
 - The CLI uses exactly pinned `argparse` 4.0.2.
 - `list` and `scan` report copied CLAP descriptors without creating a plugin
   instance; `run` remains a typed stub.
@@ -58,8 +58,8 @@ As of the latest reviewed state:
 - CLAP/JACK declarations, Linux DSO ownership, C/Nim callbacks, and the ARC RT
   spike retain their ABI, foreign-thread, allocator, and generated-C checks.
 - The shared build profile is ARC, threads on, panics on, and Nim signal handlers disabled.
-- The current suite contains 78 unit, 24 ABI, 46 fixture, 9 RT, and 2 live integration tests (159 total), plus required generated-C negative-canary rejection.
-- The internal CLAP/JACK float32 audio slice and fake-backed sample-accurate JACK MIDI/CLAP event bridge are implemented with bounded fixed storage, explicit dialect policy, immediate output copying, and allocator/generated-C evidence. Live MIDI evidence, public `run`, GUI, state, and reactor behavior remain unimplemented.
+- The current suite contains 78 unit, 24 ABI, 46 fixture, 9 RT, and 3 live integration tests (160 total), plus required generated-C negative-canary rejection.
+- The internal CLAP/JACK float32 audio slice and sample-accurate JACK MIDI/CLAP event bridge are implemented with bounded fixed storage, explicit dialect policy, immediate output copying, allocator/generated-C evidence, and isolated live MIDI injection/capture. Public `run`, GUI, state, and reactor behavior remain unimplemented.
 - Remote `origin` is configured; no project license is currently configured.
 
 Current source responsibilities:
@@ -85,7 +85,7 @@ Current source responsibilities:
 - `tests/fixtures/ffi/` — independently compiled callback/DSO fixture.
 - `tests/fixtures/jack/` — partial-symbol and complete controllable fake JACK DSOs.
 - `tests/rt/` — ARC allocator evidence including event overflow/malformed paths, complete product-profile generated-C/call-path auditing, required negative canary, and live C callback instrumentation.
-- `tests/integration/` — strict disposable PipeWire-JACK orchestration plus an independent C JACK peer for ports, samples, quiescence, and repeated lifecycle evidence.
+- `tests/integration/` — strict disposable PipeWire-JACK orchestration plus independent C audio and two-client MIDI peers for ports, samples/events, quiescence, and repeated lifecycle evidence.
 - `tests/unit/` — control-plane, ownership, naming, rollback, quiescence, fake-processing, role, CLI, CLAP, and support tests.
 - `docs/adr/` — accepted binding-strategy decisions.
 - `REVIEW_ISSUES.md` — preserved findings plus owner-approved dispositions and named targets.
@@ -114,18 +114,25 @@ nimble all
 `nimble testAbi` checks ABI declarations, generic and JACK-specific DSO ownership, complete JACK symbol resolution, and C/Nim callbacks.
 `nimble testFixtures` builds independent synthetic CLAP DSOs and checks module, catalog, lifecycle, port planning, audio processing, fixed-capacity event translation, cleanup, `list`, and `scan` behavior.
 `nimble testRt` runs allocator/foreign-thread checks through audio and event paths, complete product-profile generated-C/call-path audits, and required negative-canary rejection.
-`nimble testIntegration` fails when prerequisites are missing, then runs a private PipeWire-JACK Dummy-Driver, independent JACK/CLAP peers, audio capture, quiescence/stress, and live C callback instrumentation. Live MIDI coverage is not yet included.
+`nimble testIntegration` fails when prerequisites are missing, then runs private PipeWire-JACK Dummy-Drivers, independent JACK/CLAP peers, audio and sample-accurate MIDI/SysEx capture, quiescence/stress, and live C callback instrumentation.
 `nimble all` performs source compile, unit, ABI, fixture, RT, and live integration checks; its integration preflight fails rather than reporting a false complete pass.
 
 For user-visible CLI changes, also exercise the compiled process directly and verify stdout, stderr, and exit codes. Existing stubs are expected to fail with a non-zero status.
 
-## Next planned work: Increment 6B — live MIDI integration evidence
+## Current review candidate: Increment 6B — live MIDI integration evidence
 
-Review unit 6A is approved. The next fresh session must inspect the current state and present a 6B pre-code package before changing integration orchestration, the independent JACK peer, or live callback instrumentation. Do not begin implementation without explicit owner approval. Use version `0.0.7-dev` throughout Increment 6.
+Review unit 6A is approved and the approved 6B package is implemented. The candidate adds
+a separate two-client C JACK MIDI peer and an isolated live test covering two input/output
+ports, exact and equal sample offsets, cross-port order, SysEx, 16 start/stop lifecycles,
+cycle-witnessed quiescence, port removal, and clean live callback instrumentation. Fast
+failure injection remains in the fake-backed tasks. Use version `0.0.7-dev` throughout
+Increment 6.
 
-The package must specify independent JACK MIDI injection/capture through the disposable PipeWire-JACK server, exact sample-offset and multi-port evidence, SysEx coverage, repeated lifecycle/quiescence checks, and instrumentation through the live CLAP event process path. Keep fast failure injection in the existing fake-backed tasks.
-
-Increment 6B must not enable public `run`, add MIDI2, parameters, `clap_host_note_ports`, structural rescans, GUI, state, reactor/signals, restart/reconnection, latency integration, transport, SysEx reassembly, or later-increment behavior. Stop for review after 6B and do not begin Increment 7 without explicit approval.
+Increment 6B does not enable public `run`, add MIDI2, parameters,
+`clap_host_note_ports`, structural rescans, GUI, state, reactor/signals,
+restart/reconnection, latency integration, transport, SysEx reassembly, or later behavior.
+Stop at the 6B review gate. Do not update to `0.0.8-dev`, prepare the Increment 7 pre-code
+package, or begin Increment 7 until the owner explicitly approves review unit 6B.
 
 ## Non-negotiable engineering rules
 

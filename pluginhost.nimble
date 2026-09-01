@@ -83,7 +83,8 @@ proc rtInstrumentationLinkFlags(): string =
     result.add(" --passL:-Wl,--wrap=" & symbol)
 
 proc compileLiveIntegrationSupport() =
-  exec "mkdir -p build/integration build/nimcache/integration build/test"
+  exec "mkdir -p build/integration build/nimcache/integration build/test " &
+       "build/fixtures/clap"
   exec "cc -std=gnu11 -fPIC -fno-builtin -Wall -Wextra -Werror " &
        "-pthread $(pkg-config --cflags jack) -c " &
        "tests/rt/live_callback_instrumentation.c " &
@@ -92,6 +93,15 @@ proc compileLiveIntegrationSupport() =
        "$(pkg-config --cflags jack) tests/integration/jack_peer.c " &
        "$(pkg-config --libs jack) -ldl -Wl,-z,defs " &
        "-o build/integration/jack_peer"
+  exec "cc -std=gnu11 -fno-builtin -Wall -Wextra -Werror -pthread " &
+       "$(pkg-config --cflags jack) tests/integration/jack_midi_peer.c " &
+       "$(pkg-config --libs jack) -ldl -Wl,-z,defs " &
+       "-o build/integration/jack_midi_peer"
+  exec "cc -std=gnu11 -fPIC -shared -fvisibility=hidden " &
+       "-Wall -Wextra -Werror -Wl,-z,defs -Ivendor/clap/include " &
+       "-DPLUGINHOST_EVENT_FIXTURE_MODE=0 " &
+       "tests/fixtures/clap/event_fixture.c " &
+       "-o build/fixtures/clap/events_raw.clap"
 
 proc verifyIntegrationPrerequisiteFailure() =
   exec "python=$(command -v python3); set +e; " &
@@ -137,10 +147,16 @@ proc runIntegrationTests(checkPrerequisites = true) =
   compileLiveIntegrationTest(
     "tests/integration/test_live_clap_audio.nim", "live_clap_audio")
   compileLiveIntegrationTest(
+    "tests/integration/test_live_clap_events.nim", "live_clap_events")
+  compileLiveIntegrationTest(
     "tests/integration/all_integration_tests.nim", "all_integration_tests")
   exec "python3 tests/integration/run_pipewire_jack.py " &
        "--test build/test/live_clap_audio " &
        "--peer build/integration/jack_peer"
+  exec "PLUGINHOST_CLAP_EVENT_FIXTURE_DIR=$PWD/build/fixtures/clap " &
+       "python3 tests/integration/run_pipewire_jack.py " &
+       "--test build/test/live_clap_events " &
+       "--peer build/integration/jack_midi_peer"
   exec "python3 tests/integration/run_pipewire_jack.py " &
        "--test build/test/all_integration_tests " &
        "--peer build/integration/jack_peer"

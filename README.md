@@ -2,7 +2,7 @@
 
 `pluginhost` is an in-progress standalone Linux JACK host for native CLAP plugins, implemented in Nim. Its intended role is similar to `carla-single`, with one plugin instance and one JACK client per process.
 
-The current development version is **0.0.7-dev**. The implementation includes checked CLAP ownership/catalog/lifecycle, human/JSON `list` and recursive `scan`, bounded immutable audio/note port planning, and an internal checked JACK backend. The internal float32 slice provides grouped zero-copy audio processing, lifecycle rollback, configuration quiescence, synthetic/live evidence, and an independent-plugin smoke hook. Approved review unit 6A adds a fake-backed sample-accurate JACK MIDI/CLAP event bridge with fixed storage, deterministic ordering, dialect conversion, immediate output copying, and explicit overflow/error metrics. The canonical public `run` path remains disabled.
+The current development version is **0.0.7-dev**. The implementation includes checked CLAP ownership/catalog/lifecycle, human/JSON `list` and recursive `scan`, bounded immutable audio/note port planning, and an internal checked JACK backend. The internal float32 slice provides grouped zero-copy audio processing, lifecycle rollback, configuration quiescence, synthetic/live evidence, and an independent-plugin smoke hook. The sample-accurate JACK MIDI/CLAP event bridge has fixed storage, deterministic ordering, dialect conversion, immediate output copying, explicit overflow/error metrics, and an Increment 6B live-integration review candidate. The canonical public `run` path remains disabled.
 
 ## Build
 
@@ -66,11 +66,14 @@ standard atomic helpers install trace frames under the product profile.
 `nimble testIntegration` creates isolated mode-0700 private runtimes, launches uniquely
 named PipeWire cores with their Dummy-Drivers at 48 kHz/64 frames, validates the internal
 CLAP float32 lifecycle against an independently installed headless plugin, validates live
-audio/MIDI port materialization and deterministic audio samples through a separate JACK peer, proves
-cycle-based quiescence and client-close port removal, runs 32 repeated active-close
-lifecycles, and requires zero instrumented C allocation, deallocation, lock, print, or
-prohibited-I/O operations in host callback scope. Set
-`PLUGINHOST_CLAP_SMOKE_PLUGIN=/absolute/path/to/headless.clap`; optionally set `PLUGINHOST_CLAP_SMOKE_PLUGIN_ID` when the library contains multiple plugins. Missing smoke prerequisites fail rather than skip. `nimble all` includes this live task. Live MIDI event injection/capture is deferred to Increment 6B.
+audio/MIDI port materialization and deterministic audio samples through a separate JACK peer,
+and uses a two-client C MIDI peer to inject and capture exact multi-port MIDI/SysEx offsets
+through the CLAP event fixture. It proves cycle-based quiescence, client-close port removal,
+repeated audio and MIDI lifecycles, and zero instrumented C allocation, deallocation, lock,
+print, or prohibited-I/O operations in host callback scope. Set
+`PLUGINHOST_CLAP_SMOKE_PLUGIN=/absolute/path/to/headless.clap`; optionally set
+`PLUGINHOST_CLAP_SMOKE_PLUGIN_ID` when the library contains multiple plugins. Missing smoke
+prerequisites fail rather than skip. `nimble all` includes all three isolated live runs.
 
 The checked Linux loader uses `dlopen`/`dlsym`/`dlclose` without another Nim package.
 Both its generic owner and `JackApi` are move-only and require explicit, checked,
@@ -104,7 +107,7 @@ plugin instance. `scan` recursively discovers canonical `.clap` files, continues
 past per-root and per-candidate failures, reports successful descriptors, and uses
 exit status 3 when any issue occurred. Relative explicit/`CLAP_PATH` roots resolve
 from the current working directory; environment values do not expand `~`. The
-Increment 5 audio slice and Increment 6A event bridge are internal/test-only; `run` remains an explicit not-implemented failure until orderly signal/reactor control is implemented.
+Increment 5 audio slice and Increment 6 event bridge are internal/test-only; `run` remains an explicit not-implemented failure until orderly signal/reactor control is implemented.
 
 ## Project documents
 

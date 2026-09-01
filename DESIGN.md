@@ -194,7 +194,7 @@ deactivation is the process-callback quiescence boundary; the immutable map rema
 alive afterward. `jack_client_close` is the all-callback quiescence boundary, after
 which callback storage may be freed and the JACK DSO may be unloaded. Increment 5's internal `InternalAudioSlice` composes this backend with `ClapInstance` and owns the preallocated CLAP audio process view. Increment 6A extends that same internal owner with `ClapEventBridge`; public session execution remains disabled.
 
-Increment 4C/5 prove the audio boundary against a private PipeWire-JACK core at a fixed 48 kHz/64-frame quantum. A separate process owns the observing JACK client, validates realized audio/MIDI ports and deterministic audio samples, witnesses continued server cycles after backend deactivation and close, and verifies that client-close removes every host port. Increment 6A's MIDI event traffic is deliberately fake-backed; independent live injection/capture belongs to review unit 6B.
+Increment 4C/5 prove the audio boundary against a private PipeWire-JACK core at a fixed 48 kHz/64-frame quantum. A separate process owns the observing JACK client, validates realized audio/MIDI ports and deterministic audio samples, witnesses continued server cycles after backend deactivation and close, and verifies that client-close removes every host port. The Increment 6B candidate adds an acyclic source-host-capture graph through two independent peer JACK clients, proving exact live multi-port MIDI/SysEx offsets, repeated activation quiescence, port removal, and callback instrumentation through the CLAP event path.
 
 ### 5.5 `RtEngine`
 
@@ -742,12 +742,16 @@ DBus, and other ambient integration, fixes the clock, poisons `JACK_DEFAULT_SERV
 requires the private Dummy-Driver through `pw-dump`, and tears down process groups and
 socket files deterministically. Missing prerequisites fail the task rather than skip.
 
-A separately linked C peer owns one JACK client, inspects live port types/directions,
-connects only test audio outputs, validates deterministic buffers, and acknowledges
-server-cycle progress over a control pipe. GNU linker wrapping scopes C allocation,
-deallocation, lock, print, and direct-I/O counters around all host JACK callbacks while
-excluding PipeWire/libjack internals and the peer process. A self-test must first prove
-every counter can detect its prohibited category.
+A separately linked C audio peer owns one JACK client, inspects live port
+types/directions, connects only test audio outputs, validates deterministic buffers, and
+acknowledges server-cycle progress over a control pipe. The Increment 6B candidate adds a
+separate C MIDI peer whose injector and capture clients form an acyclic graph around the
+host. Its fixed callback storage injects two-port MIDI/SysEx signatures and validates exact
+captured bytes and sample offsets; control-thread graph attachment is bounded and idempotent
+across repeated host activation. GNU linker wrapping scopes C allocation, deallocation,
+lock, print, and direct-I/O counters around all host JACK callbacks while excluding
+PipeWire/libjack internals and the peer processes. A self-test must first prove every
+counter can detect its prohibited category.
 
 ### 16.2 Contract tests
 

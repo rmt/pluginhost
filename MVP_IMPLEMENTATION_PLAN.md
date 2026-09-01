@@ -3,7 +3,7 @@
 **Plan version:** 1.0.0  
 **Target product release:** `pluginhost` 0.1.0  
 **Initial development version:** 0.0.1-dev  
-**Status:** Approved through review unit 6A; review unit 6B not started
+**Status:** Approved through review unit 6A; review unit 6B implemented and awaiting review
 **Companion documents:** [`REQUIREMENTS.md`](REQUIREMENTS.md), [`DESIGN.md`](DESIGN.md)
 
 ## 1. Purpose
@@ -439,7 +439,7 @@ Review the complete lifecycle sequence, zero-copy proof, audio grouping, failure
 ## 13. Increment 6 — JACK MIDI and CLAP note/event bridge
 
 **Planned version:** 0.0.7-dev
-**Status:** Review unit 6A approved; review unit 6B not started.
+**Status:** Review unit 6A approved; review unit 6B implemented and awaiting review.
 
 ### Goal
 
@@ -472,11 +472,21 @@ Add sample-accurate MIDI input/output and required CLAP note-dialect conversion 
 
 ### Manual verification
 
-Review unit 6A uses strict fake-JACK and independent CLAP event fixtures. After 6A approval, review unit 6B will connect an independent JACK MIDI peer under the disposable PipeWire-JACK server and verify live injection/capture plus callback instrumentation.
+Review unit 6A uses strict fake-JACK and independent CLAP event fixtures. The 6B candidate uses a separate two-client C JACK peer under its own disposable PipeWire-JACK server to inject and capture live multi-port MIDI/SysEx through the production CLAP event process path.
 
 ### Human review gate 6A
 
 Review event layout/alignment, sorting algorithm, pointer lifetimes, SysEx copies, dialect policy, overflow behavior, and RT test coverage before beginning live MIDI work.
+
+### Review unit 6B implementation
+
+- Add an independently linked C peer with separate injector and capture JACK clients so the live test graph remains acyclic.
+- Inject deterministic MIDI and SysEx on two ports and verify exact bytes and sample offsets after CLAP fixture echo.
+- Verify equal-offset global ordering through fixture observations and immediate output copying through peer capture.
+- Re-establish test connections idempotently at each activation with bounded control-thread retries for PipeWire graph publication.
+- Repeat 16 CLAP/JACK start/stop lifecycles with 32 peer-witnessed quiescence cycles after each stop.
+- Verify port removal and continued server cycles after close.
+- Require clean allocation/deallocation/lock/print/prohibited-I/O instrumentation through the live CLAP event process path.
 
 ### Human review gate 6B
 
@@ -736,7 +746,7 @@ This table is updated only when work is reviewed.
 | 3 — CLAP lifecycle | Approved | Review unit 3B | Host bridge, instance lifecycle, immutable port plans, and render negotiation accepted |
 | 4 — JACK/RT harness | Approved | Review units 4A, 4B, and 4C | Checked loading, fake-backed mechanics, live PipeWire-JACK integration, and strengthened RT evidence accepted |
 | 5 — Audio vertical slice | Approved | Review unit 5 | Internal grouped zero-copy CLAP/JACK float32 slice, lifecycle rollback, live capture, and RT evidence accepted |
-| 6 — MIDI/events | In progress | Review unit 6A | Fake-backed fixed-capacity event bridge approved; live review unit 6B not started |
+| 6 — MIDI/events | In progress | Review unit 6A; 6B candidate | Fake-backed bridge approved; isolated live multi-port MIDI/SysEx evidence implemented and awaiting review |
 | 7 — Reactor/signals | Not started | — | — |
 | 8 — Host extensions/restart | Not started | — | — |
 | 9 — State | Not started | — | — |
@@ -786,4 +796,4 @@ Each candidate requires requirements/design updates and, where architectural, an
 
 ## 23. First action after each review gate
 
-After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Review unit 6A is approved. The next fresh session must present the Increment 6B pre-code package before changing live MIDI integration behavior; do not begin implementation without explicit approval.
+After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Review unit 6A is approved and review unit 6B is implemented awaiting review. Stop at the 6B review gate; do not mark Increment 6 approved, advance to `0.0.8-dev`, prepare the Increment 7 pre-code package, or begin Increment 7 without explicit owner approval.
