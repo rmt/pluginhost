@@ -18,6 +18,9 @@
 #include <jack/jack.h>
 #include <jack/midiport.h>
 #include "rt_atomic.h"
+#include <signal.h>
+#include <sys/epoll.h>
+#include <sys/signalfd.h>
 
 #define ABI_FIELD_ID(type_id, field_id) ((type_id) * 100 + (field_id))
 #define ABI_FIELD_CASE(type_id, field_id, type_name, field_name)                                  \
@@ -177,6 +180,11 @@ ABI_ASSERT_SYMBOL(jack_midi_event_write,
                   int (*)(void *, jack_nframes_t, const jack_midi_data_t *, size_t));
 ABI_ASSERT_SYMBOL(jack_midi_get_lost_event_count, uint32_t (*)(void *));
 
+ABI_ASSERT_SYMBOL(epoll_create1, int (*)(int));
+ABI_ASSERT_SYMBOL(epoll_ctl, int (*)(int, int, int, struct epoll_event *));
+ABI_ASSERT_SYMBOL(epoll_wait, int (*)(int, struct epoll_event *, int, int));
+ABI_ASSERT_SYMBOL(signalfd, int (*)(int, const sigset_t *, int));
+
 uint64_t pluginhost_abi_size(int32_t type_id) {
    switch (type_id) {
       ABI_TYPE_CASE(1, clap_version_t);
@@ -229,6 +237,8 @@ uint64_t pluginhost_abi_size(int32_t type_id) {
       ABI_TYPE_CASE(201, pluginhost_rt_atomic_u32);
       ABI_TYPE_CASE(202, pluginhost_rt_atomic_i32);
       ABI_TYPE_CASE(203, pluginhost_rt_atomic_u64);
+      ABI_TYPE_CASE(301, struct epoll_event);
+      ABI_TYPE_CASE(302, struct signalfd_siginfo);
       default: return UINT64_MAX;
    }
 }
@@ -285,6 +295,8 @@ uint64_t pluginhost_abi_align(int32_t type_id) {
       ABI_ALIGN_CASE(201, pluginhost_rt_atomic_u32);
       ABI_ALIGN_CASE(202, pluginhost_rt_atomic_i32);
       ABI_ALIGN_CASE(203, pluginhost_rt_atomic_u64);
+      ABI_ALIGN_CASE(301, struct epoll_event);
+      ABI_ALIGN_CASE(302, struct signalfd_siginfo);
       default: return UINT64_MAX;
    }
 }
@@ -440,6 +452,9 @@ uint64_t pluginhost_abi_offset(int32_t field_id) {
       ABI_FIELD_CASE(110, 1, jack_midi_event_t, time);
       ABI_FIELD_CASE(110, 2, jack_midi_event_t, size);
       ABI_FIELD_CASE(110, 3, jack_midi_event_t, buffer);
+      ABI_FIELD_CASE(301, 1, struct epoll_event, events);
+      ABI_FIELD_CASE(301, 2, struct epoll_event, data);
+      ABI_FIELD_CASE(302, 1, struct signalfd_siginfo, ssi_signo);
       default: return UINT64_MAX;
    }
 }

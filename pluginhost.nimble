@@ -1,7 +1,7 @@
 # Nimble 0.20 accepts only dotted numeric package versions and requires a
 # literal assignment. tests/unit/test_version.nim verifies this value against
 # the numeric core of VERSION.
-version       = "0.0.7"
+version       = "0.0.8"
 author        = "pluginhost contributors"
 description   = "A standalone Linux JACK host for CLAP plugins"
 license       = "UNLICENSED"
@@ -102,6 +102,11 @@ proc compileLiveIntegrationSupport() =
        "-DPLUGINHOST_EVENT_FIXTURE_MODE=0 " &
        "tests/fixtures/clap/event_fixture.c " &
        "-o build/fixtures/clap/events_raw.clap"
+  exec "cc -std=gnu11 -fPIC -shared -fvisibility=hidden " &
+       "-Wall -Wextra -Werror -Wl,-z,defs -Ivendor/clap/include " &
+       "-DPLUGINHOST_AUDIO_FIXTURE_MODE=0 " &
+       "tests/fixtures/clap/audio_fixture.c " &
+       "-o build/fixtures/clap/audio_tone.clap"
 
 proc verifyIntegrationPrerequisiteFailure() =
   exec "python=$(command -v python3); set +e; " &
@@ -139,6 +144,12 @@ proc compileLiveIntegrationTest(source, output: string) =
        rtInstrumentationLinkFlags() &
        " --out:build/test/" & output & " " & source
 
+proc compileControlIntegrationTest(source, output: string) =
+  exec "nim c --hints:off --path:src --path:tests " &
+       dependencyPathsClause() &
+       " --nimcache:build/nimcache/integration/" & output &
+       " --out:build/test/" & output & " " & source
+
 proc runIntegrationTests(checkPrerequisites = true) =
   if checkPrerequisites:
     checkIntegrationPrerequisites()
@@ -148,8 +159,15 @@ proc runIntegrationTests(checkPrerequisites = true) =
     "tests/integration/test_live_clap_audio.nim", "live_clap_audio")
   compileLiveIntegrationTest(
     "tests/integration/test_live_clap_events.nim", "live_clap_events")
+  compileControlIntegrationTest(
+    "tests/integration/test_public_run_control.nim", "public_run_control")
   compileLiveIntegrationTest(
     "tests/integration/all_integration_tests.nim", "all_integration_tests")
+  exec "PLUGINHOST_TEST_BIN=$PWD/build/test/pluginhost " &
+       "PLUGINHOST_CLAP_AUDIO_FIXTURE_DIR=$PWD/build/fixtures/clap " &
+       "python3 tests/integration/run_pipewire_jack.py " &
+       "--test build/test/public_run_control " &
+       "--peer build/integration/jack_peer"
   exec "python3 tests/integration/run_pipewire_jack.py " &
        "--test build/test/live_clap_audio " &
        "--peer build/integration/jack_peer"
@@ -361,6 +379,7 @@ task testRt, "Run callback allocation and generated-code safety checks":
   runRtTests()
 
 task testIntegration, "Run isolated live PipeWire-JACK integration tests":
+  compileTestBinary()
   runIntegrationTests()
 
 task all, "Run compile checks, build the executable, and run tests":

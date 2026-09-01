@@ -155,6 +155,11 @@ The CLI layer contains no plugin lifecycle or process logic.
 
 `HostSession` does not parse CLI text, call raw FFI directly, or perform sample processing itself.
 
+Increment 7 makes this coordinator the public headless runtime owner. It constructs the
+signal source/reactor before plugin or JACK work, moves one `InternalAudioSlice` into the
+session, services bounded control snapshots and CLAP requests, and releases PID, reactor,
+and signal-mask resources after audio/plugin/JACK teardown.
+
 ### 5.3 `ClapRuntime`
 
 This package is split into several focused components:
@@ -192,9 +197,9 @@ The Increment 4B backend is internal/test-only. It has explicit `Closed`, `Open`
 `Configured`, and `Active` states and owns one stable shared callback context. JACK
 deactivation is the process-callback quiescence boundary; the immutable map remains
 alive afterward. `jack_client_close` is the all-callback quiescence boundary, after
-which callback storage may be freed and the JACK DSO may be unloaded. Increment 5's internal `InternalAudioSlice` composes this backend with `ClapInstance` and owns the preallocated CLAP audio process view. Increment 6A extends that same internal owner with `ClapEventBridge`; public session execution remains disabled.
+which callback storage may be freed and the JACK DSO may be unloaded. Increment 5's internal `InternalAudioSlice` composes this backend with `ClapInstance` and owns the preallocated CLAP audio process view. Increment 6 extends that same owner with `ClapEventBridge`; Increment 7 moves it unchanged into the public `HostSession`.
 
-Increment 4C/5 prove the audio boundary against a private PipeWire-JACK core at a fixed 48 kHz/64-frame quantum. A separate process owns the observing JACK client, validates realized audio/MIDI ports and deterministic audio samples, witnesses continued server cycles after backend deactivation and close, and verifies that client-close removes every host port. The Increment 6B candidate adds an acyclic source-host-capture graph through two independent peer JACK clients, proving exact live multi-port MIDI/SysEx offsets, repeated activation quiescence, port removal, and callback instrumentation through the CLAP event path.
+Increment 4C/5 prove the audio boundary against a private PipeWire-JACK core at a fixed 48 kHz/64-frame quantum. A separate process owns the observing JACK client, validates realized audio/MIDI ports and deterministic audio samples, witnesses continued server cycles after backend deactivation and close, and verifies that client-close removes every host port. Approved Increment 6B adds an acyclic source-host-capture graph through two independent peer JACK clients, proving exact live multi-port MIDI/SysEx offsets, repeated activation quiescence, port removal, and callback instrumentation through the CLAP event path.
 
 ### 5.5 `RtEngine`
 
@@ -244,12 +249,14 @@ Production builds disable Nim's implicit signal handlers. The composition root b
 `SIGINT`, `SIGTERM`, `SIGUSR1`, and `SIGUSR2` with `pthread_sigmask` before
 `jack_client_open`, so all JACK-created threads inherit the mask. The main reactor alone
 consumes those signals; no signal handler performs wakeup I/O on an RT thread.
+Increment 7 installs no product signal handler at all: `signalfd` consumes the blocked
+set, and the owning main thread restores its previous mask only after runtime teardown.
 
-The initial implementation should use `epoll` behind a small `Reactor` interface. A portable `poll` implementation may be added later.
+Increment 7 uses direct level-triggered `epoll` behind a small backend-neutral driver contract. FD and monotonic-timer registrations carry slot generations; queued events for removed/reused slots are rejected before application dispatch. A deterministic fake driver advances test time without sleeping. A portable `poll` implementation may be added later.
 
 Registrations use opaque tokens and generation numbers rather than raw object pointers. This prevents dispatch to an FD/timer removed or reused during a callback. Plugin FD callbacks are level-triggered as required by CLAP.
 
-The reactor calculates a bounded wait from the next plugin timer and a control-request service deadline. While a plugin is active, pending atomic CLAP requests must be observed within the required main-callback latency without requiring an audio-thread system call.
+The reactor calculates a bounded wait from the next timer and a control-request service deadline. Increment 7 caps active waits at 16 ms, dispatches coalesced `request_callback()` on the original main thread, treats `request_process()` as satisfied by continuous processing, and terminates explicitly on restart until Increment 8 owns restart. The audio thread performs no wakeup system call.
 
 ### 5.8 `StateStore`
 
@@ -394,6 +401,9 @@ The process, shutdown/info-shutdown, buffer-size, sample-rate, xrun, freewheel, 
 latency callbacks all borrow one context allocated before registration. Shutdown reasons
 are copied once into a fixed byte array; all other notifications use atomics. No callback
 closes the client, unregisters a port, or releases memory.
+A JACK shutdown callback disables processing and publishes its shutdown generation only
+after decrementing the callback-in-flight count. The main thread may then adopt the
+server-owned client closure without calling JACK through an invalid client pointer.
 
 ### 8.3 Plugin-created threads
 
@@ -534,6 +544,10 @@ Requests arriving during restart remain set and are handled in a subsequent coal
 8. Unregister/close remaining JACK resources.
 9. Remove the PID file and close reactor/signal resources.
 
+Increment 7 publishes PID content through a fully written and synchronized temporary inode
+and an atomic hard-link operation. Removal compares device/inode ownership so an externally
+replaced path is never deleted.
+
 Failures in one cleanup step are collected, not allowed to skip independent later cleanup steps. The first/highest-priority failure determines the exit status; verbose output includes all cleanup errors.
 
 ## 11. Real-time data design
@@ -651,6 +665,7 @@ src/
       commands.nim
       host_session.nim
       audio_slice.nim
+      main_reactor.nim
       run_config.nim
     discovery/
       paths.nim
@@ -659,6 +674,7 @@ src/
       errors.nim
       lifecycle.nim
       metrics.nim
+      reactor.nim
       plugin_catalog.nim
       port_plan.nim
       result.nim
@@ -695,7 +711,7 @@ src/
     platform/linux/
       reactor.nim
       signals.nim
-      atomic_file.nim
+      pid_file.nim
       dynlib.nim
     support/
       diagnostics.nim
@@ -744,7 +760,7 @@ socket files deterministically. Missing prerequisites fail the task rather than 
 
 A separately linked C audio peer owns one JACK client, inspects live port
 types/directions, connects only test audio outputs, validates deterministic buffers, and
-acknowledges server-cycle progress over a control pipe. The Increment 6B candidate adds a
+acknowledges server-cycle progress over a control pipe. Approved Increment 6B adds a
 separate C MIDI peer whose injector and capture clients form an acyclic graph around the
 host. Its fixed callback storage injects two-port MIDI/SysEx signatures and validates exact
 captured bytes and sample offsets; control-thread graph attachment is bounded and idempotent
@@ -752,6 +768,11 @@ across repeated host activation. GNU linker wrapping scopes C allocation, deallo
 lock, print, and direct-I/O counters around all host JACK callbacks while excluding
 PipeWire/libjack internals and the peer processes. A self-test must first prove every
 counter can detect its prohibited category.
+
+Increment 7 adds a separately launched public host process under the private server. The
+test observes complete PID publication/removal, sends repeated GUI-reservation signals,
+and verifies clean `SIGINT`/`SIGTERM` exit while fake-backed tests inject JACK shutdown
+and CLAP process errors deterministically.
 
 ### 16.2 Contract tests
 
@@ -874,7 +895,8 @@ Initial ADR candidates:
 5. Main-thread Linux reactor for GUI/timer/FD integration.
 6. X11/XEmbed as the initial embedded GUI path.
 7. ARC with an allocation-free unmanaged RT data model (resolved by ADR 0003); trace-free lock-free callback atomics are resolved by ADR 0005.
-8. Atomic requests plus bounded queues for cross-thread communication.
+8. Direct Linux epoll/signalfd reactor with generation tokens (resolved by ADR 0006).
+9. Atomic requests plus bounded queues for cross-thread communication.
 
 An ADR is required when changing an architectural invariant, adding a substantial dependency, exposing a public API, or choosing an option listed in the deferred decisions.
 

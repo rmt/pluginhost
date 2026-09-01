@@ -3,7 +3,7 @@
 **Plan version:** 1.0.0  
 **Target product release:** `pluginhost` 0.1.0  
 **Initial development version:** 0.0.1-dev  
-**Status:** Approved through review unit 6A; review unit 6B implemented and awaiting review
+**Status:** Approved through Increment 6; Increment 7 implemented and awaiting review
 **Companion documents:** [`REQUIREMENTS.md`](REQUIREMENTS.md), [`DESIGN.md`](DESIGN.md)
 
 ## 1. Purpose
@@ -439,7 +439,7 @@ Review the complete lifecycle sequence, zero-copy proof, audio grouping, failure
 ## 13. Increment 6 — JACK MIDI and CLAP note/event bridge
 
 **Planned version:** 0.0.7-dev
-**Status:** Review unit 6A approved; review unit 6B implemented and awaiting review.
+**Status:** Review units 6A and 6B approved; Increment 6 complete.
 
 ### Goal
 
@@ -472,7 +472,7 @@ Add sample-accurate MIDI input/output and required CLAP note-dialect conversion 
 
 ### Manual verification
 
-Review unit 6A uses strict fake-JACK and independent CLAP event fixtures. The 6B candidate uses a separate two-client C JACK peer under its own disposable PipeWire-JACK server to inject and capture live multi-port MIDI/SysEx through the production CLAP event process path.
+Review unit 6A uses strict fake-JACK and independent CLAP event fixtures. Approved review unit 6B uses a separate two-client C JACK peer under its own disposable PipeWire-JACK server to inject and capture live multi-port MIDI/SysEx through the production CLAP event process path.
 
 ### Human review gate 6A
 
@@ -495,6 +495,7 @@ Review independent live JACK MIDI injection/capture, sample offsets, repeated li
 ## 14. Increment 7 — Main reactor, signals, and orderly process control
 
 **Planned version:** 0.0.8-dev
+**Status:** Implementation complete; awaiting review.
 
 ### Goal
 
@@ -513,16 +514,22 @@ Add the event-driven Linux control plane required for public `run`, prompt callb
 - Add fake deterministic reactor/clock for unit tests.
 - Remove temporary sleeps/poll loops from production main.
 - Enable the canonical public `pluginhost [options] PLUGIN_PATH` command only after the signal/reactor service is installed before `JackBackend`.
+- Consume signals without installing a host signal handler, adopt JACK server shutdown only after callback publication proves quiescence, and restore the prior main-thread mask last.
+- Treat `request_process` as satisfied by continuous processing, dispatch `request_callback` on the main thread, and terminate explicitly on restart until Increment 8 owns restart policy.
+- Keep unavailable GUI/state options explicit: ordinary GUI policy falls back headlessly with a warning, while required/scaled GUI and requested state operations fail with their documented statuses.
+- Record the direct Linux boundary in ADR 0006 and ABI-test `epoll_event`, `signalfd_siginfo`, and imported procedure signatures.
 
 ### Tests
 
 - Reactor FD add/modify/remove and stale-generation protection.
 - Monotonic timer ordering, cancellation, self-cancellation, and callback registration changes.
-- Signal handler only notifies; main thread performs actions.
+- No host signal handler is installed; blocked signals are consumed through `signalfd` and only the main thread performs actions.
 - Signal ordering/idempotency and shutdown overriding restart/show.
 - PID-file success, collision, rollback, and removal.
 - `request_callback()` reaches `plugin.on_main_thread()` within simulated deadline.
 - No busy-wait when idle.
+- Public process tests cover PID publication/removal, rate-limited `SIGUSR1`/`SIGUSR2`, and clean `SIGINT`/`SIGTERM` against isolated PipeWire-JACK.
+- Fake-backed control tests cover post-callback JACK shutdown adoption, CLAP process-error termination, and `on_main_thread()` dispatch.
 
 ### Manual verification
 
@@ -746,8 +753,8 @@ This table is updated only when work is reviewed.
 | 3 — CLAP lifecycle | Approved | Review unit 3B | Host bridge, instance lifecycle, immutable port plans, and render negotiation accepted |
 | 4 — JACK/RT harness | Approved | Review units 4A, 4B, and 4C | Checked loading, fake-backed mechanics, live PipeWire-JACK integration, and strengthened RT evidence accepted |
 | 5 — Audio vertical slice | Approved | Review unit 5 | Internal grouped zero-copy CLAP/JACK float32 slice, lifecycle rollback, live capture, and RT evidence accepted |
-| 6 — MIDI/events | In progress | Review unit 6A; 6B candidate | Fake-backed bridge approved; isolated live multi-port MIDI/SysEx evidence implemented and awaiting review |
-| 7 — Reactor/signals | Not started | — | — |
+| 6 — MIDI/events | Approved | Review units 6A and 6B | Fixed-capacity event bridge and isolated live multi-port MIDI/SysEx evidence accepted |
+| 7 — Reactor/signals | In progress | Increment 7 review candidate | Public headless run, epoll/signalfd reactor, orderly shutdown, main-thread callbacks, and atomic PID files implemented |
 | 8 — Host extensions/restart | Not started | — | — |
 | 9 — State | Not started | — | — |
 | 10 — GUI | Not started | — | Split into 10A/10B reviews |
@@ -796,4 +803,4 @@ Each candidate requires requirements/design updates and, where architectural, an
 
 ## 23. First action after each review gate
 
-After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Review unit 6A is approved and review unit 6B is implemented awaiting review. Stop at the 6B review gate; do not mark Increment 6 approved, advance to `0.0.8-dev`, prepare the Increment 7 pre-code package, or begin Increment 7 without explicit owner approval.
+After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 6 is approved and Increment 7 is implemented awaiting review. Stop at the Increment 7 review gate; do not mark it approved, advance to `0.0.9-dev`, prepare the Increment 8 pre-code package, or begin host-extension/restart work without explicit owner approval.

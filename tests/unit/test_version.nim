@@ -7,7 +7,7 @@ const projectRoot = currentSourcePath.parentDir.parentDir.parentDir
 suite "version information":
   test "the compiled version matches the root VERSION file":
     check Version == readFile(projectRoot / "VERSION").strip()
-    check PackageVersion == "0.0.7"
+    check PackageVersion == "0.0.8"
     let nimbleFile = readFile(projectRoot / "pluginhost.nimble")
     check nimbleFile.contains("version       = \"" & PackageVersion & "\"")
 

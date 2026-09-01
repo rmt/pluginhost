@@ -311,8 +311,22 @@ proc activate*(backend: var JackBackend): Result[Unit] =
   backend.stateValue = jbsActive
   success()
 
+proc serverShutdownObserved(backend: JackBackend): bool {.inline.} =
+  backend.callbackContext != nil and
+    backend.callbackContext.snapshotNotificationState().shutdownCount > 0'u64
+
 proc deactivate*(backend: var JackBackend): Result[Unit] =
   if backend.stateValue != jbsActive:
+    return success()
+  if backend.serverShutdownObserved:
+    backend.callbackContext.disableProcessCallbacks()
+    backend.stateValue = jbsConfigured
+    if not backend.callbackContext.processCallbacksQuiescent():
+      return failure[Unit](backendError(
+        hekJackQuiescence,
+        "JACK process callback did not quiesce after server shutdown",
+        backend,
+      ))
     return success()
   let status = backend.api.functions.deactivate(backend.client)
   if status != 0:
@@ -351,6 +365,21 @@ proc close*(backend: var JackBackend): Result[Unit] =
     if not stopped.isOk:
       hadPrimary = true
       primary = stopped.error
+
+  if backend.client != nil and backend.serverShutdownObserved:
+    backend.callbackContext.disableProcessCallbacks()
+    if not backend.callbackContext.callbackContextReadyForRelease():
+      let cleanup = backendError(
+        hekJackQuiescence,
+        "JACK callbacks remained active after server shutdown",
+        backend,
+      )
+      if hadPrimary:
+        return failure[Unit](appendPrimary(cleanup, primary))
+      return failure[Unit](cleanup)
+    backend.client = nil
+    backend.portOwner.discardAfterClientClose()
+    backend.stateValue = jbsOpen
 
   if backend.client != nil:
     let status = backend.api.functions.clientClose(backend.client)

@@ -7,6 +7,8 @@ type
     hsClap = "CLAP"
     hsJack = "JACK"
     hsDiscovery = "discovery"
+    hsGui = "GUI"
+    hsState = "state"
 
   HostErrorKind* = enum
     hekUsage
@@ -49,6 +51,11 @@ type
     hekDiscoveryTraversal
     hekDiscoveryCandidate
     hekPluginSelection
+    hekReactor
+    hekSignal
+    hekPidFile
+    hekGui
+    hekState
 
   HostError* = object
     subsystem*: HostSubsystem
@@ -62,6 +69,8 @@ const
   ExitUsage* = 2
   ExitClap* = 3
   ExitJack* = 4
+  ExitGui* = 5
+  ExitState* = 6
 
 proc hostError*(subsystem: HostSubsystem; kind: HostErrorKind;
                 message: string; context = ""): HostError =
@@ -82,8 +91,15 @@ proc transitionError*(message: string; context = ""): HostError =
   hostError(hsInternal, hekInvalidTransition, message, context)
 
 proc exitCode*(error: HostError): int =
-  if error.subsystem == hsJack:
+  case error.subsystem
+  of hsJack:
     return ExitJack
+  of hsGui:
+    return ExitGui
+  of hsState:
+    return ExitState
+  else:
+    discard
 
   case error.kind
   of hekUsage, hekPluginSelection:
@@ -95,10 +111,14 @@ proc exitCode*(error: HostError): int =
       hekClapProcess, hekClapPorts, hekClapRender,
       hekDiscoveryRoot, hekDiscoveryTraversal, hekDiscoveryCandidate:
     ExitClap
+  of hekGui:
+    ExitGui
+  of hekState:
+    ExitState
   of hekNotImplemented, hekInvalidTransition, hekInternal, hekLibraryOpen,
       hekSymbolLookup, hekLibraryClose, hekJackLibraryOpen, hekJackSymbol,
       hekJackLibraryClose, hekJackClientOpen, hekJackClientClose,
       hekJackCallbackRegistration, hekJackPortName, hekJackPortRegistration,
       hekJackPortAlias, hekJackActivation, hekJackDeactivation,
-      hekJackQuiescence:
+      hekJackQuiescence, hekReactor, hekSignal, hekPidFile:
     ExitFailure

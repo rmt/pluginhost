@@ -1,11 +1,11 @@
-import std/[strutils, unittest]
+import std/[os, strutils, unittest]
 
 import pluginhost/app/audio_slice
-import pluginhost/app/host_session
+import pluginhost/app/[host_session, run_config]
 import pluginhost/clap/ffi
 import pluginhost/clap/[audio_process, host_bridge, instance, loader]
 import pluginhost/domain/[errors, lifecycle, plugin_catalog, port_plan, result]
-import pluginhost/jack/backend
+import pluginhost/jack/[backend, ffi]
 import pluginhost/rt/role_guard
 import pluginhost/platform/linux/dynlib
 import ./jack/fixture_api
@@ -187,6 +187,16 @@ suite "internal CLAP float32 audio endpoint":
     check session.startInternalAudio().isOk
     check session.state == ssRunning
     check controls.invokeProcess(4) == 0
+    var controlConfig = defaultRunConfig()
+    controlConfig.pluginPath = audioFixturePath("audio_tone")
+    controlConfig.guiPolicy = gpDisabled
+    controlConfig.verbosity = vbQuiet
+    let diagnosticPath = getTempDir() / "pluginhost-control-service.log"
+    var diagnostic = open(diagnosticPath, fmWrite)
+    check session.serviceInternalControlOnce(controlConfig, diagnostic).isOk
+    diagnostic.close()
+    removeFile(diagnosticPath)
+    check fixture.onMainThreadCalls() == 1
     check fixture.activateCalls() == 1
     check fixture.startCalls() == 1
     check fixture.processCalls() == 1
@@ -204,6 +214,50 @@ suite "internal CLAP float32 audio endpoint":
     check fixture.lifecycleAt(3) == 4
     check fixture.lifecycleAt(4) == 5
     check fixture.lifecycleAt(5) == 6
+
+  test "control service detects JACK shutdown and closes without invalid client calls":
+    var controls = openControls()
+    var opened = openOwnedSlice("audio_tone")
+    var slice = move(opened.slice)
+    var observer = move(opened.observer)
+    var session = initHostSession()
+    defer:
+      doAssert session.close().isOk
+      doAssert observer.close().isOk
+      doAssert controls.close().isOk
+    require session.attachInternalAudioSlice(slice).isOk
+    require session.startInternalAudio().isOk
+    controls.invokeShutdown(JackServerError, "fixture server stopped")
+    var config = defaultRunConfig()
+    config.guiPolicy = gpDisabled
+    config.verbosity = vbQuiet
+    var serviced = session.serviceInternalControlOnce(config, stderr)
+    check not serviced.isOk
+    check serviced.error.subsystem == hsJack
+    check serviced.error.message.contains("server shut down")
+    check session.close().isOk
+    check controls.closeCount() == 0
+
+  test "control service detects process errors after outputs are silenced":
+    var controls = openControls()
+    var opened = openOwnedSlice("audio_process_error")
+    var slice = move(opened.slice)
+    var observer = move(opened.observer)
+    var session = initHostSession()
+    defer:
+      doAssert session.close().isOk
+      doAssert observer.close().isOk
+      doAssert controls.close().isOk
+    require session.attachInternalAudioSlice(slice).isOk
+    require session.startInternalAudio().isOk
+    check controls.invokeProcess(4) != 0
+    var config = defaultRunConfig()
+    config.guiPolicy = gpDisabled
+    config.verbosity = vbQuiet
+    var serviced = session.serviceInternalControlOnce(config, stderr)
+    check not serviced.isOk
+    check serviced.error.kind == hekClapProcess
+    check controls.audioSample(0, 0) == 0.0
 
   test "rejected session attachment retains caller ownership":
     var controls = openControls()

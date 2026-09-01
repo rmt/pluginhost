@@ -53,6 +53,7 @@ static uintptr_t input_addresses[8];
 static uintptr_t output_addresses[8];
 static int lifecycle_order[32];
 static uint32_t lifecycle_order_count;
+static uint32_t on_main_thread_count;
 
 static const char *fixture_features[] = {
    CLAP_PLUGIN_FEATURE_AUDIO_EFFECT,
@@ -262,6 +263,8 @@ static clap_process_status fixture_plugin_process(const clap_plugin_t *plugin,
       ++contract_failures;
    if (fixture_host != NULL && fixture_host->request_process != NULL)
       fixture_host->request_process(fixture_host);
+   if (fixture_host != NULL && fixture_host->request_callback != NULL)
+      fixture_host->request_callback(fixture_host);
    if (fixture_host != NULL && fixture_host->get_extension != NULL) {
       const clap_host_log_t *log = (const clap_host_log_t *)fixture_host->get_extension(
          fixture_host, CLAP_EXT_LOG);
@@ -363,6 +366,9 @@ static const void *fixture_plugin_get_extension(const clap_plugin_t *plugin,
 
 static void fixture_plugin_on_main_thread(const clap_plugin_t *plugin) {
    (void)plugin;
+   if (!thread_is_main())
+      ++contract_failures;
+   ++on_main_thread_count;
 }
 
 static const clap_plugin_t fixture_plugin = {
@@ -444,6 +450,7 @@ AUDIO_FIXTURE_EXPORT void pluginhost_audio_fixture_reset(void) {
    memset(output_addresses, 0, sizeof(output_addresses));
    memset(lifecycle_order, 0, sizeof(lifecycle_order));
    lifecycle_order_count = 0U;
+   on_main_thread_count = 0U;
 }
 
 #define EXPORT_COUNTER(name, value) \
@@ -504,4 +511,8 @@ AUDIO_FIXTURE_EXPORT int pluginhost_audio_fixture_lifecycle_at(int index) {
    if (index < 0 || (uint32_t)index >= lifecycle_order_count)
       return -1;
    return lifecycle_order[index];
+}
+
+AUDIO_FIXTURE_EXPORT uint32_t pluginhost_audio_fixture_on_main_thread_calls(void) {
+   return on_main_thread_count;
 }

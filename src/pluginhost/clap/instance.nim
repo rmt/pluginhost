@@ -430,6 +430,25 @@ proc tryPopLog*(instance: ClapInstance;
 proc takeDroppedLogs*(instance: ClapInstance): uint64 {.gcsafe, raises: [].} =
   instance.bridge.takeDroppedLogs()
 
+proc callOnMainThread*(instance: var ClapInstance): Result[Unit] =
+  if instance.state notin {cisInitialized, cisActivated, cisProcessing} or
+      instance.plugin == nil:
+    return failure[Unit](instanceError(
+      hekClapPlugin,
+      "CLAP on_main_thread requires a live initialized plugin",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id & "; state=" & $instance.state,
+    ))
+  if not instance.bridge.isMainThread:
+    return failure[Unit](instanceError(
+      hekClapPlugin,
+      "CLAP on_main_thread must run on the host main thread",
+      instance.module.modulePath,
+      "id=" & instance.descriptor.id,
+    ))
+  instance.plugin.onMainThread(instance.plugin)
+  success()
+
 proc destroy*(instance: var ClapInstance): Result[Unit] =
   case instance.state
   of cisInitialized:

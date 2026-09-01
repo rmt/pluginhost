@@ -26,14 +26,14 @@ suite "session lifecycle":
     check not repeated.isOk
     check state == ssStarting
 
-  test "stub run fails explicitly and cleanup is idempotent":
+  test "public run startup failure cleans process control idempotently":
     var session = initHostSession()
     var config = defaultRunConfig()
     config.pluginPath = "fixture.clap"
 
     let runResult = session.run(config)
     check not runResult.isOk
-    check runResult.error.kind == hekNotImplemented
+    check runResult.error.kind == hekClapPath
     check session.state == ssFailed
 
     check session.close().isOk

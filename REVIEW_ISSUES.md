@@ -3,12 +3,12 @@
 **Review date:** 2026-08-28
 **Reviewed baseline:** `main` at `642b629`, version `0.0.5-dev`
 **Disposition approval:** 2026-08-28 Increment 4 pre-code review
-**Implementation approvals:** Increment 4A, Increment 4B, and Increment 4C reviewed and approved
+**Implementation approvals:** Increments 4 through 6 reviewed and approved; Increment 7 awaiting review
 
 Increment 3B remains approved. The owner approved the dispositions below and reviewed
-and approved Increment 4A, Increment 4B, and Increment 4C. This register distinguishes
-accepted, implemented, and deliberately deferred work; deferred findings remain review
-inputs for their named increments rather than silently becoming product behavior.
+Increments 4 through 6. Increment 7's reactor/signal implementation is a review candidate.
+This register distinguishes accepted, implemented, and deliberately deferred work; deferred
+findings remain inputs for their named increments rather than silently becoming behavior.
 
 ## Approved dispositions
 
@@ -17,7 +17,7 @@ inputs for their named increments rather than silently becoming product behavior
 | 1 | Use `--panics:on`; callbacks also disable checks and validate explicitly. | Implemented and approved in 4A |
 | 2 | Pin ARC, threads, panics, and signal behavior in one product/test profile. | Implemented and approved in 4A |
 | 3 | Replace eager JACK imports with a checked move-only DSO/procedure table. | Implemented and approved in 4A |
-| 4 | Disable Nim signal handlers now; block/consume signals explicitly before public JACK-backed `run`. | Build part approved in 4A; signal service in 7 |
+| 4 | Disable Nim signal handlers now; block/consume signals explicitly before public JACK-backed `run`. | Build part approved in 4A; epoll/signalfd service implemented in Increment 7 candidate |
 | 5 | Observe freewheel transitions but remain in `CLAP_RENDER_REALTIME`; offline rendering remains unsupported. | Notification policy implemented and approved in 4B; CLAP mode remains in 5 |
 | 6 | Apply bounded allocation-free rules to every JACK-invoked callback; latency uses only mandated JACK APIs. | Behavior approved in 4B; strengthened live/static evidence implemented and approved in 4C |
 | 7 | Retain strict validator-compatible port checks unless independent plugins prove a compatibility problem. | Accepted current behavior |

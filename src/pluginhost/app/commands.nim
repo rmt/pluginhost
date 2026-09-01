@@ -8,11 +8,13 @@ import ../version
 
 proc executeRun(config: RunConfig; errorOutput: File): int =
   var session = initHostSession()
-  let runResult = session.run(config)
+  let runResult = session.run(config, errorOutput)
   let closeResult = session.close()
 
   if not runResult.isOk:
     errorOutput.writeDiagnostic(runResult.error)
+    if not closeResult.isOk:
+      errorOutput.writeDiagnostic(closeResult.error)
     return runResult.error.exitCode()
   if not closeResult.isOk:
     errorOutput.writeDiagnostic(closeResult.error)

@@ -369,7 +369,7 @@ proc bindOutputBuffers(context: ptr JackCallbackContext;
 
 proc recordShutdown(context: ptr JackCallbackContext; status: int32;
                     reason: cstring) {.gcsafe, raises: [].} =
-  discard context.notifications.shutdownCount.fetchAddRelaxed(1'u64)
+  context.processEnabled.storeRelease(0'u32)
   var expected = 0'u32
   if not context.notifications.shutdownRecordState.compareExchangeAcquire(
       expected, 1'u32):
@@ -451,6 +451,7 @@ proc jackShutdownCallback*(argument: pointer) {.
   context.enterCallback()
   context.recordShutdown(0'i32, nil)
   context.leaveCallback()
+  discard context.notifications.shutdownCount.fetchAddRelease(1'u64)
 
 proc jackInfoShutdownCallback*(code: JackStatus; reason: cstring;
                                argument: pointer) {.
@@ -462,6 +463,7 @@ proc jackInfoShutdownCallback*(code: JackStatus; reason: cstring;
   context.enterCallback()
   context.recordShutdown(int32(code), reason)
   context.leaveCallback()
+  discard context.notifications.shutdownCount.fetchAddRelease(1'u64)
 
 proc jackBufferSizeCallback*(nframes: JackNFrames; argument: pointer): cint {.
     exportc: "pluginhost_jack_buffer_size_callback", cdecl, gcsafe,

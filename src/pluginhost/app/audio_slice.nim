@@ -4,7 +4,7 @@
 ## view, and one configured JACK backend. It is intentionally not used by the
 ## public run command until the reactor/signal increment installs process control.
 
-import ../clap/[audio_process, event_bridge, host_bridge, instance, loader]
+import ../clap/[audio_process, event_bridge, ffi, host_bridge, instance, loader]
 import ../domain/[errors, plugin_catalog, result]
 import ../jack/backend
 
@@ -20,6 +20,37 @@ type
     process: ClapAudioProcess
     backend: JackBackend
     stateValue: InternalAudioSliceState
+
+  PluginLogSeverity* = enum
+    plsDebug
+    plsInfo
+    plsWarning
+    plsError
+    plsFatal
+    plsHostMisbehaving
+    plsPluginMisbehaving
+
+  PluginLogMessage* = object
+    severity*: PluginLogSeverity
+    text*: string
+
+  InternalControlRequests* = object
+    restart*: bool
+    process*: bool
+    callback*: bool
+    flush*: bool
+
+  InternalControlSnapshot* = object
+    jackShutdownCount*: uint64
+    jackShutdownStatus*: int32
+    jackShutdownReason*: string
+    processErrors*: uint64
+    configurationPending*: bool
+    xrunCount*: uint64
+    freewheelCount*: uint64
+    freewheel*: bool
+    processCycles*: uint64
+
 
 proc `=destroy`*(slice: var InternalAudioSlice) =
   doAssert slice.stateValue in {iassEmpty, iassClosed},
@@ -91,6 +122,57 @@ proc jackBackend*(slice: var InternalAudioSlice): var JackBackend =
 
 proc takeEventMetrics*(slice: var InternalAudioSlice): ClapEventMetrics =
   slice.process.takeEventMetrics()
+
+proc controlRequests*(slice: var InternalAudioSlice): InternalControlRequests =
+  let requests = slice.instance.takeRequests()
+  InternalControlRequests(
+    restart: (requests and ClapRequestRestart) != 0'u32,
+    process: (requests and ClapRequestProcess) != 0'u32,
+    callback: (requests and ClapRequestCallback) != 0'u32,
+    flush: (requests and ClapRequestFlush) != 0'u32,
+  )
+
+proc callOnMainThread*(slice: var InternalAudioSlice): Result[Unit] =
+  slice.instance.callOnMainThread()
+
+proc controlSnapshot*(slice: var InternalAudioSlice): InternalControlSnapshot =
+  let snapshot = slice.backend.notifications()
+  InternalControlSnapshot(
+    jackShutdownCount: snapshot.shutdownCount,
+    jackShutdownStatus: snapshot.shutdownStatus,
+    jackShutdownReason: snapshot.shutdownReason,
+    processErrors: snapshot.processErrors,
+    configurationPending: snapshot.configurationPending,
+    xrunCount: snapshot.xrunCount,
+    freewheelCount: snapshot.freewheelCount,
+    freewheel: snapshot.freewheel,
+    processCycles: snapshot.processCycles,
+  )
+
+proc tryTakePluginLog*(slice: var InternalAudioSlice;
+                       message: var PluginLogMessage): bool =
+  var record: ClapHostLogRecord
+  if not slice.instance.tryPopLog(record):
+    return false
+  message.text = record.logMessage()
+  message.severity = case record.severity
+    of ClapLogDebug: plsDebug
+    of ClapLogInfo: plsInfo
+    of ClapLogWarning: plsWarning
+    of ClapLogError: plsError
+    of ClapLogFatal: plsFatal
+    of ClapLogHostMisbehaving: plsHostMisbehaving
+    else: plsPluginMisbehaving
+  true
+
+proc takeDroppedPluginLogs*(slice: var InternalAudioSlice): uint64 =
+  slice.instance.takeDroppedLogs()
+
+proc pluginPath*(slice: InternalAudioSlice): string =
+  slice.instance.modulePath
+
+proc pluginId*(slice: InternalAudioSlice): string =
+  slice.instance.selectedDescriptor.id
 
 proc openInternalAudioSlice*(module: sink ClapModule;
                              descriptor: sink PluginDescriptor;

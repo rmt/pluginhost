@@ -25,6 +25,7 @@ type
     processCalls*: AudioFixtureCounterProc
     destroyCalls*: AudioFixtureCounterProc
     contractFailures*: AudioFixtureCounterProc
+    onMainThreadCalls*: AudioFixtureCounterProc
     lastActivateSampleRate*: AudioFixtureRateProc
     lastActivateMinFrames*: AudioFixtureCounterProc
     lastActivateMaxFrames*: AudioFixtureCounterProc
@@ -68,6 +69,8 @@ proc audioFixtureApi*(library: DynamicLibrary): AudioFixtureApi =
     "pluginhost_audio_fixture_destroy_calls")
   result.contractFailures = resolve[AudioFixtureCounterProc](library,
     "pluginhost_audio_fixture_contract_failures")
+  result.onMainThreadCalls = resolve[AudioFixtureCounterProc](library,
+    "pluginhost_audio_fixture_on_main_thread_calls")
   result.lastActivateSampleRate = resolve[AudioFixtureRateProc](library,
     "pluginhost_audio_fixture_last_activate_sample_rate")
   result.lastActivateMinFrames = resolve[AudioFixtureCounterProc](library,
