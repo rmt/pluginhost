@@ -47,6 +47,14 @@ ABI_ASSERT_FIELD(clap_input_events_t, get,
                  const clap_event_header_t *(CLAP_ABI *)(const clap_input_events_t *, uint32_t));
 ABI_ASSERT_FIELD(clap_output_events_t, try_push,
                  bool(CLAP_ABI *)(const clap_output_events_t *, const clap_event_header_t *));
+ABI_ASSERT_FIELD(clap_istream_t, read,
+                 int64_t(CLAP_ABI *)(const clap_istream_t *, void *, uint64_t));
+ABI_ASSERT_FIELD(clap_ostream_t, write,
+                 int64_t(CLAP_ABI *)(const clap_ostream_t *, const void *, uint64_t));
+ABI_ASSERT_FIELD(clap_plugin_state_t, save,
+                 bool(CLAP_ABI *)(const clap_plugin_t *, const clap_ostream_t *));
+ABI_ASSERT_FIELD(clap_plugin_state_t, load,
+                 bool(CLAP_ABI *)(const clap_plugin_t *, const clap_istream_t *));
 ABI_ASSERT_FIELD(clap_host_t, get_extension,
                  const void *(CLAP_ABI *)(const clap_host_t *, const char *));
 ABI_ASSERT_FIELD(clap_host_t, request_restart, void(CLAP_ABI *)(const clap_host_t *));
@@ -275,6 +283,9 @@ uint64_t pluginhost_abi_size(int32_t type_id) {
       ABI_TYPE_CASE(44, clap_param_info_t);
       ABI_TYPE_CASE(45, clap_plugin_params_t);
       ABI_TYPE_CASE(46, clap_host_params_t);
+      ABI_TYPE_CASE(47, clap_istream_t);
+      ABI_TYPE_CASE(48, clap_ostream_t);
+      ABI_TYPE_CASE(49, clap_plugin_state_t);
       ABI_TYPE_CASE(27, clap_id);
       ABI_TYPE_CASE(28, clap_beattime);
       ABI_TYPE_CASE(29, clap_sectime);
@@ -343,6 +354,9 @@ uint64_t pluginhost_abi_align(int32_t type_id) {
       ABI_ALIGN_CASE(44, clap_param_info_t);
       ABI_ALIGN_CASE(45, clap_plugin_params_t);
       ABI_ALIGN_CASE(46, clap_host_params_t);
+      ABI_ALIGN_CASE(47, clap_istream_t);
+      ABI_ALIGN_CASE(48, clap_ostream_t);
+      ABI_ALIGN_CASE(49, clap_plugin_state_t);
       ABI_ALIGN_CASE(27, clap_id);
       ABI_ALIGN_CASE(28, clap_beattime);
       ABI_ALIGN_CASE(29, clap_sectime);
@@ -542,6 +556,12 @@ uint64_t pluginhost_abi_offset(int32_t field_id) {
       ABI_FIELD_CASE(46, 1, clap_host_params_t, rescan);
       ABI_FIELD_CASE(46, 2, clap_host_params_t, clear);
       ABI_FIELD_CASE(46, 3, clap_host_params_t, request_flush);
+      ABI_FIELD_CASE(47, 1, clap_istream_t, ctx);
+      ABI_FIELD_CASE(47, 2, clap_istream_t, read);
+      ABI_FIELD_CASE(48, 1, clap_ostream_t, ctx);
+      ABI_FIELD_CASE(48, 2, clap_ostream_t, write);
+      ABI_FIELD_CASE(49, 1, clap_plugin_state_t, save);
+      ABI_FIELD_CASE(49, 2, clap_plugin_state_t, load);
       ABI_FIELD_CASE(109, 1, jack_latency_range_t, min);
       ABI_FIELD_CASE(109, 2, jack_latency_range_t, max);
       ABI_FIELD_CASE(110, 1, jack_midi_event_t, time);

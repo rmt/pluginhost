@@ -2,7 +2,7 @@
 
 `pluginhost` is an in-progress standalone Linux JACK host for native CLAP plugins, implemented in Nim. Its intended role is similar to `carla-single`, with one plugin instance and one JACK client per process.
 
-The current development version is **0.0.9-dev**. The implementation includes checked CLAP ownership/catalog/lifecycle, human/JSON `list` and recursive `scan`, grouped zero-copy JACK audio, and a fixed-capacity sample-accurate JACK MIDI/CLAP event bridge. The canonical public command runs one plugin headlessly under an `epoll`/`signalfd` main reactor, handles orderly signals and JACK/process failures, services CLAP main-thread callbacks plus generation-safe plugin timers and POSIX FDs, reflects plugin latency through JACK, tracks dirty-state notification, handles bounded CLAP parameter output/rescans, sleep/wake requests, and safe restart/port rebuild requests, and owns an optional atomic PID file. State serialization, GUI, and later host extensions remain unavailable.
+The current development version is **0.0.9-dev**. The implementation includes checked CLAP ownership/catalog/lifecycle, human/JSON `list` and recursive `scan`, grouped zero-copy JACK audio, and a fixed-capacity sample-accurate JACK MIDI/CLAP event bridge. The canonical public command runs one plugin headlessly under an `epoll`/`signalfd` main reactor, handles orderly signals and JACK/process failures, services CLAP main-thread callbacks plus generation-safe plugin timers and POSIX FDs, reflects plugin latency through JACK, tracks dirty-state notification, handles bounded CLAP parameter output/rescans, sleep/wake requests, and safe restart/port rebuild requests, and owns an optional atomic PID file. It loads requested CLAP state before audio configuration and atomically saves requested state on clean signal shutdown. GUI and later host extensions remain unavailable.
 
 ## Build
 
@@ -53,7 +53,7 @@ unchanged but are not part of pluginhost's bound or supported ABI surface.
 statuses, callback registration, transactional ports, quiescence, role exclusivity, and
 fake silence/copy/deterministic processing without requiring a JACK server.
 
-`nimble testFixtures` independently compiles synthetic CLAP libraries and checks entry/factory ownership, descriptor validation, instance cleanup, deactivated port inspection, render negotiation, internal grouped float32 audio, fixed-capacity event/parameter translation, sleep/wake, main-thread timer/FD/dirty/latency services, restart/rescan rebuild, and compatible JACK reconnection/loss reporting. Event cases cover global ordering, equal timestamps, raw MIDI/SysEx lifetime, CLAP-only note conversion, malformed events, exact capacity, output reserve failure, recovery, and MIDI2-only rejection.
+`nimble testFixtures` independently compiles synthetic CLAP libraries and checks entry/factory ownership, descriptor validation, instance cleanup, bounded CLAP state load/save and rollback, deactivated port inspection, render negotiation, internal grouped float32 audio, fixed-capacity event/parameter translation, sleep/wake, main-thread timer/FD/dirty/latency services, restart/rescan rebuild, and compatible JACK reconnection/loss reporting. Event cases cover global ordering, equal timestamps, raw MIDI/SysEx lifetime, CLAP-only note conversion, malformed events, exact capacity, output reserve failure, recovery, and MIDI2-only rejection.
 
 All builds share `--mm:arc --threads:on --panics:on -d:noSignalHandler` through
 `config.nims`. Foreign callbacks additionally disable checks and trace setup locally
@@ -111,8 +111,11 @@ The canonical path-only command runs headlessly. `SIGINT` and `SIGTERM` request 
 shutdown; `SIGUSR1` and `SIGUSR2` are safely consumed but only warn until GUI hosting
 lands. `--pid-file` atomically publishes the running PID and removes only the entry the
 process owns. Default/show/hidden GUI policies warn and fall back to headless operation;
-`--require-gui`, `--gui-scale`, `--load-state`, and `--save-state` fail explicitly until
-their owning increments.
+`--require-gui` and `--gui-scale` fail explicitly until GUI hosting lands. `--load-state`
+loads state before audio configuration. `--save-state` saves after JACK/CLAP processing is
+quiesced during clean `SIGINT`/`SIGTERM` shutdown; it writes a mode-0600 same-directory
+temporary, synchronizes it, and atomically renames it over the destination. Each CLAP
+state stream callback transfers at most 64 KiB and one transaction is limited to 64 MiB.
 
 ## Project documents
 

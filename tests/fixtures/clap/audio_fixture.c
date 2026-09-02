@@ -43,6 +43,8 @@
 #define MODE_PARAMS 10
 #define MODE_PORT_RESCAN 11
 #define MODE_TONE_SLEEP 12
+#define MODE_STATE 13
+#define MODE_STATE_REJECT_SAVE 14
 
 static const clap_host_t *fixture_host;
 static uint32_t activate_count;
@@ -79,6 +81,9 @@ static uint32_t parameter_flush_count;
 static bool parameter_emitted;
 static bool pending_port_rescan;
 static bool rescan_port_layout;
+static uint32_t state_save_count;
+static uint32_t state_load_count;
+static const uint8_t state_bytes[] = {0x50, 0x48, 0x53, 0x54, 0x39};
 
 static const char *fixture_features[] = {
    CLAP_PLUGIN_FEATURE_AUDIO_EFFECT,
@@ -306,6 +311,41 @@ static const clap_plugin_params_t fixture_params = {
    .value_to_text = NULL,
    .text_to_value = NULL,
    .flush = fixture_parameter_flush,
+};
+
+static bool fixture_state_save(const clap_plugin_t *plugin,
+  const clap_ostream_t *stream) {
+   (void)plugin; require_main_not_audio();
+   if (stream == NULL || stream->write == NULL ||
+       stream->write(stream, state_bytes, 2U) != 2 ||
+       stream->write(stream, state_bytes + 2, sizeof(state_bytes) - 2U) !=
+          (int64_t)(sizeof(state_bytes) - 2U)) return false;
+   ++state_save_count; return true;
+}
+static bool fixture_state_load(const clap_plugin_t *plugin,
+  const clap_istream_t *stream) {
+   uint8_t buffer[sizeof(state_bytes)];
+   (void)plugin; require_main_not_audio();
+   if (stream == NULL || stream->read == NULL ||
+       stream->read(stream, buffer, sizeof(buffer)) != (int64_t)sizeof(buffer) ||
+       memcmp(buffer, state_bytes, sizeof(buffer)) != 0) return false;
+   ++state_load_count; return true;
+}
+static const clap_plugin_state_t fixture_state = {
+  .save = fixture_state_save, .load = fixture_state_load,
+};
+
+static bool fixture_state_reject_save(const clap_plugin_t *plugin,
+  const clap_ostream_t *stream) {
+   (void)plugin; require_main_not_audio();
+   if (stream == NULL || stream->write == NULL ||
+       stream->write(stream, state_bytes, sizeof(state_bytes)) !=
+          (int64_t)sizeof(state_bytes))
+      ++contract_failures;
+   return false;
+}
+static const clap_plugin_state_t fixture_state_reject_save_extension = {
+  .save = fixture_state_reject_save, .load = fixture_state_load,
 };
 
 static uint32_t fixture_latency_get(const clap_plugin_t *plugin) {
@@ -630,6 +670,12 @@ static const void *fixture_plugin_get_extension(const clap_plugin_t *plugin,
    if (extension_id != NULL && strcmp(extension_id, CLAP_EXT_PARAMS) == 0 &&
        PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_PARAMS)
       return &fixture_params;
+   if (extension_id != NULL && strcmp(extension_id, CLAP_EXT_STATE) == 0 &&
+       PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_STATE_REJECT_SAVE)
+      return &fixture_state_reject_save_extension;
+   if (extension_id != NULL && strcmp(extension_id, CLAP_EXT_STATE) == 0 &&
+       PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_STATE)
+      return &fixture_state;
    if (extension_id != NULL && strcmp(extension_id, CLAP_EXT_LATENCY) == 0)
       return PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_LATENCY_MISSING_GET
          ? &fixture_bad_latency
@@ -733,6 +779,8 @@ AUDIO_FIXTURE_EXPORT void pluginhost_audio_fixture_reset(void) {
    fixture_host_params = NULL;
    fixture_host_audio_ports = NULL;
    parameter_flush_count = 0U;
+   state_save_count = 0U;
+   state_load_count = 0U;
    parameter_emitted = false;
    pending_port_rescan = false;
    rescan_port_layout = false;
@@ -785,6 +833,8 @@ EXPORT_COUNTER(pluginhost_audio_fixture_process_calls, process_count)
 EXPORT_COUNTER(pluginhost_audio_fixture_destroy_calls, destroy_count)
 EXPORT_COUNTER(pluginhost_audio_fixture_contract_failures, contract_failures)
 EXPORT_COUNTER(pluginhost_audio_fixture_parameter_flush_count, parameter_flush_count)
+EXPORT_COUNTER(pluginhost_audio_fixture_state_save_count, state_save_count)
+EXPORT_COUNTER(pluginhost_audio_fixture_state_load_count, state_load_count)
 EXPORT_COUNTER(pluginhost_audio_fixture_last_activate_min_frames,
                last_activate_min_frames)
 EXPORT_COUNTER(pluginhost_audio_fixture_last_activate_max_frames,

@@ -226,6 +226,17 @@ type
     ctx*: pointer
     tryPush*: ClapOutputEventsTryPushProc
 
+  ClapIStreamReadProc* = proc(stream: ptr ClapIStream; buffer: pointer;
+    size: uint64): int64 {.cdecl, gcsafe, raises: [].}
+  ClapIStream* {.bycopy.} = object
+    ctx*: pointer
+    read*: ClapIStreamReadProc
+  ClapOStreamWriteProc* = proc(stream: ptr ClapOStream; buffer: pointer;
+    size: uint64): int64 {.cdecl, gcsafe, raises: [].}
+  ClapOStream* {.bycopy.} = object
+    ctx*: pointer
+    write*: ClapOStreamWriteProc
+
   ClapAudioBuffer* {.bycopy.} = object
     data32*: ptr ptr cfloat
     data64*: ptr ptr cdouble
@@ -339,6 +350,12 @@ type
     rescan*: ClapHostParamsRescanProc
     clear*: ClapHostParamsClearProc
     requestFlush*: ClapHostParamsRequestFlushProc
+
+  ClapPluginStateSaveProc* = proc(plugin: ptr ClapPlugin; stream: ptr ClapOStream): bool {.cdecl, gcsafe, raises: [].}
+  ClapPluginStateLoadProc* = proc(plugin: ptr ClapPlugin; stream: ptr ClapIStream): bool {.cdecl, gcsafe, raises: [].}
+  ClapPluginState* {.bycopy.} = object
+    save*: ClapPluginStateSaveProc
+    load*: ClapPluginStateLoadProc
 
   ClapPluginDescriptor* {.bycopy.} = object
     clapVersion*: ClapVersion

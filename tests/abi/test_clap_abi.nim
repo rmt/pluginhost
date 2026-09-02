@@ -143,6 +143,9 @@ suite "CLAP raw ABI":
     checkLayout(ClapParamInfo, 44)
     checkLayout(ClapPluginParams, 45)
     checkLayout(ClapHostParams, 46)
+    checkLayout(ClapIStream, 47)
+    checkLayout(ClapOStream, 48)
+    checkLayout(ClapPluginState, 49)
 
   test "event field offsets match the official headers":
     checkField(ClapVersion, major, 1, 1)
@@ -227,6 +230,12 @@ suite "CLAP raw ABI":
     checkField(ClapHostParams, rescan, 46, 1)
     checkField(ClapHostParams, clear, 46, 2)
     checkField(ClapHostParams, requestFlush, 46, 3)
+    checkField(ClapIStream, ctx, 47, 1)
+    checkField(ClapIStream, read, 47, 2)
+    checkField(ClapOStream, ctx, 48, 1)
+    checkField(ClapOStream, write, 48, 2)
+    checkField(ClapPluginState, save, 49, 1)
+    checkField(ClapPluginState, load, 49, 2)
 
   test "process and callback-container offsets match the official headers":
     checkField(ClapInputEvents, ctx, 12, 1)
@@ -378,3 +387,7 @@ suite "CLAP raw ABI":
     checkFunctionPointer(ClapHostParamsRescanProc)
     checkFunctionPointer(ClapHostParamsClearProc)
     checkFunctionPointer(ClapHostParamsRequestFlushProc)
+    checkFunctionPointer(ClapIStreamReadProc)
+    checkFunctionPointer(ClapOStreamWriteProc)
+    checkFunctionPointer(ClapPluginStateSaveProc)
+    checkFunctionPointer(ClapPluginStateLoadProc)

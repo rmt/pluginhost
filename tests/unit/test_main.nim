@@ -30,7 +30,7 @@ suite "main process":
     let process = runHost(@["--version"])
 
     check process.exitCode == 0
-    check process.output.startsWith("pluginhost 0.0.9-dev\n")
+    check process.output.startsWith("pluginhost 0.0.10-dev\n")
     check process.errorOutput.len == 0
 
   test "invalid invocation uses stderr and the usage exit status":
@@ -49,11 +49,7 @@ suite "main process":
     check process.errorOutput.contains("could not resolve CLAP plugin path")
     check process.errorOutput.contains("fixture.clap")
 
-  test "deferred required GUI and state options fail explicitly":
+  test "deferred required GUI fails explicitly":
     let gui = runHost(@["--require-gui", "fixture.clap"])
     check gui.exitCode == 5
     check gui.errorOutput.contains("GUI hosting is not implemented")
-
-    let state = runHost(@["--load-state", "state.bin", "fixture.clap"])
-    check state.exitCode == 6
-    check state.errorOutput.contains("state load/save is not implemented")

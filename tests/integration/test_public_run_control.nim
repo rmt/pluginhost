@@ -80,3 +80,32 @@ suite "public reactor and signal-controlled run":
     check process.waitForExit(5_000) == 0
     check process.outputStream.readAll().len == 0
     check not fileExists(pidPath)
+
+  test "SIGTERM saves requested CLAP state after audio quiescence":
+    require getEnv("PLUGINHOST_INTEGRATION_ISOLATED") == "1"
+    let executable = getEnv("PLUGINHOST_TEST_BIN")
+    let fixtureDirectory = getEnv("PLUGINHOST_CLAP_AUDIO_FIXTURE_DIR")
+    let fixture = fixtureDirectory / "audio_state.clap"
+    let statePath = getTempDir() / ("pluginhost-state-" & $getpid() & ".bin")
+    let pidPath = getTempDir() / ("pluginhost-state-" & $getpid() & ".pid")
+    if fileExists(pidPath): removeFile(pidPath)
+    require executable.len > 0 and fileExists(executable) and fileExists(fixture)
+    writeFile(statePath, "PHST9")
+    let process = startProcess(executable, args = @[
+      "--no-gui", "--no-start-server",
+      "--client-name", "pluginhost-public-state", "--pid-file", pidPath,
+      "--load-state", statePath, "--save-state", statePath, fixture,
+    ], options = {})
+    defer:
+      if process.peekExitCode() == -1:
+        discard kill(Pid(process.processID), SIGKILL)
+        discard process.waitForExit(3_000)
+      process.close()
+      if fileExists(statePath): removeFile(statePath)
+      if fileExists(pidPath): removeFile(pidPath)
+    require waitForPidFile(pidPath, process)
+    require kill(Pid(process.processID), SIGTERM) == 0
+    check process.waitForExit(5_000) == 0
+    check process.outputStream.readAll().len == 0
+    check process.errorStream.readAll().contains("state") == false
+    check readFile(statePath) == "PHST9"

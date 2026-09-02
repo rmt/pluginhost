@@ -1,7 +1,7 @@
 import std/math
 
 import ./[audio_process, ffi, host_bridge, loader, main_thread_services,
-          parameter_transport, port_inspector]
+          parameter_transport, port_inspector, state_codec]
 import ../domain/[errors, plugin_catalog, port_plan, result]
 import ../rt/role_guard
 
@@ -25,6 +25,7 @@ type
     timerSupport*: ptr ClapPluginTimerSupport
     posixFdSupport*: ptr ClapPluginPosixFdSupport
     params*: ptr ClapPluginParams
+    stateExtension*: ptr ClapPluginState
 
   ClapParameterSnapshot* = object
     id*: ClapId
@@ -248,6 +249,8 @@ proc createClapInstance*(module: sink ClapModule;
       plugin.getExtension(plugin, ClapExtPosixFdSupport.cstring)),
     params: cast[ptr ClapPluginParams](
       plugin.getExtension(plugin, ClapExtParams.cstring)),
+    stateExtension: cast[ptr ClapPluginState](
+      plugin.getExtension(plugin, ClapExtState.cstring)),
   )
   let parameterTransport = newClapParameterTransport()
   if parameterTransport == nil:
@@ -373,6 +376,43 @@ proc takeAudioPortsRescan*(instance: ClapInstance): uint32 {.gcsafe, raises: [].
 
 proc takeNotePortsRescan*(instance: ClapInstance): uint32 {.gcsafe, raises: [].} =
   instance.bridge.takeNotePortsRescan()
+
+proc loadState*(instance: var ClapInstance; path: string): Result[Unit] =
+  if instance.state != cisInitialized or not instance.bridge.isMainThread or
+      instance.extensions.stateExtension == nil or instance.extensions.stateExtension.load == nil:
+    return failure[Unit](hostError(hsState, hekState, "CLAP state load is unavailable",
+      "path=" & path & "; id=" & instance.descriptor.id))
+  var openedInput = openStateInput(path)
+  if not openedInput.isOk:
+    return failure[Unit](move(openedInput.error))
+  var input = move(openedInput.value)
+  let loaded = instance.extensions.stateExtension.load(
+    instance.plugin, input.streamPointer)
+  let streamFailed = input.failed
+  let closed = input.close()
+  if not loaded or streamFailed:
+    return failure[Unit](hostError(hsState, hekState,
+      "CLAP plugin rejected state input", "path=" & path))
+  if not closed.isOk:
+    return closed
+  success()
+
+proc saveState*(instance: var ClapInstance; path: string): Result[Unit] =
+  if instance.state notin {cisInitialized, cisActivated} or not instance.bridge.isMainThread or
+      instance.extensions.stateExtension == nil or instance.extensions.stateExtension.save == nil:
+    return failure[Unit](hostError(hsState, hekState, "CLAP state save is unavailable",
+      "path=" & path & "; id=" & instance.descriptor.id))
+  var openedOutput = openStateOutput(path)
+  if not openedOutput.isOk:
+    return failure[Unit](move(openedOutput.error))
+  var output = move(openedOutput.value)
+  let saved = instance.extensions.stateExtension.save(
+    instance.plugin, output.streamPointer)
+  if not saved or output.failed:
+    output.rollback()
+    return failure[Unit](hostError(hsState, hekState,
+      "CLAP plugin rejected state output", "path=" & path))
+  output.commit()
 
 proc inspectPortPlan*(instance: var ClapInstance): Result[PortPlan] =
   if instance.state != cisInitialized:

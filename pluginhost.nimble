@@ -1,7 +1,7 @@
 # Nimble 0.20 accepts only dotted numeric package versions and requires a
 # literal assignment. tests/unit/test_version.nim verifies this value against
 # the numeric core of VERSION.
-version       = "0.0.9"
+version       = "0.0.10"
 author        = "pluginhost contributors"
 description   = "A standalone Linux JACK host for CLAP plugins"
 license       = "UNLICENSED"
@@ -107,6 +107,11 @@ proc compileLiveIntegrationSupport() =
        "-DPLUGINHOST_AUDIO_FIXTURE_MODE=0 " &
        "tests/fixtures/clap/audio_fixture.c " &
        "-o build/fixtures/clap/audio_tone.clap"
+  exec "cc -std=gnu11 -fPIC -shared -fvisibility=hidden " &
+       "-Wall -Wextra -Werror -Wl,-z,defs -Ivendor/clap/include " &
+       "-DPLUGINHOST_AUDIO_FIXTURE_MODE=13 " &
+       "tests/fixtures/clap/audio_fixture.c " &
+       "-o build/fixtures/clap/audio_state.clap"
 
 proc verifyIntegrationPrerequisiteFailure() =
   exec "python=$(command -v python3); set +e; " &
@@ -277,6 +282,8 @@ proc compileClapFixtures() =
   compileAudioFixtureVariant("audio_params", 10)
   compileAudioFixtureVariant("audio_port_rescan", 11)
   compileAudioFixtureVariant("audio_tone_sleep", 12)
+  compileAudioFixtureVariant("audio_state", 13)
+  compileAudioFixtureVariant("audio_state_reject_save", 14)
   compileEventFixtureVariant("events_raw", 0)
   compileEventFixtureVariant("events_clap", 1)
   compileEventFixtureVariant("events_midi2_only", 2)

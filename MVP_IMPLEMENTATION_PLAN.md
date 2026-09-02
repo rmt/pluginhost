@@ -3,7 +3,7 @@
 **Plan version:** 1.0.0  
 **Target product release:** `pluginhost` 0.1.0  
 **Initial development version:** 0.0.1-dev  
-**Status:** Approved through review unit 8A; review unit 8B in progress
+**Status:** Approved through Increment 9; Increment 10 not started
 **Companion documents:** [`REQUIREMENTS.md`](REQUIREMENTS.md), [`DESIGN.md`](DESIGN.md)
 
 ## 1. Purpose
@@ -618,6 +618,7 @@ Review parameter concurrency and flush/process exclusion, restart state machine,
 ## 16. Increment 9 — State load/save transactions
 
 **Planned version:** 0.0.10-dev
+**Status:** Approved.
 
 ### Goal
 
@@ -780,8 +781,8 @@ This table is updated only when work is reviewed.
 | 6 — MIDI/events | Approved | Review units 6A and 6B | Fixed-capacity event bridge and isolated live multi-port MIDI/SysEx evidence accepted |
 | 7 — Reactor/signals | Approved | Increment 7 review | Public headless run, epoll/signalfd reactor, orderly shutdown, main-thread callbacks, and atomic PID files accepted |
 | 8 — Host extensions/restart | Approved | Review units 8A and 8B | Main-thread timer/FD services, dirty notification, JACK latency, bounded parameter transport, restart/rescan, sleep/wake, and compatible reconnection/loss evidence accepted |
-| 9 — State | Not started | — | Pre-code package required before implementation |
-| 10 — GUI | Not started | — | Split into 10A/10B reviews |
+| 9 — State | Approved | Increment 9 review | Bounded 64 KiB/64 MiB CLAP streams, pre-configuration load, clean-signal transactional save, rollback, and live evidence accepted |
+| 10 — GUI | Not started | — | Split into 10A/10B reviews; pre-code package required |
 | 11 — Release candidate | Not started | — | — |
 | 12 — MVP release | Not started | — | Target 0.1.0 |
 
@@ -827,4 +828,4 @@ Each candidate requires requirements/design updates and, where architectural, an
 
 ## 23. First action after each review gate
 
-After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 8 is approved through review unit 8B; its final `nimble --offline all -y` evidence covered 198 tests (101 unit, 26 ABI, 57 fixture, 9 RT, and 5 live integration). Before Increment 9 implementation, present its state-stream transaction pre-code package and obtain explicit owner approval.
+After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 9 is approved; its final `nimble --offline all -y` evidence covered 208 tests (106 unit, 26 ABI, 61 fixture, 9 RT, and 6 live integration). Before Increment 10 implementation, present the 10A window-host pre-code package and obtain explicit owner approval.

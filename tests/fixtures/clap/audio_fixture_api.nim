@@ -30,6 +30,8 @@ type
     timerCalls*: AudioFixtureCounterProc
     fdCalls*: AudioFixtureCounterProc
     parameterFlushCalls*: AudioFixtureCounterProc
+    stateSaveCalls*: AudioFixtureCounterProc
+    stateLoadCalls*: AudioFixtureCounterProc
     triggerParameterRescan*: AudioFixtureFlagsProc
     triggerProcess*: AudioFixtureVoidProc
     triggerParameterFlush*: AudioFixtureVoidProc
@@ -87,6 +89,10 @@ proc audioFixtureApi*(library: DynamicLibrary): AudioFixtureApi =
     "pluginhost_audio_fixture_fd_calls")
   result.parameterFlushCalls = resolve[AudioFixtureCounterProc](library,
     "pluginhost_audio_fixture_parameter_flush_count")
+  result.stateSaveCalls = resolve[AudioFixtureCounterProc](library,
+    "pluginhost_audio_fixture_state_save_count")
+  result.stateLoadCalls = resolve[AudioFixtureCounterProc](library,
+    "pluginhost_audio_fixture_state_load_count")
   result.triggerParameterRescan = resolve[AudioFixtureFlagsProc](library,
     "pluginhost_audio_fixture_trigger_parameter_rescan")
   result.triggerProcess = resolve[AudioFixtureVoidProc](library,

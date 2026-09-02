@@ -14,6 +14,7 @@ type
     iassEmpty
     iassReady
     iassActive
+    iassQuiesced
     iassClosed
 
   InternalAudioSlice* = object
@@ -171,6 +172,12 @@ proc rescanParameters*(slice: var InternalAudioSlice; flags: uint32): Result[Uni
 proc takeStateDirty*(slice: var InternalAudioSlice): bool =
   slice.instance.takeStateDirty()
 
+proc saveState*(slice: var InternalAudioSlice; path: string): Result[Unit] =
+  if slice.stateValue != iassQuiesced:
+    return failure[Unit](sliceError(hekState, "state save requires a quiesced audio slice",
+      slice.instance.modulePath, slice.instance.selectedDescriptor.id))
+  return slice.instance.saveState(path)
+
 proc takeLatencyChanged*(slice: var InternalAudioSlice): bool =
   slice.instance.takeLatencyChanged()
 
@@ -225,7 +232,8 @@ proc pluginId*(slice: InternalAudioSlice): string =
 proc openInternalAudioSlice*(module: sink ClapModule;
                              descriptor: sink PluginDescriptor;
                              backendConfig: JackBackendOpenConfig;
-                             mainServices: ptr ClapMainThreadServices = nil):
+                             mainServices: ptr ClapMainThreadServices = nil;
+                             loadStatePath = ""):
     Result[InternalAudioSlice] =
   var slice = InternalAudioSlice(stateValue: iassEmpty)
   var created = createClapInstance(
@@ -233,6 +241,11 @@ proc openInternalAudioSlice*(module: sink ClapModule;
   if not created.isOk:
     return failure[InternalAudioSlice](move(created.error))
   slice.instance = move(created.value)
+  if loadStatePath.len > 0:
+    var loaded = slice.instance.loadState(loadStatePath)
+    if not loaded.isOk:
+      return failure[InternalAudioSlice](slice.cleanupConstructionFailure(
+        move(loaded.error)))
 
   var render = slice.instance.negotiateRealtimeRender()
   if not render.isOk:
@@ -328,29 +341,29 @@ proc start*(slice: var InternalAudioSlice): Result[Unit] =
   slice.stateValue = iassActive
   success()
 
-proc stop*(slice: var InternalAudioSlice): Result[Unit] =
-  if slice.stateValue == iassReady:
-    return success()
+proc quiesce*(slice: var InternalAudioSlice): Result[Unit] =
+  if slice.stateValue == iassQuiesced: return success()
   if slice.stateValue != iassActive:
-    return failure[Unit](sliceError(
-      hekInternal,
-      "internal audio slice is not active",
-      slice.instance.modulePath,
-      slice.instance.selectedDescriptor.id,
-      "state=" & $slice.stateValue,
-    ))
-
-  var deactivatedJack = slice.backend.deactivate()
-  if not deactivatedJack.isOk:
-    return deactivatedJack
+    return failure[Unit](sliceError(hekInternal, "audio slice is not active for quiescence",
+      slice.instance.modulePath, slice.instance.selectedDescriptor.id))
+  var jack = slice.backend.deactivate()
+  if not jack.isOk: return jack
   var stopped = slice.instance.stopProcessing(slice.backend.audioRoleGuard())
-  if not stopped.isOk:
-    return stopped
-  var deactivatedClap = slice.instance.deactivate()
-  if not deactivatedClap.isOk:
-    return deactivatedClap
-  discard slice.instance.hostBridge.detachAudioRole(
-    slice.backend.audioRoleGuard())
+  if not stopped.isOk: return stopped
+  slice.stateValue = iassQuiesced
+  success()
+
+proc stop*(slice: var InternalAudioSlice): Result[Unit] =
+  if slice.stateValue == iassReady: return success()
+  if slice.stateValue == iassActive:
+    var quiesced = slice.quiesce()
+    if not quiesced.isOk: return quiesced
+  if slice.stateValue != iassQuiesced:
+    return failure[Unit](sliceError(hekInternal, "internal audio slice is not ready to stop",
+      slice.instance.modulePath, slice.instance.selectedDescriptor.id, "state=" & $slice.stateValue))
+  var deactivated = slice.instance.deactivate()
+  if not deactivated.isOk: return deactivated
+  discard slice.instance.hostBridge.detachAudioRole(slice.backend.audioRoleGuard())
   slice.stateValue = iassReady
   success()
 

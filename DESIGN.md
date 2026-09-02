@@ -273,10 +273,10 @@ callbacks so self-unregistration cannot rearm a removed timer.
 
 Responsibilities:
 
-- Open bounded CLAP input streams.
-- Create temporary output files in the target directory.
-- Support partial CLAP reads/writes and propagate stream errors.
-- Flush, close, and atomically rename successful output.
+- Open main-thread-only bounded CLAP input streams.
+- Create exclusive mode-0600 temporary output files in the target directory.
+- Cap every callback transfer at 64 KiB and a transaction at 64 MiB; support CLAP partial reads/writes and retain stream errors.
+- Synchronize, close, and atomically rename successful output.
 - Remove failed temporary files without modifying an existing destination.
 
 This component has no knowledge of CLI parsing or JACK.
@@ -554,7 +554,9 @@ normal orderly teardown keeps outputs silent.
 1. Mark the session stopping so new show/restart requests are ignored.
 2. Deactivate JACK and wait for the process callback to finish. The JACK client remains open so ports/resources can be closed in order.
 3. Call `stop_processing()` under `AudioRoleGuard` if CLAP still considers the instance processing.
-4. Save requested state on the main thread.
+4. Save requested state on the main thread when clean signal shutdown requested it. The
+   state stream is valid only for the synchronous plugin call after JACK quiescence and
+   `stop_processing()`, before CLAP deactivation.
 5. Hide/destroy the GUI and unregister plugin timers/FDs.
 6. Deactivate and destroy the CLAP instance.
 7. Deinitialize the CLAP entry and unload the library.
@@ -682,7 +684,7 @@ Plugin callbacks may request changes while the main thread is already inside a p
 | X11 display/window | `X11WindowHost` | GUI creation | GUI destruction |
 | CLAP timer/FD entries | `MainReactor` registry | Plugin request | Unregister or plugin teardown |
 | CLAP main-service table | `PluginServiceRegistry`, borrowed by `ClapHostBridge` | Before plugin creation | After plugin destruction |
-| State temporary file | `StateStore` transaction | Save begins | Rename or rollback |
+| State temporary file and CLAP stream tables | `StateStore`/`ClapStateCodec` transaction | Synchronous main-thread load/save | Close, rename, or rollback |
 | PID file | Session process service | Startup | Shutdown/rollback |
 
 Borrowed pointer lifetimes must be documented next to fields. A debug build should poison/reset pointers after release and assert state preconditions.

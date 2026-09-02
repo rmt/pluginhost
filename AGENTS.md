@@ -49,8 +49,8 @@ The progress table changes only after human review. A task appearing in the plan
 As of the latest reviewed state:
 
 - Default/current branch: `main`; inspect `git status` and `git log` before editing.
-- Version: `0.0.9-dev` (`pluginhost.nimble` uses numeric `0.0.9` because of Nimble metadata syntax).
-- Increments 0 through 8 are approved; Increment 9 has not started.
+- Version: `0.0.10-dev` (`pluginhost.nimble` uses numeric `0.0.10` because of Nimble metadata syntax).
+- Increments 0 through 9 are approved; Increment 10 has not started.
 - The CLI uses exactly pinned `argparse` 4.0.2.
 - `list` and `scan` report copied CLAP descriptors without creating a plugin
   instance; canonical `run` now provides a headless signal-controlled JACK runtime.
@@ -58,8 +58,8 @@ As of the latest reviewed state:
 - CLAP/JACK declarations, Linux DSO ownership, C/Nim callbacks, and the ARC RT
   spike retain their ABI, foreign-thread, allocator, and generated-C checks.
 - The shared build profile is ARC, threads on, panics on, and Nim signal handlers disabled.
-- The current suite contains 101 unit, 26 ABI, 57 fixture, 9 RT, and 5 live integration tests (198 total), plus required generated-C negative-canary rejection.
-- The public headless runtime composes the bounded CLAP/JACK audio/event slice with an `epoll`/`signalfd` reactor, CLAP timer/FD services, state-dirty notification, plugin/JACK latency propagation, bounded parameter transport/rescans, sleep/wake, coalesced quiescent restart/port rebuild with compatible reconnection reporting, main-thread callbacks, orderly shutdown, and atomic PID-file ownership. State serialization, GUI, and later host extensions remain unimplemented.
+- The current suite contains 106 unit, 26 ABI, 61 fixture, 9 RT, and 6 live integration tests (208 total), plus required generated-C negative-canary rejection.
+- The public headless runtime composes the bounded CLAP/JACK audio/event slice with an `epoll`/`signalfd` reactor, CLAP timer/FD services, state-dirty notification, plugin/JACK latency propagation, bounded parameter transport/rescans, sleep/wake, coalesced quiescent restart/port rebuild with compatible reconnection reporting, transactional CLAP state load/save, main-thread callbacks, orderly shutdown, and atomic PID-file ownership. GUI and later host extensions remain unimplemented.
 - Remote `origin` is configured; no project license is currently configured.
 
 Current source responsibilities:
@@ -69,8 +69,8 @@ Current source responsibilities:
 - `src/pluginhost/domain/` — typed results/errors/lifecycle/reactor values plus host-owned catalog and immutable port plans.
 - `src/pluginhost/clap/ffi.nim` — stable CLAP 1.2.10 raw ABI declarations.
 - `src/pluginhost/clap/loader.nim` — move-only entry/factory ownership, copied catalog extraction, and checked plugin creation.
-- `src/pluginhost/clap/host_bridge.nim`, `main_thread_services.nim`, and `instance.nim` — stable host callbacks/service boundary, bounded request/log/parameter transport, extension dispatch, parameter snapshots, and one-instance lifecycle ownership.
-- `src/pluginhost/clap/port_inspector.nim`, `audio_process.nim`, `event_bridge.nim`, and `parameter_transport.nim` — bounded port inspection, grouped zero-copy float32 processing, fixed-capacity sample-accurate event/parameter translation, and RT-safe sleep/wake handling.
+- `src/pluginhost/clap/host_bridge.nim`, `main_thread_services.nim`, and `instance.nim` — stable host callbacks/service boundary, bounded request/log/parameter transport, extension dispatch, parameter snapshots, state calls, and one-instance lifecycle ownership.
+- `src/pluginhost/clap/port_inspector.nim`, `audio_process.nim`, `event_bridge.nim`, `parameter_transport.nim`, and `state_codec.nim` — bounded port inspection, grouped zero-copy float32 processing, fixed-capacity sample-accurate event/parameter translation, RT-safe sleep/wake handling, and main-thread bounded transactional state streams.
 - `src/pluginhost/discovery/paths.nim` and `scanner.nim` — ordered roots, deterministic
   candidate traversal, canonical deduplication, and scan reports.
 - `src/pluginhost/jack/ffi.nim` — declaration-only minimal JACK ABI types, callbacks, and procedure-pointer signatures.
@@ -117,20 +117,19 @@ nimble all
 `nimble testIntegration` fails when prerequisites are missing, then runs four private PipeWire-JACK scenarios covering public signals/PID cleanup, independent CLAP smoke, live audio/MIDI capture, quiescence/stress, and callback instrumentation.
 `nimble all` performs source compile, unit, ABI, fixture, RT, and live integration checks; its integration preflight fails rather than reporting a false complete pass.
 
-For user-visible CLI changes, also exercise the compiled process directly and verify stdout, stderr, signals, PID cleanup, and exit codes. Deferred GUI and state-persistence capabilities remain explicit failures.
+For user-visible CLI changes, also exercise the compiled process directly and verify stdout, stderr, signals, PID cleanup, and exit codes. Deferred GUI capabilities remain explicit failures.
 
-## Next planned work: Increment 9 — State load/save transactions
+## Next planned work: Increment 10A — X11/XEmbed window-host spike
 
-Increment 8 is approved. It adds stable main-thread services and latency publication,
-bounded parameter output/rescans and inactive flush, sleep/wake, coalesced restart and
-quiescent port rebuild, plus compatible JACK reconnection/loss reporting. The strict
-reviewed gate passed 198 tests.
+Increment 9 is approved. It adds bounded 64 KiB/64 MiB CLAP state streams,
+pre-configuration load, and clean-signal transactional save after JACK/CLAP quiescence.
+The strict reviewed gate passed 208 tests.
 
-Before editing Increment 9, inspect the current approved state, run the existing
-verification matrix, and present a fresh pre-code package for bounded CLAP state stream
-adapters, pre-activation load, clean-shutdown save transaction, filesystem failure
-atomicity, dirty-state policy, fixtures, RT evidence, risks, and non-goals. Stop for
-explicit owner approval before implementation.
+Before editing Increment 10A, inspect the current approved state, run the existing
+verification matrix, and present a fresh pre-code package choosing Xlib or XCB, defining
+the narrow window-host capability and resource ownership, XEmbed/window lifecycle,
+reactor integration, Xvfb fixtures/tests, dependencies/ADR, RT isolation, risks, and
+non-goals. Stop for explicit owner approval before implementation.
 
 ## Non-negotiable engineering rules
 

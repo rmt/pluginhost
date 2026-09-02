@@ -46,7 +46,7 @@ proc capacityPlan(inputGroups, outputGroups, channelsPerGroup: uint32):
       flattened += channelsPerGroup
   newPortPlan(portPlanVersion(1), move(groups), move(channels), @[])
 
-proc openOwnedSlice(variant: string):
+proc openOwnedSlice(variant: string; loadStatePath = ""):
     tuple[slice: InternalAudioSlice, fixture: AudioFixtureApi,
           observer: DynamicLibrary] =
   let path = audioFixturePath(variant)
@@ -64,7 +64,7 @@ proc openOwnedSlice(variant: string):
     kind: pskImplicitSingle))
   require selected.isOk
   var sliceResult = openInternalAudioSlice(move(module), move(selected.value),
-                                           fakeConfig())
+    fakeConfig(), loadStatePath = loadStatePath)
   require sliceResult.isOk
 
   (move(sliceResult.value), fixture, move(observer))
@@ -368,6 +368,96 @@ suite "internal CLAP float32 audio endpoint":
     check lost.lost.len == 2
     check controls.connectCount() == 4
     check slice.state == iassActive
+
+  test "CLAP state loads and saves through bounded stream transactions":
+    var opened = openInstance("audio_state")
+    var instance = move(opened.instance)
+    var observer = move(opened.observer)
+    let fixture = opened.fixture
+    let path = getTempDir() / "pluginhost-fixture-state.bin"
+    writeFile(path, "PHST9")
+    defer:
+      doAssert instance.close().isOk
+      doAssert observer.close().isOk
+      if fileExists(path): removeFile(path)
+    require instance.loadState(path).isOk
+    check fixture.stateLoadCalls() == 1
+    require instance.saveState(path).isOk
+    check readFile(path) == "PHST9"
+    check fixture.stateSaveCalls() == 1
+    check fixture.contractFailures() == 0
+
+  test "state loading precedes audio-slice configuration":
+    var controls = openControls()
+    let path = getTempDir() / "pluginhost-fixture-state-load.bin"
+    writeFile(path, "PHST9")
+    var opened = openOwnedSlice("audio_state", path)
+    var slice = move(opened.slice)
+    var observer = move(opened.observer)
+    let fixture = opened.fixture
+    defer:
+      doAssert slice.close().isOk
+      doAssert observer.close().isOk
+      doAssert controls.close().isOk
+      if fileExists(path): removeFile(path)
+    check fixture.stateLoadCalls() == 1
+    check fixture.activateCalls() == 0
+    check fixture.contractFailures() == 0
+
+  test "state load failure prevents configuration and missing state is explicit":
+    var controls = openControls()
+    let path = getTempDir() / "pluginhost-fixture-invalid-state.bin"
+    writeFile(path, "not-the-fixture-state")
+    var observerResult = openDynamicLibrary(audioFixturePath("audio_state"))
+    require observerResult.isOk
+    var observer = move(observerResult.value)
+    let fixture = audioFixtureApi(observer)
+    fixture.reset()
+    var moduleResult = openClapModule(audioFixturePath("audio_state"))
+    require moduleResult.isOk
+    var module = move(moduleResult.value)
+    let catalog = module.readCatalog()
+    require catalog.isOk
+    var selected = catalog.value.selectDescriptor(PluginSelector(
+      kind: pskImplicitSingle))
+    require selected.isOk
+    let opened = openInternalAudioSlice(move(module), move(selected.value),
+      fakeConfig(), loadStatePath = path)
+    defer:
+      doAssert observer.close().isOk
+      doAssert controls.close().isOk
+      if fileExists(path): removeFile(path)
+    check not opened.isOk
+    check opened.error.subsystem == hsState
+    check fixture.activateCalls() == 0
+    check fixture.contractFailures() == 0
+    var unavailable = openInstance("audio_tone")
+    var instance = move(unavailable.instance)
+    var unavailableObserver = move(unavailable.observer)
+    defer:
+      doAssert instance.close().isOk
+      doAssert unavailableObserver.close().isOk
+    let stateUnavailable = instance.saveState(path)
+    check not stateUnavailable.isOk
+    check stateUnavailable.error.subsystem == hsState
+
+  test "state callback rejection preserves the previous destination":
+    var opened = openInstance("audio_state_reject_save")
+    var instance = move(opened.instance)
+    var observer = move(opened.observer)
+    let fixture = opened.fixture
+    let path = getTempDir() / "pluginhost-fixture-state-rejected.bin"
+    writeFile(path, "previous-state")
+    defer:
+      doAssert instance.close().isOk
+      doAssert observer.close().isOk
+      if fileExists(path): removeFile(path)
+    let saved = instance.saveState(path)
+    check not saved.isOk
+    check saved.error.subsystem == hsState
+    check readFile(path) == "previous-state"
+    check fixture.stateSaveCalls() == 0
+    check fixture.contractFailures() == 0
 
   test "parameter snapshots drain process output, rescan, and flush while inactive":
     var controls = openControls()

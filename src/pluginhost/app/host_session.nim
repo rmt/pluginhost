@@ -27,6 +27,7 @@ type
     lastFreewheelChanges: uint64
     stateDirty: bool
     consecutiveRestarts: uint32
+    saveStatePath: Option[string]
 
 proc initHostSession*(): HostSession =
   HostSession(state: ssNew)
@@ -88,12 +89,6 @@ proc failSession[T](session: var HostSession; error: sink HostError): Result[T] 
   failure[T](move(error))
 
 proc validateAvailableRunOptions(config: RunConfig): Result[Unit] =
-  if config.loadStatePath.isSome or config.saveStatePath.isSome:
-    return failure[Unit](hostError(
-      hsState, hekState,
-      "CLAP state load/save is not implemented in this development increment",
-      config.pluginPath,
-    ))
   if config.requireGui or config.guiScale.isSome:
     return failure[Unit](hostError(
       hsGui, hekGui,
@@ -139,7 +134,8 @@ proc openRunSlice(config: RunConfig;
     noStartServer = config.noStartServer,
   )
   openInternalAudioSlice(
-    move(module), move(selected.value), backendConfig, mainServices)
+    move(module), move(selected.value), backendConfig, mainServices,
+    if config.loadStatePath.isSome: config.loadStatePath.get() else: "")
 
 proc warning(errorOutput: File; message: string) =
   errorOutput.write("pluginhost: warning: " & message & "\n")
@@ -348,6 +344,7 @@ proc run*(session: var HostSession; config: RunConfig;
   if not validated.isOk:
     return failSession[Unit](session, move(validated.error))
 
+  session.saveStatePath = config.saveStatePath
   var processControl = session.openProcessControl()
   if not processControl.isOk:
     return failSession[Unit](session, move(processControl.error))
@@ -418,6 +415,13 @@ proc close*(session: var HostSession): Result[Unit] =
 
   var first: HostError
   var failed = false
+  if session.state == ssStopping and session.saveStatePath.isSome and
+      session.audioSlice.state == iassActive:
+    var quiesced = session.audioSlice.quiesce()
+    rememberCleanup(first, failed, quiesced)
+    if quiesced.isOk:
+      var saved = session.audioSlice.saveState(session.saveStatePath.get())
+      rememberCleanup(first, failed, saved)
   if session.audioSlice.state == iassActive:
     var audioStopped = session.audioSlice.stop()
     rememberCleanup(first, failed, audioStopped)
