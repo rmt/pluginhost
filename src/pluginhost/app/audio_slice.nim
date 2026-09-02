@@ -5,7 +5,7 @@
 ## instance of this owner into the public runtime.
 
 import ../clap/[audio_process, event_bridge, ffi, host_bridge, instance, loader,
-                main_thread_services]
+                main_thread_services, parameter_transport]
 import ../domain/[errors, plugin_catalog, result]
 import ../jack/backend
 
@@ -21,6 +21,7 @@ type
     process: ClapAudioProcess
     backend: JackBackend
     stateValue: InternalAudioSliceState
+    reconnectionReport: JackReconnectionReport
 
   PluginLogSeverity* = enum
     plsDebug
@@ -40,6 +41,11 @@ type
     process*: bool
     callback*: bool
     flush*: bool
+
+  InternalRescanRequests* = object
+    parameters*: uint32
+    audioPorts*: uint32
+    notePorts*: uint32
 
   InternalControlSnapshot* = object
     jackShutdownCount*: uint64
@@ -71,6 +77,7 @@ proc `=sink`*(destination: var InternalAudioSlice;
   `=sink`(destination.process, source.process)
   `=sink`(destination.backend, source.backend)
   destination.stateValue = source.stateValue
+  `=sink`(destination.reconnectionReport, source.reconnectionReport)
 
 proc sliceError(kind: HostErrorKind; message, path, pluginId: string;
                 detail = ""): HostError =
@@ -132,6 +139,34 @@ proc controlRequests*(slice: var InternalAudioSlice): InternalControlRequests =
     callback: (requests and ClapRequestCallback) != 0'u32,
     flush: (requests and ClapRequestFlush) != 0'u32,
   )
+
+proc takeRescanRequests*(slice: var InternalAudioSlice): InternalRescanRequests =
+  InternalRescanRequests(
+    parameters: slice.instance.takeParamsRescan(),
+    audioPorts: slice.instance.takeAudioPortsRescan(),
+    notePorts: slice.instance.takeNotePortsRescan(),
+  )
+
+proc parameterCount*(slice: InternalAudioSlice): int {.inline.} =
+  slice.instance.parameterCount
+
+proc parameterCatalogGeneration*(slice: InternalAudioSlice): uint64 {.inline.} =
+  slice.instance.parameterCatalogGeneration
+
+proc takeReconnectionReport*(slice: var InternalAudioSlice): JackReconnectionReport =
+  move(slice.reconnectionReport)
+
+proc drainParameterEvents*(slice: var InternalAudioSlice): ClapParameterDrain =
+  slice.instance.drainParameterEvents()
+
+proc takeParameterMetrics*(slice: var InternalAudioSlice): ClapParameterMetrics =
+  slice.instance.takeParameterMetrics()
+
+proc flushParameters*(slice: var InternalAudioSlice): Result[Unit] =
+  slice.instance.flushParameters()
+
+proc rescanParameters*(slice: var InternalAudioSlice; flags: uint32): Result[Unit] =
+  slice.instance.rescanParameters(flags)
 
 proc takeStateDirty*(slice: var InternalAudioSlice): bool =
   slice.instance.takeStateDirty()
@@ -319,45 +354,82 @@ proc stop*(slice: var InternalAudioSlice): Result[Unit] =
   slice.stateValue = iassReady
   success()
 
-proc refreshRuntimeConfiguration*(slice: var InternalAudioSlice): Result[Unit] =
+proc restart*(slice: var InternalAudioSlice;
+              rescanParameters = false): Result[Unit] =
   if slice.stateValue notin {iassReady, iassActive}:
     return failure[Unit](sliceError(
-      hekInternal,
-      "runtime configuration can only be refreshed by a live audio slice",
-      slice.instance.modulePath,
-      slice.instance.selectedDescriptor.id,
+      hekInternal, "audio restart requires a ready or active slice",
+      slice.instance.modulePath, slice.instance.selectedDescriptor.id,
       "state=" & $slice.stateValue,
     ))
-  if not slice.backend.configurationChangePending:
-    return success()
-
   let wasActive = slice.stateValue == iassActive
   if wasActive:
     var stopped = slice.stop()
     if not stopped.isOk:
       return stopped
 
-  var runtime = slice.backend.refreshRuntimeConfiguration()
-  if not runtime.isOk:
-    return failure[Unit](move(runtime.error))
-  if not slice.process.setMaxFrames(runtime.value.bufferSize):
-    return failure[Unit](sliceError(
-      hekClapActivation,
-      "the changed JACK buffer size is outside the CLAP process capacity",
-      slice.instance.modulePath,
-      slice.instance.selectedDescriptor.id,
-      "buffer-size=" & $runtime.value.bufferSize,
-    ))
+  let deferredRequests = slice.instance.takeRequests()
+  if (deferredRequests and ClapRequestFlush) != 0'u32:
+    var flushed = slice.instance.flushParameters()
+    if not flushed.isOk:
+      return flushed
+  slice.instance.restoreRequests(deferredRequests and not ClapRequestFlush)
+  if slice.backend.configurationChangePending:
+    var runtime = slice.backend.refreshRuntimeConfiguration()
+    if not runtime.isOk:
+      return failure[Unit](move(runtime.error))
+    var acknowledged = slice.backend.acknowledgeConfigurationChange()
+    if not acknowledged.isOk:
+      return acknowledged
 
-  var endpointUpdated = slice.backend.updateProcessEndpoint(slice.process.endpoint)
-  if not endpointUpdated.isOk:
-    return endpointUpdated
-  var acknowledged = slice.backend.acknowledgeConfigurationChange()
-  if not acknowledged.isOk:
-    return acknowledged
+  if rescanParameters:
+    var parameters = slice.instance.rescanParameters(ClapParamRescanAll)
+    if not parameters.isOk:
+      return parameters
+  var connections = slice.backend.snapshotConnections()
+  if not connections.isOk:
+    return failure[Unit](move(connections.error))
+  slice.reconnectionReport = JackReconnectionReport()
+  # Rescan notifications produced during deactivate belong to this rebuild.
+  discard slice.instance.takeAudioPortsRescan()
+  discard slice.instance.takeNotePortsRescan()
+  var planResult = slice.instance.inspectPortPlan()
+  if not planResult.isOk:
+    return failure[Unit](move(planResult.error))
+  let plan = move(planResult.value)
+  var created = slice.instance.newAudioProcess(
+    plan, slice.backend.bufferSize, slice.backend.audioRoleGuard())
+  if not created.isOk:
+    return failure[Unit](move(created.error))
+  var replacement = move(created.value)
+  var previous = move(slice.process)
+  var rebuilt = slice.backend.reconfigure(plan, replacement.endpoint)
+  if not rebuilt.isOk:
+    slice.process = move(previous)
+    discard replacement.close()
+    return rebuilt
+  var restored = slice.backend.restoreConnections(move(connections.value))
+  if not restored.isOk:
+    var restoreError = move(restored.error)
+    var previousClosed = previous.close()
+    slice.process = move(replacement)
+    if not previousClosed.isOk:
+      restoreError.context.add("; prior-process-close=" & previousClosed.error.message)
+    return failure[Unit](move(restoreError))
+  var previousClosed = previous.close()
+  if not previousClosed.isOk:
+    slice.process = move(replacement)
+    return previousClosed
+  slice.process = move(replacement)
+  slice.reconnectionReport = move(restored.value)
   if wasActive:
     return slice.start()
   success()
+
+proc refreshRuntimeConfiguration*(slice: var InternalAudioSlice): Result[Unit] =
+  if not slice.backend.configurationChangePending:
+    return success()
+  slice.restart()
 
 proc close*(slice: var InternalAudioSlice): Result[Unit] =
   if slice.stateValue in {iassEmpty, iassClosed}:

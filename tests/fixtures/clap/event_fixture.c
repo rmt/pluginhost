@@ -6,6 +6,7 @@
 #include <clap/entry.h>
 #include <clap/events.h>
 #include <clap/ext/note-ports.h>
+#include <clap/ext/params.h>
 #include <clap/ext/thread-check.h>
 #include <clap/factory/plugin-factory.h>
 #include <clap/plugin-features.h>
@@ -243,9 +244,19 @@ static void emit_malformed_output(const clap_output_events_t *output) {
 
 static bool fixture_plugin_init(const clap_plugin_t *plugin) {
    (void)plugin;
-   if (fixture_host == NULL || fixture_host->get_extension == NULL ||
-       fixture_host->get_extension(fixture_host, CLAP_EXT_NOTE_PORTS) != NULL)
+   if (fixture_host == NULL || fixture_host->get_extension == NULL) {
       ++contract_failures;
+   } else {
+      const clap_host_note_ports_t *notes = (const clap_host_note_ports_t *)
+         fixture_host->get_extension(fixture_host, CLAP_EXT_NOTE_PORTS);
+      const clap_host_params_t *params = (const clap_host_params_t *)
+         fixture_host->get_extension(fixture_host, CLAP_EXT_PARAMS);
+      if (notes == NULL || notes->supported_dialects == NULL || notes->rescan == NULL ||
+          (notes->supported_dialects(fixture_host) & CLAP_NOTE_DIALECT_MIDI) == 0U ||
+          params == NULL || params->rescan == NULL || params->clear == NULL ||
+          params->request_flush == NULL)
+         ++contract_failures;
+   }
    return true;
 }
 

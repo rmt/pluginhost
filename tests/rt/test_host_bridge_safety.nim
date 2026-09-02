@@ -58,6 +58,12 @@ proc pluginhostHostCallbacksProbe(value: int32; context: pointer): int32 {.
     host.getExtension(host, ClapExtTimerSupport.cstring))
   let posixFd = cast[ptr ClapHostPosixFdSupport](
     host.getExtension(host, ClapExtPosixFdSupport.cstring))
+  let params = cast[ptr ClapHostParams](
+    host.getExtension(host, ClapExtParams.cstring))
+  let audioPorts = cast[ptr ClapHostAudioPorts](
+    host.getExtension(host, ClapExtAudioPorts.cstring))
+  let notePorts = cast[ptr ClapHostNotePorts](
+    host.getExtension(host, ClapExtNotePorts.cstring))
   let unsupported = host.getExtension(host, "clap.unsupported")
   if log == nil or log.log == nil or threadCheck == nil or
       threadCheck.isMainThread == nil or threadCheck.isAudioThread == nil or
@@ -65,7 +71,11 @@ proc pluginhostHostCallbacksProbe(value: int32; context: pointer): int32 {.
       latency.changed == nil or timer == nil or posixFd == nil or
       timer.registerTimer == nil or timer.unregisterTimer == nil or
       posixFd.registerFd == nil or posixFd.modifyFd == nil or
-      posixFd.unregisterFd == nil or unsupported != nil:
+      posixFd.unregisterFd == nil or params == nil or params.rescan == nil or
+      params.clear == nil or params.requestFlush == nil or audioPorts == nil or
+      audioPorts.isRescanFlagSupported == nil or audioPorts.rescan == nil or
+      notePorts == nil or notePorts.supportedDialects == nil or
+      notePorts.rescan == nil or unsupported != nil:
     return -3
   if threadCheck.isMainThread(host) or threadCheck.isAudioThread(host):
     return -4
@@ -76,6 +86,15 @@ proc pluginhostHostCallbacksProbe(value: int32; context: pointer): int32 {.
   log.log(host, ClapLogInfo, "foreign allocation-free callback")
   state.markDirty(host)
   latency.changed(host)
+  params.rescan(host, ClapParamRescanAll)
+  params.clear(host, 1'u32, ClapParamClearAll)
+  params.requestFlush(host)
+  if audioPorts.isRescanFlagSupported(host, ClapAudioPortsRescanList):
+    return -7
+  audioPorts.rescan(host, ClapAudioPortsRescanList)
+  if notePorts.supportedDialects(host) != 0'u32:
+    return -8
+  notePorts.rescan(host, ClapNotePortsRescanAll)
   var timerId = ClapInvalidId
   if timer.registerTimer(host, 34'u32, addr timerId) or
       timer.unregisterTimer(host, 0'u32) or
@@ -143,7 +162,8 @@ suite "CLAP host callback safety":
     check callbackResult == 0
     check usedForeignThread == 1
     check bridge.takeRequests() ==
-      (ClapRequestRestart or ClapRequestProcess or ClapRequestCallback)
+      (ClapRequestRestart or ClapRequestProcess or ClapRequestCallback or
+       ClapRequestFlush)
     var record: ClapHostLogRecord
     check bridge.tryPopLog(record)
     check record.logMessage == "foreign allocation-free callback"

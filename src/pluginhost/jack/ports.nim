@@ -12,6 +12,19 @@ const
   RtMaxNotePortsPerDirection* = 1_024'u32
 
 type
+  JackPortKind* = enum
+    jpkAudio
+    jpkNote
+
+  JackPortIdentity* = object
+    kind*: JackPortKind
+    direction*: PortDirection
+    id*: uint32
+    channel*: uint32
+
+  JackOwnedPort* = object
+    port*: JackPort
+    identity*: JackPortIdentity
   RtPortMap* = object
     version*: uint64
     audioInputCount*: uint32
@@ -24,7 +37,7 @@ type
     noteOutputs*: array[int(RtMaxNotePortsPerDirection), JackPort]
 
   JackPortOwner* = object
-    registered: seq[JackPort]
+    registered: seq[JackOwnedPort]
 
 static:
   doAssert supportsCopyMem(RtPortMap)
@@ -47,6 +60,10 @@ proc `=sink`*(destination: var JackPortOwner; source: JackPortOwner) =
 proc registeredPortCount*(owner: JackPortOwner): int {.inline.} =
   owner.registered.len
 
+iterator ownedPorts*(owner: JackPortOwner): JackOwnedPort =
+  for owned in owner.registered:
+    yield owned
+
 proc discardAfterClientClose*(owner: var JackPortOwner) =
   ## jack_client_close releases all ports owned by the client.
   owner.registered.setLen(0)
@@ -57,7 +74,7 @@ proc unregisterOwnedPorts*(owner: var JackPortOwner; functions: JackFunctions;
   var failedStatus = 0.cint
   while index > 0:
     dec index
-    let status = functions.portUnregister(client, owner.registered[index])
+    let status = functions.portUnregister(client, owner.registered[index].port)
     if status != 0 and failedStatus == 0:
       failedStatus = status
   owner.registered.setLen(0)
@@ -82,7 +99,7 @@ proc rollback(owner: var JackPortOwner; functions: JackFunctions;
   var failedStatus = 0.cint
   while index > 0:
     dec index
-    let status = functions.portUnregister(client, owner.registered[index])
+    let status = functions.portUnregister(client, owner.registered[index].port)
     if status != 0 and failedStatus == 0:
       failedStatus = status
   owner.registered.setLen(0)
@@ -185,7 +202,7 @@ proc addNotePort(map: var RtPortMap; direction: PortDirection;
 
 proc registerOne(functions: JackFunctions; client: JackClient;
                  clientName, shortName, alias, portType: string;
-                 direction: PortDirection; ordinal: int;
+                 direction: PortDirection; identity: JackPortIdentity; ordinal: int;
                  portNameSize: int; owner: var JackPortOwner): Result[JackPort] =
   let validName = validateShortName(clientName, shortName, portNameSize, ordinal)
   if not validName.isOk:
@@ -203,7 +220,7 @@ proc registerOne(functions: JackFunctions; client: JackClient;
       clientName,
       "count=" & $ordinal & "; name=" & shortName & "; type=" & portType,
     ))
-  owner.registered.add(port)
+  owner.registered.add(JackOwnedPort(port: port, identity: identity))
 
   let realizedAlias = boundedAlias(clientName, alias, portNameSize)
   if not realizedAlias.isOk:
@@ -254,7 +271,9 @@ proc realizePortPlan*(functions: JackFunctions; client: JackClient;
 
     let registered = registerOne(
       functions, client, clientName, channel.shortName, channel.alias,
-      JackDefaultAudioType, channel.direction, ordinal, portNameSize,
+      JackDefaultAudioType, channel.direction, JackPortIdentity(
+      kind: jpkAudio, direction: channel.direction, id: channel.groupId,
+      channel: channel.channelIndex), ordinal, portNameSize,
       candidateOwner)
     if not registered.isOk:
       return failure[Unit](candidateOwner.rollback(
@@ -284,7 +303,9 @@ proc realizePortPlan*(functions: JackFunctions; client: JackClient;
 
     let registered = registerOne(
       functions, client, clientName, note.shortName, note.name,
-      JackDefaultMidiType, note.direction, ordinal, portNameSize,
+      JackDefaultMidiType, note.direction, JackPortIdentity(
+      kind: jpkNote, direction: note.direction, id: note.id, channel: 0'u32),
+      ordinal, portNameSize,
       candidateOwner)
     if not registered.isOk:
       return failure[Unit](candidateOwner.rollback(

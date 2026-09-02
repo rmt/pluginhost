@@ -9,6 +9,7 @@ type
   AudioFixtureVoidProc* = proc() {.cdecl, gcsafe, raises: [].}
   AudioFixtureCounterProc* = proc(): uint32 {.cdecl, gcsafe, raises: [].}
   AudioFixtureStatusProc* = proc(): int32 {.cdecl, gcsafe, raises: [].}
+  AudioFixtureFlagsProc* = proc(flags: uint32) {.cdecl, gcsafe, raises: [].}
   AudioFixtureTimeProc* = proc(): int64 {.cdecl, gcsafe, raises: [].}
   AudioFixtureRateProc* = proc(): cdouble {.cdecl, gcsafe, raises: [].}
   AudioFixtureAddressProc* = proc(index: cint): uint64 {.
@@ -28,6 +29,12 @@ type
     onMainThreadCalls*: AudioFixtureCounterProc
     timerCalls*: AudioFixtureCounterProc
     fdCalls*: AudioFixtureCounterProc
+    parameterFlushCalls*: AudioFixtureCounterProc
+    triggerParameterRescan*: AudioFixtureFlagsProc
+    triggerProcess*: AudioFixtureVoidProc
+    triggerParameterFlush*: AudioFixtureVoidProc
+    triggerRestart*: AudioFixtureVoidProc
+    triggerPortRestart*: AudioFixtureVoidProc
     signalFd*: AudioFixtureStatusProc
     lastActivateSampleRate*: AudioFixtureRateProc
     lastActivateMinFrames*: AudioFixtureCounterProc
@@ -78,6 +85,18 @@ proc audioFixtureApi*(library: DynamicLibrary): AudioFixtureApi =
     "pluginhost_audio_fixture_timer_calls")
   result.fdCalls = resolve[AudioFixtureCounterProc](library,
     "pluginhost_audio_fixture_fd_calls")
+  result.parameterFlushCalls = resolve[AudioFixtureCounterProc](library,
+    "pluginhost_audio_fixture_parameter_flush_count")
+  result.triggerParameterRescan = resolve[AudioFixtureFlagsProc](library,
+    "pluginhost_audio_fixture_trigger_parameter_rescan")
+  result.triggerProcess = resolve[AudioFixtureVoidProc](library,
+    "pluginhost_audio_fixture_trigger_process")
+  result.triggerParameterFlush = resolve[AudioFixtureVoidProc](library,
+    "pluginhost_audio_fixture_trigger_parameter_flush")
+  result.triggerRestart = resolve[AudioFixtureVoidProc](library,
+    "pluginhost_audio_fixture_trigger_restart")
+  result.triggerPortRestart = resolve[AudioFixtureVoidProc](library,
+    "pluginhost_audio_fixture_trigger_port_restart")
   result.signalFd = resolve[AudioFixtureStatusProc](library,
     "pluginhost_audio_fixture_signal_fd")
   result.lastActivateSampleRate = resolve[AudioFixtureRateProc](library,

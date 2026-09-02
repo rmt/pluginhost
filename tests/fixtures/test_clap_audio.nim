@@ -342,6 +342,161 @@ suite "internal CLAP float32 audio endpoint":
     check controls.audioSample(1, 255) == 2_255.0
     check fixture.contractFailures() == 0
 
+  test "port rebuild restores compatible connections and reports external losses":
+    var controls = openControls()
+    var opened = openOwnedSlice("audio_tone")
+    var slice = move(opened.slice)
+    var observer = move(opened.observer)
+    defer:
+      doAssert slice.close().isOk
+      doAssert observer.close().isOk
+      doAssert controls.close().isOk
+    require slice.start().isOk
+    controls.setPortConnection(0, "external:capture-left")
+    controls.setPortConnection(1, "external:capture-right")
+    require slice.restart().isOk
+    let restored = slice.takeReconnectionReport()
+    check restored.restored == 2
+    check restored.lost.len == 0
+    check controls.connectCount() == 2
+    check ($controls.lastConnectSource()).startsWith("fixture-client:")
+    check $controls.lastConnectDestination() == "external:capture-right"
+    controls.setConnectStatus(-1)
+    require slice.restart().isOk
+    let lost = slice.takeReconnectionReport()
+    check lost.restored == 0
+    check lost.lost.len == 2
+    check controls.connectCount() == 4
+    check slice.state == iassActive
+
+  test "parameter snapshots drain process output, rescan, and flush while inactive":
+    var controls = openControls()
+    var opened = openOwnedSlice("audio_params")
+    var slice = move(opened.slice)
+    var observer = move(opened.observer)
+    let fixture = opened.fixture
+    defer:
+      doAssert slice.close().isOk
+      doAssert observer.close().isOk
+      doAssert controls.close().isOk
+    check slice.parameterCount == 1
+    check slice.parameterCatalogGeneration == 1
+    require slice.start().isOk
+    check controls.invokeProcess(32) == 0
+    let processed = slice.drainParameterEvents()
+    check processed.events == 1
+    check processed.valueChanges == 1
+    fixture.triggerParameterRescan(ClapParamRescanValues)
+    let rescans = slice.takeRescanRequests()
+    check rescans.parameters == ClapParamRescanValues
+    require slice.rescanParameters(rescans.parameters).isOk
+    check slice.parameterCatalogGeneration == 2
+    let activeFlush = slice.flushParameters()
+    check not activeFlush.isOk
+    check activeFlush.error.kind == hekClapPlugin
+    require slice.stop().isOk
+    fixture.triggerParameterFlush()
+    check slice.controlRequests().flush
+    require slice.flushParameters().isOk
+    check fixture.parameterFlushCalls() == 1
+    let flushed = slice.drainParameterEvents()
+    check flushed.events == 1
+    check flushed.valueChanges == 1
+    check fixture.contractFailures() == 0
+
+  test "parameter process output marks the active session state dirty":
+    var controls = openControls()
+    var opened = openOwnedSlice("audio_params")
+    var slice = move(opened.slice)
+    var observer = move(opened.observer)
+    let fixture = opened.fixture
+    var session = initHostSession()
+    defer:
+      doAssert session.close().isOk
+      doAssert observer.close().isOk
+      doAssert controls.close().isOk
+    require session.attachInternalAudioSlice(slice).isOk
+    require session.startInternalAudio().isOk
+    check controls.invokeProcess(16) == 0
+    var config = defaultRunConfig()
+    require session.serviceInternalControlOnce(config, stderr).isOk
+    check session.hasDirtyState
+    check session.state == ssRunning
+    fixture.triggerParameterRescan(ClapParamRescanAll)
+    require session.serviceInternalControlOnce(config, stderr).isOk
+    check fixture.activateCalls() == 2
+    check fixture.contractFailures() == 0
+
+  test "sleeping generators wake for process and flush requests":
+    var controls = openControls()
+    var opened = openOwnedSlice("audio_tone_sleep")
+    var slice = move(opened.slice)
+    var observer = move(opened.observer)
+    let fixture = opened.fixture
+    defer:
+      doAssert slice.close().isOk
+      doAssert observer.close().isOk
+      doAssert controls.close().isOk
+    require slice.start().isOk
+    check controls.invokeProcess(16) == 0
+    check fixture.processCalls() == 1
+    check controls.invokeProcess(16) == 0
+    check fixture.processCalls() == 1
+    check controls.audioSample(0, 0) == 0.0
+    fixture.triggerProcess()
+    check controls.invokeProcess(16) == 0
+    check fixture.processCalls() == 2
+    fixture.triggerParameterFlush()
+    check controls.invokeProcess(16) == 0
+    check fixture.processCalls() == 3
+    check fixture.contractFailures() == 0
+
+  test "port restart rescans only after deactivation and rebuilds once":
+    var controls = openControls()
+    var opened = openOwnedSlice("audio_port_rescan")
+    var slice = move(opened.slice)
+    var observer = move(opened.observer)
+    let fixture = opened.fixture
+    var session = initHostSession()
+    defer:
+      doAssert session.close().isOk
+      doAssert observer.close().isOk
+      doAssert controls.close().isOk
+    require session.attachInternalAudioSlice(slice).isOk
+    require session.startInternalAudio().isOk
+    fixture.triggerPortRestart()
+    var config = defaultRunConfig()
+    require session.serviceInternalControlOnce(config, stderr).isOk
+    check fixture.activateCalls() == 2
+    check fixture.startCalls() == 2
+    require session.serviceInternalControlOnce(config, stderr).isOk
+    check fixture.activateCalls() == 2
+    check fixture.contractFailures() == 0
+
+  test "restart requests are coalesced and bounded per control burst":
+    var controls = openControls()
+    var opened = openOwnedSlice("audio_tone")
+    var slice = move(opened.slice)
+    var observer = move(opened.observer)
+    let fixture = opened.fixture
+    var session = initHostSession()
+    defer:
+      doAssert session.close().isOk
+      doAssert observer.close().isOk
+      doAssert controls.close().isOk
+    require session.attachInternalAudioSlice(slice).isOk
+    require session.startInternalAudio().isOk
+    var config = defaultRunConfig()
+    for ignored in 0 ..< 4:
+      discard ignored
+      fixture.triggerRestart()
+      require session.serviceInternalControlOnce(config, stderr).isOk
+    check fixture.activateCalls() == 5
+    fixture.triggerRestart()
+    let limited = session.serviceInternalControlOnce(config, stderr)
+    check not limited.isOk
+    check limited.error.kind == hekClapPlugin
+
   test "tone output preserves groups, timing, null transport, and zero-copy buffers":
     var controls = openControls()
     var opened = openInstance("audio_tone")

@@ -60,6 +60,9 @@ suite "CLAP host bridge":
     check host.getExtension(host, ClapExtThreadCheck.cstring) != nil
     check host.getExtension(host, ClapExtState.cstring) != nil
     check host.getExtension(host, ClapExtLatency.cstring) != nil
+    check host.getExtension(host, ClapExtParams.cstring) != nil
+    check host.getExtension(host, ClapExtAudioPorts.cstring) != nil
+    check host.getExtension(host, ClapExtNotePorts.cstring) != nil
     check host.getExtension(host, ClapExtTimerSupport.cstring) == nil
     check host.getExtension(host, ClapExtPosixFdSupport.cstring) == nil
     check host.getExtension(host, "clap.unsupported") == nil
@@ -149,6 +152,30 @@ suite "CLAP host bridge":
     check not bridge.takeStateDirty()
     check bridge.takeLatencyChanged()
     check not bridge.takeLatencyChanged()
+
+  test "parameter and port rescan callbacks coalesce valid main-thread requests":
+    let bridge = newClapHostBridge()
+    let host = bridge.hostPointer
+    let params = cast[ptr ClapHostParams](
+      host.getExtension(host, ClapExtParams.cstring))
+    let audio = cast[ptr ClapHostAudioPorts](
+      host.getExtension(host, ClapExtAudioPorts.cstring))
+    let notes = cast[ptr ClapHostNotePorts](
+      host.getExtension(host, ClapExtNotePorts.cstring))
+    require params != nil and audio != nil and notes != nil
+    check audio.isRescanFlagSupported(host, ClapAudioPortsRescanNames)
+    check not audio.isRescanFlagSupported(host, 1'u32 shl 31)
+    check notes.supportedDialects(host) == (ClapNoteDialectClap or
+      ClapNoteDialectMidi or ClapNoteDialectMidiMpe)
+    params.rescan(host, ClapParamRescanValues)
+    params.clear(host, 7'u32, ClapParamClearAll)
+    params.requestFlush(host)
+    audio.rescan(host, ClapAudioPortsRescanNames)
+    notes.rescan(host, ClapNotePortsRescanNames)
+    check bridge.takeParamsRescan() == ClapParamRescanValues
+    check bridge.takeAudioPortsRescan() == ClapAudioPortsRescanNames
+    check bridge.takeNotePortsRescan() == ClapNotePortsRescanNames
+    check bridge.takeRequests() == ClapRequestFlush
 
   test "timer and FD services are advertised only with a complete stable table":
     var state = TestMainServices(fd: -1)

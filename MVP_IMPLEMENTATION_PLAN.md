@@ -3,7 +3,7 @@
 **Plan version:** 1.0.0  
 **Target product release:** `pluginhost` 0.1.0  
 **Initial development version:** 0.0.1-dev  
-**Status:** Approved through review unit 8A; review unit 8B not started
+**Status:** Approved through review unit 8A; review unit 8B in progress
 **Companion documents:** [`REQUIREMENTS.md`](REQUIREMENTS.md), [`DESIGN.md`](DESIGN.md)
 
 ## 1. Purpose
@@ -542,7 +542,7 @@ Review signal safety, reactor reentrancy, timing guarantees, generation tokens, 
 ## 15. Increment 8 — Host extensions, parameters, latency, and restart
 
 **Planned version:** 0.0.9-dev
-**Review split:** 8A approved; 8B not started
+**Review split:** 8A and 8B approved; Increment 8 complete
 
 ### Goal
 
@@ -586,7 +586,7 @@ reconnection, and sleep/wake boundaries.
 
 ### Review unit 8B — parameters, restart, rescans, and sleep/wake
 
-**Status:** Not started.
+**Status:** Approved.
 
 #### Implementation
 
@@ -779,8 +779,8 @@ This table is updated only when work is reviewed.
 | 5 — Audio vertical slice | Approved | Review unit 5 | Internal grouped zero-copy CLAP/JACK float32 slice, lifecycle rollback, live capture, and RT evidence accepted |
 | 6 — MIDI/events | Approved | Review units 6A and 6B | Fixed-capacity event bridge and isolated live multi-port MIDI/SysEx evidence accepted |
 | 7 — Reactor/signals | Approved | Increment 7 review | Public headless run, epoll/signalfd reactor, orderly shutdown, main-thread callbacks, and atomic PID files accepted |
-| 8 — Host extensions/restart | In progress | Review unit 8A approved; 8B pre-code gate | Main-thread timer/FD services, dirty notification, and JACK latency accepted; parameters/restart/rescans remain in 8B |
-| 9 — State | Not started | — | — |
+| 8 — Host extensions/restart | Approved | Review units 8A and 8B | Main-thread timer/FD services, dirty notification, JACK latency, bounded parameter transport, restart/rescan, sleep/wake, and compatible reconnection/loss evidence accepted |
+| 9 — State | Not started | — | Pre-code package required before implementation |
 | 10 — GUI | Not started | — | Split into 10A/10B reviews |
 | 11 — Release candidate | Not started | — | — |
 | 12 — MVP release | Not started | — | Target 0.1.0 |
@@ -827,4 +827,4 @@ Each candidate requires requirements/design updates and, where architectural, an
 
 ## 23. First action after each review gate
 
-After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 8A is approved and 8B has not started. The next session must inspect the approved baseline and present a fresh 8B pre-code package. Do not begin parameter, restart, rescan, reconnection, or sleep/wake implementation until the owner explicitly approves that package.
+After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 8 is approved through review unit 8B; its final `nimble --offline all -y` evidence covered 198 tests (101 unit, 26 ABI, 57 fixture, 9 RT, and 5 live integration). Before Increment 9 implementation, present its state-stream transaction pre-code package and obtain explicit owner approval.

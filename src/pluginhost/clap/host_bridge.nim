@@ -37,6 +37,9 @@ type
     droppedLogs: ptr RtAtomicU64
     logExtension: ptr ClapHostLog
     stateExtension: ptr ClapHostState
+    paramsExtension: ptr ClapHostParams
+    audioPortsExtension: ptr ClapHostAudioPorts
+    notePortsExtension: ptr ClapHostNotePorts
     latencyExtension: ptr ClapHostLatency
     timerExtension: ptr ClapHostTimerSupport
     posixFdExtension: ptr ClapHostPosixFdSupport
@@ -44,6 +47,11 @@ type
     mainServices: ptr ClapMainThreadServices
     stateDirty: ptr RtAtomicU32
     latencyChanged: ptr RtAtomicU32
+    paramsRescan: ptr RtAtomicU32
+    audioPortsRescan: ptr RtAtomicU32
+    notePortsRescan: ptr RtAtomicU32
+    processWake: ptr RtAtomicU32
+    flushWake: ptr RtAtomicU32
     audioRoleAddress: ptr RtAtomicU64
     mainThread: Pthread
 
@@ -51,6 +59,9 @@ type
     host: ClapHost
     logExtension: ClapHostLog
     stateExtension: ClapHostState
+    paramsExtension: ClapHostParams
+    audioPortsExtension: ClapHostAudioPorts
+    notePortsExtension: ClapHostNotePorts
     latencyExtension: ClapHostLatency
     timerExtension: ClapHostTimerSupport
     posixFdExtension: ClapHostPosixFdSupport
@@ -60,6 +71,11 @@ type
     droppedLogs: RtAtomicU64
     stateDirty: RtAtomicU32
     latencyChanged: RtAtomicU32
+    paramsRescan: RtAtomicU32
+    audioPortsRescan: RtAtomicU32
+    notePortsRescan: RtAtomicU32
+    processWake: RtAtomicU32
+    flushWake: RtAtomicU32
     audioRoleAddress: RtAtomicU64
     logs: HostLogQueue
     name: string
@@ -151,6 +167,12 @@ proc hostGetExtension(host: ptr ClapHost; extensionId: cstring): pointer {.
     return cast[pointer](data.logExtension)
   if cstringEquals(extensionId, ClapExtState.cstring):
     return cast[pointer](data.stateExtension)
+  if cstringEquals(extensionId, ClapExtParams.cstring):
+    return cast[pointer](data.paramsExtension)
+  if cstringEquals(extensionId, ClapExtAudioPorts.cstring):
+    return cast[pointer](data.audioPortsExtension)
+  if cstringEquals(extensionId, ClapExtNotePorts.cstring):
+    return cast[pointer](data.notePortsExtension)
   if cstringEquals(extensionId, ClapExtLatency.cstring):
     return cast[pointer](data.latencyExtension)
   if cstringEquals(extensionId, ClapExtTimerSupport.cstring) and
@@ -175,6 +197,9 @@ proc hostRequestRestart(host: ptr ClapHost) {.
 
 proc hostRequestProcess(host: ptr ClapHost) {.
     exportc: "pluginhost_clap_host_request_process", cdecl, gcsafe, raises: [].} =
+  let data = callbackData(host)
+  if data != nil and data.processWake != nil:
+    data.processWake[].storeRelease(1'u32)
   recordRequest(host, ClapRequestProcess)
 
 proc hostRequestCallback(host: ptr ClapHost) {.
@@ -229,6 +254,72 @@ proc hostLatencyChanged(host: ptr ClapHost) {.
   if data != nil and data.latencyChanged != nil and
       pthread_equal(pthread_self(), data.mainThread) != 0:
     data.latencyChanged[].storeRelease(1'u32)
+
+const
+  ClapAudioPortsRescanKnown = ClapAudioPortsRescanNames or
+    ClapAudioPortsRescanFlags or ClapAudioPortsRescanChannelCount or
+    ClapAudioPortsRescanPortType or ClapAudioPortsRescanInPlacePair or
+    ClapAudioPortsRescanList
+  ClapNotePortsRescanKnown = ClapNotePortsRescanAll or ClapNotePortsRescanNames
+
+proc callbackIsMain(data: ptr HostCallbackData): bool {.inline, gcsafe, raises: [].} =
+  data != nil and pthread_equal(pthread_self(), data.mainThread) != 0
+
+proc hostParamsRescan(host: ptr ClapHost; flags: uint32) {.
+    exportc: "pluginhost_clap_host_params_rescan", cdecl, gcsafe, raises: [].} =
+  let data = callbackData(host)
+  if callbackIsMain(data) and data.paramsRescan != nil and flags != 0'u32 and
+      (flags and not ClapParamRescanKnown) == 0'u32:
+    discard data.paramsRescan[].fetchOrRelaxed(flags)
+
+proc hostParamsClear(host: ptr ClapHost; paramId: ClapId; flags: uint32) {.
+    exportc: "pluginhost_clap_host_params_clear", cdecl, gcsafe, raises: [].} =
+  let data = callbackData(host)
+  if not callbackIsMain(data) or flags == 0'u32 or
+      (flags and not ClapParamClearKnown) != 0'u32:
+    return
+  # The host has no retained automation/modulation references in this increment.
+  discard paramId
+
+proc hostParamsRequestFlush(host: ptr ClapHost) {.
+    exportc: "pluginhost_clap_host_params_request_flush", cdecl, gcsafe,
+    raises: [].} =
+  let data = callbackData(host)
+  if data != nil and data.flushWake != nil:
+    data.flushWake[].storeRelease(1'u32)
+  recordRequest(host, ClapRequestFlush)
+
+proc hostAudioPortsIsRescanSupported(host: ptr ClapHost; flag: uint32): bool {.
+    exportc: "pluginhost_clap_host_audio_ports_is_rescan_supported", cdecl,
+    gcsafe, raises: [].} =
+  let data = callbackData(host)
+  callbackIsMain(data) and flag != 0'u32 and
+    (flag and not ClapAudioPortsRescanKnown) == 0'u32
+
+proc hostAudioPortsRescan(host: ptr ClapHost; flags: uint32) {.
+    exportc: "pluginhost_clap_host_audio_ports_rescan", cdecl, gcsafe,
+    raises: [].} =
+  let data = callbackData(host)
+  if callbackIsMain(data) and data.audioPortsRescan != nil and flags != 0'u32 and
+      (flags and not ClapAudioPortsRescanKnown) == 0'u32:
+    discard data.audioPortsRescan[].fetchOrRelaxed(flags)
+
+proc hostNotePortsSupportedDialects(host: ptr ClapHost): uint32 {.
+    exportc: "pluginhost_clap_host_note_ports_supported_dialects", cdecl,
+    gcsafe, raises: [].} =
+  let data = callbackData(host)
+  if not callbackIsMain(data):
+    return 0'u32
+  ClapNoteDialectClap or ClapNoteDialectMidi or ClapNoteDialectMidiMpe
+
+proc hostNotePortsRescan(host: ptr ClapHost; flags: uint32) {.
+    exportc: "pluginhost_clap_host_note_ports_rescan", cdecl, gcsafe,
+    raises: [].} =
+  let data = callbackData(host)
+  if callbackIsMain(data) and data.notePortsRescan != nil and flags != 0'u32 and
+      (flags and not ClapNotePortsRescanKnown) == 0'u32:
+    discard data.notePortsRescan[].fetchOrRelaxed(flags)
+
 
 proc hostRegisterTimer(host: ptr ClapHost; periodMs: uint32;
                        timerId: ptr ClapId): bool {.
@@ -291,6 +382,11 @@ proc newClapHostBridge*(mainServices: ptr ClapMainThreadServices = nil): ClapHos
   result.droppedLogs.storeRelaxed(0'u64)
   result.stateDirty.storeRelaxed(0'u32)
   result.latencyChanged.storeRelaxed(0'u32)
+  result.paramsRescan.storeRelaxed(0'u32)
+  result.audioPortsRescan.storeRelaxed(0'u32)
+  result.notePortsRescan.storeRelaxed(0'u32)
+  result.processWake.storeRelaxed(0'u32)
+  result.flushWake.storeRelaxed(0'u32)
   result.audioRoleAddress.storeRelaxed(0'u64)
   result.logs.initLogQueue()
   result.callbackData.requests = addr result.requests
@@ -298,12 +394,26 @@ proc newClapHostBridge*(mainServices: ptr ClapMainThreadServices = nil): ClapHos
   result.callbackData.droppedLogs = addr result.droppedLogs
   result.callbackData.stateDirty = addr result.stateDirty
   result.callbackData.latencyChanged = addr result.latencyChanged
+  result.callbackData.paramsRescan = addr result.paramsRescan
+  result.callbackData.audioPortsRescan = addr result.audioPortsRescan
+  result.callbackData.notePortsRescan = addr result.notePortsRescan
+  result.callbackData.processWake = addr result.processWake
+  result.callbackData.flushWake = addr result.flushWake
   result.callbackData.audioRoleAddress = addr result.audioRoleAddress
   result.callbackData.mainThread = pthread_self()
   result.callbackData.mainServices = mainServices
   result.logExtension = ClapHostLog(log: hostLog)
   result.stateExtension = ClapHostState(markDirty: hostStateMarkDirty)
   result.latencyExtension = ClapHostLatency(changed: hostLatencyChanged)
+  result.paramsExtension = ClapHostParams(
+    rescan: hostParamsRescan, clear: hostParamsClear,
+    requestFlush: hostParamsRequestFlush)
+  result.audioPortsExtension = ClapHostAudioPorts(
+    isRescanFlagSupported: hostAudioPortsIsRescanSupported,
+    rescan: hostAudioPortsRescan)
+  result.notePortsExtension = ClapHostNotePorts(
+    supportedDialects: hostNotePortsSupportedDialects,
+    rescan: hostNotePortsRescan)
   result.timerExtension = ClapHostTimerSupport(
     registerTimer: hostRegisterTimer, unregisterTimer: hostUnregisterTimer)
   result.posixFdExtension = ClapHostPosixFdSupport(
@@ -315,6 +425,9 @@ proc newClapHostBridge*(mainServices: ptr ClapMainThreadServices = nil): ClapHos
   )
   result.callbackData.logExtension = addr result.logExtension
   result.callbackData.stateExtension = addr result.stateExtension
+  result.callbackData.paramsExtension = addr result.paramsExtension
+  result.callbackData.audioPortsExtension = addr result.audioPortsExtension
+  result.callbackData.notePortsExtension = addr result.notePortsExtension
   result.callbackData.latencyExtension = addr result.latencyExtension
   result.callbackData.timerExtension = addr result.timerExtension
   result.callbackData.posixFdExtension = addr result.posixFdExtension
@@ -381,6 +494,31 @@ proc takeStateDirty*(bridge: ClapHostBridge): bool {.gcsafe, raises: [].} =
 
 proc takeLatencyChanged*(bridge: ClapHostBridge): bool {.gcsafe, raises: [].} =
   bridge != nil and bridge.latencyChanged.exchangeAcquire(0'u32) != 0'u32
+proc restoreRequests*(bridge: ClapHostBridge; requests: uint32) {.gcsafe, raises: [].} =
+  if bridge != nil and requests != 0'u32:
+    discard bridge.requests.fetchOrRelaxed(requests)
+
+proc takeParamsRescan*(bridge: ClapHostBridge): uint32 {.gcsafe, raises: [].} =
+  if bridge == nil: 0'u32 else: bridge.paramsRescan.exchangeAcquire(0'u32)
+
+proc takeAudioPortsRescan*(bridge: ClapHostBridge): uint32 {.gcsafe, raises: [].} =
+  if bridge == nil: 0'u32 else: bridge.audioPortsRescan.exchangeAcquire(0'u32)
+
+proc takeNotePortsRescan*(bridge: ClapHostBridge): uint32 {.gcsafe, raises: [].} =
+  if bridge == nil: 0'u32 else: bridge.notePortsRescan.exchangeAcquire(0'u32)
+
+proc processWakePointer*(bridge: ClapHostBridge): ptr RtAtomicU32 {.inline,
+    gcsafe, raises: [].} =
+  if bridge == nil:
+    return nil
+  cast[ptr RtAtomicU32](addr bridge.processWake)
+
+proc flushWakePointer*(bridge: ClapHostBridge): ptr RtAtomicU32 {.inline,
+    gcsafe, raises: [].} =
+  if bridge == nil:
+    return nil
+  cast[ptr RtAtomicU32](addr bridge.flushWake)
+
 proc logMessage*(record: ClapHostLogRecord): string =
   var length = int(record.length)
   if length > HostLogMessageBytes:

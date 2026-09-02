@@ -13,6 +13,8 @@ type
   FakeSetTwoIntsProc* = proc(first, second: cint) {.
     cdecl, gcsafe, raises: [].}
   FakeSetStringProc* = proc(value: cstring) {.cdecl, gcsafe, raises: [].}
+  FakeSetIndexedStringProc* = proc(index: cint; value: cstring) {.
+    cdecl, gcsafe, raises: [].}
   FakeGetIntProc* = proc(): cint {.cdecl, gcsafe, raises: [].}
   FakeGetIndexedIntProc* = proc(index: cint): cint {.
     cdecl, gcsafe, raises: [].}
@@ -83,6 +85,11 @@ type
     activateCount*: FakeGetIntProc
     deactivateCount*: FakeGetIntProc
     recomputeCount*: FakeGetIntProc
+    setPortConnection*: FakeSetIndexedStringProc
+    setConnectStatus*: FakeSetIntProc
+    connectCount*: FakeGetIntProc
+    lastConnectSource*: FakeGetStringProc
+    lastConnectDestination*: FakeGetStringProc
     setPortLatency*: FakeSetPortLatencyProc
     portLatency*: FakeGetPortLatencyProc
     isActive*: FakeGetIntProc
@@ -154,6 +161,11 @@ proc `=sink`*(destination: var FakeJackControls; source: FakeJackControls) =
   destination.activateCount = source.activateCount
   destination.deactivateCount = source.deactivateCount
   destination.recomputeCount = source.recomputeCount
+  destination.setPortConnection = source.setPortConnection
+  destination.setConnectStatus = source.setConnectStatus
+  destination.connectCount = source.connectCount
+  destination.lastConnectSource = source.lastConnectSource
+  destination.lastConnectDestination = source.lastConnectDestination
   destination.setPortLatency = source.setPortLatency
   destination.portLatency = source.portLatency
   destination.isActive = source.isActive
@@ -247,6 +259,16 @@ proc openFakeJackControls*(): Result[FakeJackControls] =
     "pluginhost_fake_jack_set_close_status")
   resolve(setRecomputeStatus, FakeSetIntProc,
     "pluginhost_fake_jack_set_recompute_status")
+  resolve(setPortConnection, FakeSetIndexedStringProc,
+    "pluginhost_fake_jack_set_port_connection")
+  resolve(setConnectStatus, FakeSetIntProc,
+    "pluginhost_fake_jack_set_connect_status")
+  resolve(connectCount, FakeGetIntProc,
+    "pluginhost_fake_jack_connect_count")
+  resolve(lastConnectSource, FakeGetStringProc,
+    "pluginhost_fake_jack_last_connect_source")
+  resolve(lastConnectDestination, FakeGetStringProc,
+    "pluginhost_fake_jack_last_connect_destination")
   resolve(setClientNameSize, FakeSetIntProc,
     "pluginhost_fake_jack_set_client_name_size")
   resolve(setPortNameSize, FakeSetIntProc,

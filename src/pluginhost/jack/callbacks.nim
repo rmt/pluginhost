@@ -47,6 +47,7 @@ type
     processEnabled: RtAtomicU32
     configurationPending: RtAtomicU32
     configurationGeneration: RtAtomicU64
+    portMapAccessEnabled: RtAtomicU32
     callbacksInFlight: RtAtomicU32
     processInFlight: RtAtomicU32
     knownBufferSize: RtAtomicU32
@@ -96,6 +97,7 @@ proc initJackCallbackContext*(context: ptr JackCallbackContext;
   context.processEnabled.storeRelaxed(0'u32)
   context.configurationPending.storeRelaxed(0'u32)
   context.configurationGeneration.storeRelaxed(0'u64)
+  context.portMapAccessEnabled.storeRelaxed(0'u32)
   context.callbacksInFlight.storeRelaxed(0'u32)
   context.processInFlight.storeRelaxed(0'u32)
   context.knownBufferSize.storeRelaxed(0'u32)
@@ -194,6 +196,7 @@ proc configureCallbacks*(context: ptr JackCallbackContext; map: RtPortMap;
       context.processInFlight.loadAcquire() != 0'u32:
     return false
   context.portMap = map
+  context.portMapAccessEnabled.storeRelease(1'u32)
   context.engine.initRtEngine(
     mode, map.audioInputCount, map.audioOutputCount,
     map.noteInputCount, map.noteOutputCount, context.midiIo())
@@ -211,6 +214,7 @@ proc configureEndpointCallbacks*(context: ptr JackCallbackContext;
       context.midiIo()):
     return false
   context.portMap = map
+  context.portMapAccessEnabled.storeRelease(1'u32)
   true
 
 proc updateProcessEndpoint*(context: ptr JackCallbackContext;
@@ -222,6 +226,12 @@ proc updateProcessEndpoint*(context: ptr JackCallbackContext;
   context.engine.endpoint = endpoint
   context.engine.maxFrames = endpoint.maxFrames
   true
+
+proc suspendPortMapAccess*(context: ptr JackCallbackContext): bool =
+  if context == nil:
+    return false
+  context.portMapAccessEnabled.storeRelease(0'u32)
+  context.callbacksInFlight.loadAcquire() == 0'u32
 
 proc enableProcessCallbacks*(context: ptr JackCallbackContext) {.inline.} =
   if context.configurationPending.loadAcquire() == 0'u32:
@@ -536,6 +546,9 @@ proc jackLatencyCallback*(mode: JackLatencyCallbackMode; argument: pointer) {.
   let context = cast[ptr JackCallbackContext](argument)
   context.enterCallback()
   discard context.notifications.latencyCount.fetchAddRelaxed(1'u64)
+  if context.portMapAccessEnabled.loadAcquire() == 0'u32:
+    context.leaveCallback()
+    return
 
   if context.functions.portGetLatencyRange == nil or
       context.functions.portSetLatencyRange == nil:

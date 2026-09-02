@@ -8,7 +8,7 @@ import std/typetraits
 
 import ../domain/[errors, port_plan, result]
 import ../rt/[atomic_pod, engine, role_guard]
-import ./[event_bridge, ffi]
+import ./[event_bridge, ffi, parameter_transport]
 
 const
   ClapAudioProcessMaxGroupsPerDirection* = 1_024
@@ -31,6 +31,9 @@ type
     outputPointers: array[ClapAudioProcessMaxChannelsPerDirection,
       ptr UncheckedArray[cfloat]]
     events: ClapEventBridge
+    processWake: ptr RtAtomicU32
+    flushWake: ptr RtAtomicU32
+    sleeping: RtAtomicU32
     process: ClapProcess
     steadyTime: int64
     processCalls: uint64
@@ -98,6 +101,10 @@ proc bindGroup(context: ptr ClapAudioProcessContext; group: AudioGroup;
   expectedChannels = group.flattenedPast
   true
 
+proc takeWake(request: ptr RtAtomicU32): bool {.inline, gcsafe, raises: [].} =
+  request != nil and request[].exchangeAcquire(0'u32) != 0'u32
+
+
 proc processClapAudio*(argument: pointer; engine: ptr RtEngine;
                        nframes: uint32): cint {.
     exportc: "pluginhost_clap_process_audio", cdecl, gcsafe, raises: [].} =
@@ -144,24 +151,39 @@ proc processClapAudio*(argument: pointer; engine: ptr RtEngine;
           context.steadyTime > high(int64) - int64(nframes):
         status = RtProcessEndpointFailure
       else:
-        context.process.steadyTime = context.steadyTime
-        context.process.framesCount = nframes
-        let rawStatus = context.processProc(
-          context.plugin, addr context.process)
-        endEventCycle(addr context.events)
-        context.lastStatus = rawStatus
-        context.steadyTime += int64(nframes)
-        context.processCalls += 1'u64
-        case rawStatus
-        of ClapProcessContinue, ClapProcessContinueIfNotQuiet,
-           ClapProcessTail, ClapProcessSleep:
-          status = RtProcessOk
-        of ClapProcessError:
-          discard zeroRtOutputs(engine, nframes)
-          status = RtProcessEndpointFailure
+        let wokeForProcess = context.processWake.takeWake()
+        let wokeForFlush = context.flushWake.takeWake()
+        let shouldProcess = context.sleeping.loadRelaxed() == 0'u32 or
+          context.inputChannelCount != 0'u32 or
+          hasInputEvents(addr context.events) or wokeForProcess or wokeForFlush
+        if not shouldProcess:
+          endEventCycle(addr context.events)
+          context.lastStatus = ClapProcessSleep
+          context.steadyTime += int64(nframes)
         else:
-          discard zeroRtOutputs(engine, nframes)
-          status = RtProcessEndpointFailure
+          context.process.steadyTime = context.steadyTime
+          context.process.framesCount = nframes
+          let rawStatus = context.processProc(
+            context.plugin, addr context.process)
+          endEventCycle(addr context.events)
+          context.lastStatus = rawStatus
+          context.steadyTime += int64(nframes)
+          context.processCalls += 1'u64
+          case rawStatus
+          of ClapProcessContinue, ClapProcessContinueIfNotQuiet, ClapProcessTail:
+            context.sleeping.storeRelaxed(0'u32)
+            status = RtProcessOk
+          of ClapProcessSleep:
+            context.sleeping.storeRelaxed(1'u32)
+            status = RtProcessOk
+          of ClapProcessError:
+            context.sleeping.storeRelaxed(0'u32)
+            discard zeroRtOutputs(engine, nframes)
+            status = RtProcessEndpointFailure
+          else:
+            context.sleeping.storeRelaxed(0'u32)
+            discard zeroRtOutputs(engine, nframes)
+            status = RtProcessEndpointFailure
 
   if isEventCycleActive(addr context.events):
     endEventCycle(addr context.events)
@@ -172,6 +194,8 @@ proc processClapAudio*(argument: pointer; engine: ptr RtEngine;
 {.pop.}
 
 proc newClapAudioProcess*(plugin: ptr ClapPlugin; plan: PortPlan;
+                           parameters: ptr ClapParameterTransport;
+                           processWake, flushWake: ptr RtAtomicU32;
                           maxFrames: uint32; role: ptr AudioRoleGuard;
                           path, pluginId: string): Result[ClapAudioProcess] =
   if plugin == nil or plugin.process == nil:
@@ -197,7 +221,7 @@ proc newClapAudioProcess*(plugin: ptr ClapPlugin; plan: PortPlan;
   context.processProc = plugin.process
   context.maxFrames = maxFrames
   var initializedEvents = initClapEventBridge(
-    addr context.events, plan, role, path, pluginId)
+    addr context.events, plan, parameters, role, path, pluginId)
   if not initializedEvents.isOk:
     deallocShared(context)
     return failure[ClapAudioProcess](move(initializedEvents.error))
@@ -213,6 +237,9 @@ proc newClapAudioProcess*(plugin: ptr ClapPlugin; plan: PortPlan;
     outEvents: addr context.events.outputEvents,
   )
   context.callsInFlight.storeRelaxed(0'u32)
+  context.processWake = processWake
+  context.flushWake = flushWake
+  context.sleeping.storeRelaxed(0'u32)
 
   var inputChannels = 0'u32
   var outputChannels = 0'u32

@@ -2,7 +2,7 @@
 
 `pluginhost` is an in-progress standalone Linux JACK host for native CLAP plugins, implemented in Nim. Its intended role is similar to `carla-single`, with one plugin instance and one JACK client per process.
 
-The current development version is **0.0.9-dev**. The implementation includes checked CLAP ownership/catalog/lifecycle, human/JSON `list` and recursive `scan`, grouped zero-copy JACK audio, and a fixed-capacity sample-accurate JACK MIDI/CLAP event bridge. The canonical public command runs one plugin headlessly under an `epoll`/`signalfd` main reactor, handles orderly signals and JACK/process failures, services CLAP main-thread callbacks plus generation-safe plugin timers and POSIX FDs, reflects plugin latency through JACK, tracks dirty-state notification, refreshes runtime audio configuration, and owns an optional atomic PID file. State serialization, parameters, restart/rescans, GUI, and later host extensions remain unavailable.
+The current development version is **0.0.9-dev**. The implementation includes checked CLAP ownership/catalog/lifecycle, human/JSON `list` and recursive `scan`, grouped zero-copy JACK audio, and a fixed-capacity sample-accurate JACK MIDI/CLAP event bridge. The canonical public command runs one plugin headlessly under an `epoll`/`signalfd` main reactor, handles orderly signals and JACK/process failures, services CLAP main-thread callbacks plus generation-safe plugin timers and POSIX FDs, reflects plugin latency through JACK, tracks dirty-state notification, handles bounded CLAP parameter output/rescans, sleep/wake requests, and safe restart/port rebuild requests, and owns an optional atomic PID file. State serialization, GUI, and later host extensions remain unavailable.
 
 ## Build
 
@@ -53,7 +53,7 @@ unchanged but are not part of pluginhost's bound or supported ABI surface.
 statuses, callback registration, transactional ports, quiescence, role exclusivity, and
 fake silence/copy/deterministic processing without requiring a JACK server.
 
-`nimble testFixtures` independently compiles synthetic CLAP libraries and checks entry/factory ownership, descriptor validation, instance cleanup, deactivated port inspection, render negotiation, internal grouped float32 audio, fixed-capacity event translation, and main-thread timer/FD/dirty/latency services. Event cases cover global ordering, equal timestamps, raw MIDI/SysEx lifetime, CLAP-only note conversion, malformed events, exact capacity, output reserve failure, recovery, and MIDI2-only rejection.
+`nimble testFixtures` independently compiles synthetic CLAP libraries and checks entry/factory ownership, descriptor validation, instance cleanup, deactivated port inspection, render negotiation, internal grouped float32 audio, fixed-capacity event/parameter translation, sleep/wake, main-thread timer/FD/dirty/latency services, restart/rescan rebuild, and compatible JACK reconnection/loss reporting. Event cases cover global ordering, equal timestamps, raw MIDI/SysEx lifetime, CLAP-only note conversion, malformed events, exact capacity, output reserve failure, recovery, and MIDI2-only rejection.
 
 All builds share `--mm:arc --threads:on --panics:on -d:noSignalHandler` through
 `config.nims`. Foreign callbacks additionally disable checks and trace setup locally
@@ -61,7 +61,7 @@ after explicit input validation; `raises: []` alone is not treated as a Defect b
 Callback atomics use a narrow audited, always-lock-free C11 bridge because Nim 2.2.10's
 standard atomic helpers install trace frames under the product profile.
 
-`nimble testRt` retains repeated/first-foreign-thread Nim allocation checks, includes success/overflow/malformed event-process paths, audits complete JACK/RT generated modules and process-reachable CLAP host/audio/event callback closures under product flags, and requires rejection of a prohibited allocation canary.
+`nimble testRt` retains repeated/first-foreign-thread Nim allocation checks, includes success/overflow/malformed event-process paths, audits complete JACK/RT/parameter generated modules and process-reachable CLAP host/audio/event callback closures under product flags, and requires rejection of a prohibited allocation canary.
 
 `nimble testIntegration` creates isolated mode-0700 private runtimes, launches uniquely
 named PipeWire cores with their Dummy-Drivers at 48 kHz/64 frames, and runs four

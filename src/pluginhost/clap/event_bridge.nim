@@ -7,7 +7,7 @@ import std/typetraits
 
 import ../domain/[errors, port_plan, result]
 import ../rt/[atomic_pod, engine, midi_io, role_guard]
-import ./ffi
+import ./[ffi, parameter_transport]
 
 const
   ClapInputEventCapacity* = 4_096'u32
@@ -60,6 +60,7 @@ type
     currentFrames: uint32
     lastOutputTime: uint32
     hasOutputTime: bool
+    parameters: ptr ClapParameterTransport
     cycleActive: RtAtomicU32
     currentEngineAddress: RtAtomicU64
     acceptedInput: RtAtomicU64
@@ -372,6 +373,13 @@ proc outputTryPush(list: ptr ClapOutputEvents;
     discard bridge.invalidOutput.fetchAddRelaxed(1'u64)
     discard bridge.droppedOutput.fetchAddRelaxed(1'u64)
     return false
+  if event.`type` in {ClapEventTypeParamValue, ClapEventTypeParamMod,
+      ClapEventTypeParamGestureBegin, ClapEventTypeParamGestureEnd}:
+    let accepted = bridge.parameters.tryPushOutput(event, bridge.currentFrames)
+    if accepted:
+      bridge.lastOutputTime = event.time
+      bridge.hasOutputTime = true
+    return accepted
   let rawPort = outputPort(event)
   if rawPort < 0 or uint32(rawPort) >= bridge.outputPortCount:
     discard bridge.invalidOutput.fetchAddRelaxed(1'u64)
@@ -488,15 +496,24 @@ proc endEventCycle*(bridge: ptr ClapEventBridge) {.
   bridge.currentEngineAddress.storeRelease(0'u64)
   bridge.currentFrames = 0'u32
   bridge.eventCount = 0'u32
+proc hasInputEvents*(bridge: ptr ClapEventBridge): bool {.inline, gcsafe,
+    raises: [].} =
+  bridge != nil and bridge.eventCount != 0'u32
+
 {.pop.}
 
 proc initClapEventBridge*(bridge: ptr ClapEventBridge; plan: PortPlan;
+                           parameters: ptr ClapParameterTransport;
                           role: ptr AudioRoleGuard; path, pluginId: string):
     Result[Unit] =
   if bridge == nil or role == nil:
     return failure[Unit](eventError(
       path, pluginId, "CLAP event processing requires a stable audio role", ""))
+  if parameters == nil:
+    return failure[Unit](eventError(
+      path, pluginId, "CLAP event processing requires parameter transport", ""))
   bridge.role = role
+  bridge.parameters = parameters
   var inputCount = 0'u32
   var outputCount = 0'u32
   for port in plan.notePorts:

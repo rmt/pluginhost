@@ -166,6 +166,12 @@ type
     cdecl, gcsafe, raises: [].}
   JackPortSetAliasProc* = proc(port: JackPort; alias: cstring): cint {.
     cdecl, gcsafe, raises: [].}
+  JackPortGetConnectionsProc* = proc(port: JackPort): ptr cstring {.
+    cdecl, gcsafe, raises: [].}
+  JackConnectProc* = proc(client: JackClient; sourcePort, destinationPort: cstring): cint {.
+    cdecl, gcsafe, raises: [].}
+  JackFreeProc* = proc(value: pointer) {.cdecl, gcsafe, raises: [].}
+
   JackPortNameSizeProc* = proc(): cint {.
     cdecl, gcsafe, raises: [].}
 

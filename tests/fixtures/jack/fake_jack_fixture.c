@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -101,6 +102,12 @@ typedef struct fake_jack_state {
    int failed_port_attempt;
    int alias_attempts;
    int failed_alias_attempt;
+   char port_connections[FAKE_MAX_PORTS][256];
+   int connect_count;
+   int connect_status;
+   char last_connect_source[256];
+   char last_connect_destination[256];
+
    int recompute_count;
    int recompute_status;
 } fake_jack_state_t;
@@ -251,6 +258,32 @@ PLUGINHOST_FIXTURE_EXPORT int pluginhost_fake_jack_deactivate_count(void) {
 
 PLUGINHOST_FIXTURE_EXPORT int pluginhost_fake_jack_recompute_count(void) {
    return state.recompute_count;
+}
+
+PLUGINHOST_FIXTURE_EXPORT void pluginhost_fake_jack_set_port_connection(
+      int index, const char *peer_name) {
+   if (index < 0 || index >= state.successful_registrations)
+      return;
+   copy_text(state.port_connections[index],
+             sizeof(state.port_connections[index]), peer_name);
+}
+
+PLUGINHOST_FIXTURE_EXPORT void pluginhost_fake_jack_set_connect_status(int status) {
+   state.connect_status = status;
+}
+
+PLUGINHOST_FIXTURE_EXPORT int pluginhost_fake_jack_connect_count(void) {
+   return state.connect_count;
+}
+
+PLUGINHOST_FIXTURE_EXPORT const char *
+pluginhost_fake_jack_last_connect_source(void) {
+   return state.last_connect_source;
+}
+
+PLUGINHOST_FIXTURE_EXPORT const char *
+pluginhost_fake_jack_last_connect_destination(void) {
+   return state.last_connect_destination;
 }
 
 PLUGINHOST_FIXTURE_EXPORT uint32_t pluginhost_fake_jack_port_latency(
@@ -796,11 +829,22 @@ PLUGINHOST_FIXTURE_EXPORT jack_port_t *jack_port_register(
        port_type == NULL)
       return NULL;
    int attempt = state.registration_attempts++;
-   if (attempt == state.failed_port_attempt ||
-       state.successful_registrations >= FAKE_MAX_PORTS)
+   if (attempt == state.failed_port_attempt)
       return NULL;
+   int slot = -1;
+   for (int index = 0; index < state.successful_registrations; ++index) {
+      if (!state.ports[index].alive) {
+         slot = index;
+         break;
+      }
+   }
+   if (slot < 0) {
+      if (state.successful_registrations >= FAKE_MAX_PORTS)
+         return NULL;
+      slot = state.successful_registrations++;
+   }
 
-   struct _jack_port *port = &state.ports[state.successful_registrations++];
+   struct _jack_port *port = &state.ports[slot];
    memset(port, 0, sizeof(*port));
    port->alive = 1;
    port->midi_capacity = FAKE_MIDI_BYTES;
@@ -864,6 +908,40 @@ PLUGINHOST_FIXTURE_EXPORT int jack_port_set_alias(jack_port_t *raw_port,
       return -1;
    copy_text(port->alias, sizeof(port->alias), alias);
    return 0;
+}
+
+PLUGINHOST_FIXTURE_EXPORT const char **
+jack_port_get_connections(const jack_port_t *raw_port) {
+   for (int index = 0; index < state.successful_registrations; ++index) {
+      if (&state.ports[index] != raw_port || !state.ports[index].alive ||
+          state.port_connections[index][0] == '\0')
+         continue;
+      const char **connections = malloc(2U * sizeof(*connections));
+      if (connections == NULL)
+         return NULL;
+      connections[0] = state.port_connections[index];
+      connections[1] = NULL;
+      return connections;
+   }
+   return NULL;
+}
+
+PLUGINHOST_FIXTURE_EXPORT int
+jack_connect(jack_client_t *client, const char *source_port,
+             const char *destination_port) {
+   if (client != &state.client || source_port == NULL ||
+       destination_port == NULL)
+      return -1;
+   ++state.connect_count;
+   copy_text(state.last_connect_source, sizeof(state.last_connect_source),
+             source_port);
+   copy_text(state.last_connect_destination, sizeof(state.last_connect_destination),
+             destination_port);
+   return state.connect_status;
+}
+
+PLUGINHOST_FIXTURE_EXPORT void jack_free(void *value) {
+   free(value);
 }
 
 PLUGINHOST_FIXTURE_EXPORT int jack_port_name_size(void) {

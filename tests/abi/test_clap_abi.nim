@@ -81,7 +81,10 @@ suite "CLAP raw ABI":
       int64(ClapLogPluginMisbehaving),
       int64(ClapRenderRealtime), int64(ClapRenderOffline),
       int64(ClapPosixFdRead), int64(ClapPosixFdWrite),
-      int64(ClapPosixFdError),
+      int64(ClapPosixFdError), int64(ClapParamRescanValues),
+      int64(ClapParamRescanText), int64(ClapParamRescanInfo),
+      int64(ClapParamRescanAll), int64(ClapParamClearAll),
+      int64(ClapParamClearAutomations), int64(ClapParamClearModulations),
     ]
     for index, value in expected:
       check value == abiConstant(int32(index + 1))
@@ -98,6 +101,7 @@ suite "CLAP raw ABI":
     check $abiString(10) == ClapExtLatency
     check $abiString(11) == ClapExtTimerSupport
     check $abiString(12) == ClapExtPosixFdSupport
+    check $abiString(13) == ClapExtParams
 
   test "structure sizes and alignments match the official headers":
     checkLayout(ClapVersion, 1)
@@ -136,6 +140,9 @@ suite "CLAP raw ABI":
     checkLayout(ClapHostTimerSupport, 41)
     checkLayout(ClapPluginPosixFdSupport, 42)
     checkLayout(ClapHostPosixFdSupport, 43)
+    checkLayout(ClapParamInfo, 44)
+    checkLayout(ClapPluginParams, 45)
+    checkLayout(ClapHostParams, 46)
 
   test "event field offsets match the official headers":
     checkField(ClapVersion, major, 1, 1)
@@ -201,6 +208,25 @@ suite "CLAP raw ABI":
     checkField(ClapEventMidi2, header, 11, 1)
     checkField(ClapEventMidi2, portIndex, 11, 2)
     checkField(ClapEventMidi2, data, 11, 3)
+
+  test "parameter extension offsets match the official headers":
+    checkField(ClapParamInfo, id, 44, 1)
+    checkField(ClapParamInfo, flags, 44, 2)
+    checkField(ClapParamInfo, cookie, 44, 3)
+    checkField(ClapParamInfo, name, 44, 4)
+    checkField(ClapParamInfo, module, 44, 5)
+    checkField(ClapParamInfo, minValue, 44, 6)
+    checkField(ClapParamInfo, maxValue, 44, 7)
+    checkField(ClapParamInfo, defaultValue, 44, 8)
+    checkField(ClapPluginParams, count, 45, 1)
+    checkField(ClapPluginParams, getInfo, 45, 2)
+    checkField(ClapPluginParams, getValue, 45, 3)
+    checkField(ClapPluginParams, valueToText, 45, 4)
+    checkField(ClapPluginParams, textToValue, 45, 5)
+    checkField(ClapPluginParams, flush, 45, 6)
+    checkField(ClapHostParams, rescan, 46, 1)
+    checkField(ClapHostParams, clear, 46, 2)
+    checkField(ClapHostParams, requestFlush, 46, 3)
 
   test "process and callback-container offsets match the official headers":
     checkField(ClapInputEvents, ctx, 12, 1)
@@ -343,3 +369,12 @@ suite "CLAP raw ABI":
     checkFunctionPointer(ClapHostPosixFdRegisterProc)
     checkFunctionPointer(ClapHostPosixFdModifyProc)
     checkFunctionPointer(ClapHostPosixFdUnregisterProc)
+    checkFunctionPointer(ClapPluginParamsCountProc)
+    checkFunctionPointer(ClapPluginParamsGetInfoProc)
+    checkFunctionPointer(ClapPluginParamsGetValueProc)
+    checkFunctionPointer(ClapPluginParamsValueToTextProc)
+    checkFunctionPointer(ClapPluginParamsTextToValueProc)
+    checkFunctionPointer(ClapPluginParamsFlushProc)
+    checkFunctionPointer(ClapHostParamsRescanProc)
+    checkFunctionPointer(ClapHostParamsClearProc)
+    checkFunctionPointer(ClapHostParamsRequestFlushProc)

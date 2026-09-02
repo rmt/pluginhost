@@ -50,7 +50,7 @@ As of the latest reviewed state:
 
 - Default/current branch: `main`; inspect `git status` and `git log` before editing.
 - Version: `0.0.9-dev` (`pluginhost.nimble` uses numeric `0.0.9` because of Nimble metadata syntax).
-- Increments 0 through 7 and Increment 8 review unit 8A are approved. Review unit 8B has not started.
+- Increments 0 through 8 are approved; Increment 9 has not started.
 - The CLI uses exactly pinned `argparse` 4.0.2.
 - `list` and `scan` report copied CLAP descriptors without creating a plugin
   instance; canonical `run` now provides a headless signal-controlled JACK runtime.
@@ -58,8 +58,8 @@ As of the latest reviewed state:
 - CLAP/JACK declarations, Linux DSO ownership, C/Nim callbacks, and the ARC RT
   spike retain their ABI, foreign-thread, allocator, and generated-C checks.
 - The shared build profile is ARC, threads on, panics on, and Nim signal handlers disabled.
-- The current suite contains 98 unit, 25 ABI, 51 fixture, 9 RT, and 5 live integration tests (188 total), plus required generated-C negative-canary rejection.
-- The public headless runtime composes the bounded CLAP/JACK audio/event slice with an `epoll`/`signalfd` reactor, CLAP timer/FD services, state-dirty notification, plugin/JACK latency propagation, main-thread callbacks, orderly shutdown, and atomic PID-file ownership. State serialization, parameters, restart/rescans, GUI, and later host extensions remain unimplemented.
+- The current suite contains 101 unit, 26 ABI, 57 fixture, 9 RT, and 5 live integration tests (198 total), plus required generated-C negative-canary rejection.
+- The public headless runtime composes the bounded CLAP/JACK audio/event slice with an `epoll`/`signalfd` reactor, CLAP timer/FD services, state-dirty notification, plugin/JACK latency propagation, bounded parameter transport/rescans, sleep/wake, coalesced quiescent restart/port rebuild with compatible reconnection reporting, main-thread callbacks, orderly shutdown, and atomic PID-file ownership. State serialization, GUI, and later host extensions remain unimplemented.
 - Remote `origin` is configured; no project license is currently configured.
 
 Current source responsibilities:
@@ -69,13 +69,13 @@ Current source responsibilities:
 - `src/pluginhost/domain/` — typed results/errors/lifecycle/reactor values plus host-owned catalog and immutable port plans.
 - `src/pluginhost/clap/ffi.nim` — stable CLAP 1.2.10 raw ABI declarations.
 - `src/pluginhost/clap/loader.nim` — move-only entry/factory ownership, copied catalog extraction, and checked plugin creation.
-- `src/pluginhost/clap/host_bridge.nim`, `main_thread_services.nim`, and `instance.nim` — stable host callbacks/service boundary, bounded request/log transport, extension dispatch, and one-instance lifecycle ownership.
-- `src/pluginhost/clap/port_inspector.nim`, `audio_process.nim`, and `event_bridge.nim` — bounded port inspection, grouped zero-copy float32 processing, and fixed-capacity sample-accurate event translation.
+- `src/pluginhost/clap/host_bridge.nim`, `main_thread_services.nim`, and `instance.nim` — stable host callbacks/service boundary, bounded request/log/parameter transport, extension dispatch, parameter snapshots, and one-instance lifecycle ownership.
+- `src/pluginhost/clap/port_inspector.nim`, `audio_process.nim`, `event_bridge.nim`, and `parameter_transport.nim` — bounded port inspection, grouped zero-copy float32 processing, fixed-capacity sample-accurate event/parameter translation, and RT-safe sleep/wake handling.
 - `src/pluginhost/discovery/paths.nim` and `scanner.nim` — ordered roots, deterministic
   candidate traversal, canonical deduplication, and scan reports.
 - `src/pluginhost/jack/ffi.nim` — declaration-only minimal JACK ABI types, callbacks, and procedure-pointer signatures.
 - `src/pluginhost/jack/api.nim` — checked move-only JACK DSO and all-or-nothing procedure-table ownership.
-- `src/pluginhost/jack/backend.nim`, `callbacks.nim`, and `ports.nim` — internal move-only client state machine, stable audio/MIDI adapters, transactional realization, and fixed RT port map.
+- `src/pluginhost/jack/backend.nim`, `callbacks.nim`, and `ports.nim` — internal move-only client state machine, stable audio/MIDI adapters, transactional realization, fixed RT port maps, and control-plane connection snapshot/rebuild/reconnection.
 - `src/pluginhost/rt/atomic_pod.nim`, `engine.nim`, `midi_io.nim`, and `role_guard.nim` — audited trace-free atomics, backend-neutral fixed-layout endpoints, and exclusive symbolic audio role.
 - `src/pluginhost/platform/linux/` — checked move-only DSO, epoll, signalfd/signal-mask, and atomic PID-file ownership.
 - `src/pluginhost/support/` — user diagnostics, UTF-8 handling, and deterministic default JACK naming.
@@ -117,22 +117,20 @@ nimble all
 `nimble testIntegration` fails when prerequisites are missing, then runs four private PipeWire-JACK scenarios covering public signals/PID cleanup, independent CLAP smoke, live audio/MIDI capture, quiescence/stress, and callback instrumentation.
 `nimble all` performs source compile, unit, ABI, fixture, RT, and live integration checks; its integration preflight fails rather than reporting a false complete pass.
 
-For user-visible CLI changes, also exercise the compiled process directly and verify stdout, stderr, signals, PID cleanup, and exit codes. Deferred GUI/state/restart capabilities remain explicit failures.
+For user-visible CLI changes, also exercise the compiled process directly and verify stdout, stderr, signals, PID cleanup, and exit codes. Deferred GUI and state-persistence capabilities remain explicit failures.
 
-## Next planned work: Increment 8B — parameters, restart, rescans, and sleep/wake
+## Next planned work: Increment 9 — State load/save transactions
 
-Review unit 8A is approved. It added stable `clap.state` dirty, `clap.latency`,
-`clap.timer-support`, and `clap.posix-fd-support` host services, a bounded
-generation-safe 256-timer/256-FD registry, quiescent teardown, and atomic JACK
-latency publication. The strict reviewed gate passed 188 tests.
+Increment 8 is approved. It adds stable main-thread services and latency publication,
+bounded parameter output/rescans and inactive flush, sleep/wake, coalesced restart and
+quiescent port rebuild, plus compatible JACK reconnection/loss reporting. The strict
+reviewed gate passed 198 tests.
 
-Review unit 8B has not started. Before editing it, inspect the current approved state,
-run the existing verification matrix, and present a fresh pre-code package for complete
-parameters/flush transport, restart, audio/note/parameter rescans, quiescent JACK port
-rebuild/reconnection policy, and sleep/wake behavior. It must describe the parameter
-concurrency boundary and `flush()`/`process()` exclusion, restart state machine, dynamic
-port/reconnection policy, bounded transports, test fixtures, RT evidence, risks, and
-non-goals. Stop for explicit owner approval before implementing 8B.
+Before editing Increment 9, inspect the current approved state, run the existing
+verification matrix, and present a fresh pre-code package for bounded CLAP state stream
+adapters, pre-activation load, clean-shutdown save transaction, filesystem failure
+atomicity, dirty-state policy, fixtures, RT evidence, risks, and non-goals. Stop for
+explicit owner approval before implementation.
 
 ## Non-negotiable engineering rules
 

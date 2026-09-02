@@ -18,6 +18,7 @@ const
   ClapExtNotePorts* = "clap.note-ports"
   ClapExtRender* = "clap.render"
   ClapExtLog* = "clap.log"
+  ClapExtParams* = "clap.params"
   ClapExtState* = "clap.state"
   ClapExtLatency* = "clap.latency"
   ClapExtTimerSupport* = "clap.timer-support"
@@ -86,6 +87,18 @@ const
 
   ClapNotePortsRescanAll* = 1'u32 shl 0
   ClapNotePortsRescanNames* = 1'u32 shl 1
+
+  ClapParamRescanValues* = 1'u32 shl 0
+  ClapParamRescanText* = 1'u32 shl 1
+  ClapParamRescanInfo* = 1'u32 shl 2
+  ClapParamRescanAll* = 1'u32 shl 3
+  ClapParamRescanKnown* = ClapParamRescanValues or ClapParamRescanText or
+    ClapParamRescanInfo or ClapParamRescanAll
+  ClapParamClearAll* = 1'u32 shl 0
+  ClapParamClearAutomations* = 1'u32 shl 1
+  ClapParamClearModulations* = 1'u32 shl 2
+  ClapParamClearKnown* = ClapParamClearAll or ClapParamClearAutomations or
+    ClapParamClearModulations
 
   ClapRenderRealtime* = 0'i32
   ClapRenderOffline* = 1'i32
@@ -289,6 +302,43 @@ type
     registerFd*: ClapHostPosixFdRegisterProc
     modifyFd*: ClapHostPosixFdModifyProc
     unregisterFd*: ClapHostPosixFdUnregisterProc
+
+  ClapParamInfo* {.bycopy.} = object
+    id*: ClapId
+    flags*: uint32
+    cookie*: pointer
+    name*: array[ClapNameSize, char]
+    module*: array[ClapPathSize, char]
+    minValue*: cdouble
+    maxValue*: cdouble
+    defaultValue*: cdouble
+
+  ClapPluginParamsCountProc* = proc(plugin: ptr ClapPlugin): uint32 {.cdecl, gcsafe, raises: [].}
+  ClapPluginParamsGetInfoProc* = proc(plugin: ptr ClapPlugin; index: uint32;
+      info: ptr ClapParamInfo): bool {.cdecl, gcsafe, raises: [].}
+  ClapPluginParamsGetValueProc* = proc(plugin: ptr ClapPlugin; paramId: ClapId;
+      value: ptr cdouble): bool {.cdecl, gcsafe, raises: [].}
+  ClapPluginParamsValueToTextProc* = proc(plugin: ptr ClapPlugin; paramId: ClapId;
+      value: cdouble; text: cstring; capacity: uint32): bool {.cdecl, gcsafe, raises: [].}
+  ClapPluginParamsTextToValueProc* = proc(plugin: ptr ClapPlugin; paramId: ClapId;
+      text: cstring; value: ptr cdouble): bool {.cdecl, gcsafe, raises: [].}
+  ClapPluginParamsFlushProc* = proc(plugin: ptr ClapPlugin; input: ptr ClapInputEvents;
+      output: ptr ClapOutputEvents) {.cdecl, gcsafe, raises: [].}
+  ClapPluginParams* {.bycopy.} = object
+    count*: ClapPluginParamsCountProc
+    getInfo*: ClapPluginParamsGetInfoProc
+    getValue*: ClapPluginParamsGetValueProc
+    valueToText*: ClapPluginParamsValueToTextProc
+    textToValue*: ClapPluginParamsTextToValueProc
+    flush*: ClapPluginParamsFlushProc
+
+  ClapHostParamsRescanProc* = proc(host: ptr ClapHost; flags: uint32) {.cdecl, gcsafe, raises: [].}
+  ClapHostParamsClearProc* = proc(host: ptr ClapHost; paramId: ClapId; flags: uint32) {.cdecl, gcsafe, raises: [].}
+  ClapHostParamsRequestFlushProc* = proc(host: ptr ClapHost) {.cdecl, gcsafe, raises: [].}
+  ClapHostParams* {.bycopy.} = object
+    rescan*: ClapHostParamsRescanProc
+    clear*: ClapHostParamsClearProc
+    requestFlush*: ClapHostParamsRequestFlushProc
 
   ClapPluginDescriptor* {.bycopy.} = object
     clapVersion*: ClapVersion

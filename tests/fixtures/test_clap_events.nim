@@ -270,8 +270,8 @@ suite "fixed-capacity JACK and CLAP event bridge":
 
     require slice.start().isOk
     check controls.invokeProcess(64) == 0
-    check fixture.outputAccepted() == 2
-    check fixture.outputRejected() == 7
+    check fixture.outputAccepted() == 3
+    check fixture.outputRejected() == 6
     check controls.midiEventCount(0) == 2
     check controls.midiEventTime(0, 0) == 5
     check controls.midiEventTime(0, 1) == 8
@@ -282,8 +282,8 @@ suite "fixed-capacity JACK and CLAP event bridge":
     check controls.midiEventByte(0, 1, 3) == 0xf7
     let metrics = slice.takeEventMetrics()
     check metrics.acceptedOutput == 2
-    check metrics.droppedOutput == 7
-    check metrics.invalidOutput == 7
+    check metrics.droppedOutput == 6
+    check metrics.invalidOutput == 6
     check metrics.outputCapacityDrops == 0
     check fixture.contractFailures() == 0
 

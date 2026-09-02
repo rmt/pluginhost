@@ -39,6 +39,9 @@ type
     portName*: JackPortNameProc
     portFlags*: JackPortFlagsProc
     portSetAlias*: JackPortSetAliasProc
+    portGetConnections*: JackPortGetConnectionsProc
+    connect*: JackConnectProc
+    free*: JackFreeProc
     portNameSize*: JackPortNameSizeProc
 
     portGetLatencyRange*: JackPortGetLatencyRangeProc
@@ -178,6 +181,10 @@ proc openJackApi*(path = JackLibrary): Result[JackApi] =
   resolveRequired(portName, JackPortNameProc, "jack_port_name")
   resolveRequired(portFlags, JackPortFlagsProc, "jack_port_flags")
   resolveRequired(portSetAlias, JackPortSetAliasProc, "jack_port_set_alias")
+  resolveRequired(portGetConnections, JackPortGetConnectionsProc,
+    "jack_port_get_connections")
+  resolveRequired(connect, JackConnectProc, "jack_connect")
+  resolveRequired(free, JackFreeProc, "jack_free")
   resolveRequired(portNameSize, JackPortNameSizeProc, "jack_port_name_size")
 
   resolveRequired(portGetLatencyRange, JackPortGetLatencyRangeProc,

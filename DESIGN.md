@@ -262,7 +262,7 @@ Increment 7 uses direct level-triggered `epoll` behind a small backend-neutral d
 
 Registrations use opaque tokens and generation numbers rather than raw object pointers. This prevents dispatch to an FD/timer removed or reused during a callback. Plugin FD callbacks are level-triggered as required by CLAP.
 
-The reactor calculates a bounded wait from the next timer and a control-request service deadline. Increment 7 caps active waits at 16 ms, dispatches coalesced `request_callback()` on the original main thread, treats `request_process()` as satisfied by continuous processing, and terminates explicitly on restart until Increment 8 owns restart. The audio thread performs no wakeup system call.
+The reactor calculates a bounded wait from the next timer and a control-request service deadline. The reactor caps active waits at 16 ms and dispatches coalesced `request_callback()` on the original main thread. Review unit 8B coalesces restart/rescan causes there, bounds consecutive restart turns, and treats `request_process()`/active `request_flush()` as RT wake flags without an audio-thread wakeup system call.
 
 Increment 8A uses those registrations for CLAP periodic timers and level-triggered POSIX
 FD readiness. The application registry is bounded to 256 entries of each kind, rejects
@@ -319,14 +319,12 @@ The CLAP inspector applies the strict stable consistency rules also enforced by 
 
 A structural rescan creates a new plan and map only after JACK callbacks are quiescent. Live mutation or atomic replacement of a map is not needed initially.
 
-Increment 8A does not advertise host audio/note rescan extensions; complete structural
-rescan and port rebuild behavior remains review unit 8B.
-
-Increment 4B does not support structural reconfiguration of a configured backend. Its
-map is published once before activation and retained through client close, avoiding
-port mutation while latency or other notification callbacks can still execute.
-Increment 5 may refresh the frozen process endpoint for a changed sample rate or
-buffer size only after JACK process quiescence; structural port changes remain deferred.
+Review unit 8B advertises host audio/note rescan extensions with stable bridge vtables.
+Structural changes are coalesced on the main thread, only inspect ports while the plugin
+is deactivated, suspend RT map access after JACK quiescence, and build a replacement map
+before reactivation. Each owned JACK port retains a stable CLAP ID/channel identity; the
+backend snapshots its external edges before the rebuild and reconnects only an exact
+compatible replacement identity. Failed/missing external edges are reported outside RT.
 
 ### 6.3 Error model
 
@@ -546,9 +544,10 @@ Every step registers its acquired resource with the session's explicit cleanup p
 
 Requests arriving during restart remain set and are handled in a subsequent coalesced pass. A restart has a bounded retry/coalescing policy to prevent a misbehaving plugin from creating a tight restart loop.
 
-Restart remains unimplemented in review unit 8A and is owned by 8B. A plugin restart
-request therefore retains the existing explicit nonzero termination rather than claiming
-partial recovery.
+Review unit 8B executes this sequence for coalesced restart, runtime configuration,
+latency, full parameter, and structural port causes. A failed rebuild closes the unsafe
+backend rather than republishing a stale map; the session reports a typed failure and its
+normal orderly teardown keeps outputs silent.
 
 ### 10.3 Shutdown
 
@@ -594,7 +593,10 @@ JACK events are ordered within each MIDI port, but CLAP requires one globally or
 
 Increment 6A exposes `try_push()` only during the plugin `process()` call and only to the exclusive audio role. It validates core event space, declared size before typed access, port index, timestamp, ordering, finite/ranged note fields, dialect capability, MIDI status/size/data bytes, and SysEx pointers.
 
-MIDI and SysEx are copied immediately into JACK-reserved output storage. Safely representable CLAP note-on/note-off events convert to MIDI 1.0 on MIDI-capable output ports. A port may emit any dialect it advertised, not merely its preferred dialect. Unsupported, malformed, out-of-order, or capacity-rejected events return `false` and increment bounded metrics. The sink never retains a plugin-owned SysEx pointer after `try_push()` returns. Parameter/gesture output and main-thread `flush()` remain deferred rather than partially exposed.
+MIDI and SysEx are copied immediately into JACK-reserved output storage. Safely representable CLAP note-on/note-off events convert to MIDI 1.0 on MIDI-capable output ports. A port may emit any dialect it advertised, not merely its preferred dialect. Unsupported, malformed, out-of-order, or capacity-rejected events return `false` and increment bounded metrics. The sink never retains a plugin-owned SysEx pointer after `try_push()` returns. Review unit 8B routes supported scalar parameter value/modulation/gesture output to a
+4,096-entry SPSC transport, never retaining plugin cookie pointers. Active output is
+produced only by `process()`; inactive `flush()` receives an empty input list and cannot
+overlap the process endpoint.
 
 ### 11.4 Sleeping, tail, and wake policy
 
@@ -624,8 +626,7 @@ plugin is active. It publishes the frame count through an audited atomic to the 
 callback context. The JACK latency callback only reads/writes documented JACK latency
 ranges with saturating addition; `jack_recompute_total_latencies` is invoked separately
 from the control plane after JACK activation. `clap_host_latency.changed()` coalesces an
-activation-time notification; a notification outside activation is treated as plugin
-misbehavior until 8B supplies restart.
+activation-time notification; a notification outside activation is coalesced into the review-unit-8B restart path.
 
 ## 12. FFI design
 
@@ -909,13 +910,13 @@ Future sandboxing should introduce a process-boundary adapter and real-time IPC 
 ## 19. Deliberately deferred decisions
 
 The following require prototypes or product decisions before being fixed. The
-CLAP binding, direct minimal JACK FFI, shared Nim safety profile, and checked JACK
-loading choices are resolved by ADRs 0001 through 0004:
+CLAP binding, direct minimal JACK FFI, shared Nim safety profile, checked JACK
+loading, audited C11 atomics, and the direct Linux reactor are resolved by ADRs 0001
+through 0006:
 
 - Xlib versus XCB for the concrete X11 adapter.
-- Exact bounded queue algorithms and capacities beyond the required event minimum.
-- Whether the reactor uses direct `epoll` FFI or a proven Nim wrapper.
-- Port reconnection policy after structural rescans.
+- Exact bounded queue algorithms and capacities beyond the reviewed event and parameter
+  transports.
 - Native Wayland floating support in the initial milestone.
 - Distribution formats and project license.
 

@@ -15,6 +15,7 @@
 #include <clap/ext/latency.h>
 #include <clap/ext/timer-support.h>
 #include <clap/ext/posix-fd-support.h>
+#include <clap/ext/params.h>
 #include <clap/factory/plugin-factory.h>
 #include <clap/plugin-features.h>
 
@@ -39,6 +40,9 @@
 #define MODE_PROCESS_TAIL 7
 #define MODE_PROCESS_CONTINUE_IF_NOT_QUIET 8
 #define MODE_LATENCY_MISSING_GET 9
+#define MODE_PARAMS 10
+#define MODE_PORT_RESCAN 11
+#define MODE_TONE_SLEEP 12
 
 static const clap_host_t *fixture_host;
 static uint32_t activate_count;
@@ -69,6 +73,12 @@ static clap_id fixture_timer_id = CLAP_INVALID_ID;
 static int fixture_pipe[2] = {-1, -1};
 static uint32_t timer_callback_count;
 static uint32_t fd_callback_count;
+static const clap_host_params_t *fixture_host_params;
+static const clap_host_audio_ports_t *fixture_host_audio_ports;
+static uint32_t parameter_flush_count;
+static bool parameter_emitted;
+static bool pending_port_rescan;
+static bool rescan_port_layout;
 
 static const char *fixture_features[] = {
    CLAP_PLUGIN_FEATURE_AUDIO_EFFECT,
@@ -127,7 +137,11 @@ static void fixture_entry_deinit(void) {
 
 static uint32_t fixture_audio_count(const clap_plugin_t *plugin, bool is_input) {
    (void)plugin;
-   if (PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_TONE)
+   if (PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_PORT_RESCAN &&
+       rescan_port_layout)
+      return is_input ? 1U : 2U;
+   if (PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_TONE ||
+       PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_TONE_SLEEP)
       return is_input ? 0U : 1U;
    if (PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_MULTI)
       return 2U;
@@ -145,6 +159,31 @@ static bool fixture_audio_get(const clap_plugin_t *plugin, uint32_t index,
       return false;
    memset(info, 0, sizeof(*info));
    info->in_place_pair = CLAP_INVALID_ID;
+
+   if (PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_PORT_RESCAN &&
+       rescan_port_layout) {
+      if (is_input && index == 0U) {
+         info->id = 10U;
+         info->flags = CLAP_AUDIO_PORT_IS_MAIN;
+         info->channel_count = 2U;
+         info->port_type = CLAP_PORT_STEREO;
+         set_audio_name(info, "Main Input");
+      } else if (!is_input && index == 0U) {
+         info->id = 20U;
+         info->flags = CLAP_AUDIO_PORT_IS_MAIN;
+         info->channel_count = 2U;
+         info->port_type = CLAP_PORT_STEREO;
+         set_audio_name(info, "Main Output");
+      } else if (!is_input && index == 1U) {
+         info->id = 21U;
+         info->channel_count = 1U;
+         info->port_type = CLAP_PORT_MONO;
+         set_audio_name(info, "Added Output");
+      } else {
+         return false;
+      }
+      return true;
+   }
 
    if (PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_MULTI) {
       if (index >= 2U)
@@ -175,7 +214,9 @@ static bool fixture_audio_get(const clap_plugin_t *plugin, uint32_t index,
       return true;
    }
 
-   if (index != 0U || (PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_TONE && is_input))
+   if (index != 0U ||
+       ((PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_TONE ||
+         PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_TONE_SLEEP) && is_input))
       return false;
    if (is_input) {
       info->id = 10U;
@@ -196,6 +237,75 @@ static bool fixture_audio_get(const clap_plugin_t *plugin, uint32_t index,
 static const clap_plugin_audio_ports_t fixture_audio_ports = {
    .count = fixture_audio_count,
    .get = fixture_audio_get,
+};
+
+static uint32_t fixture_parameter_count(const clap_plugin_t *plugin) {
+   (void)plugin;
+   require_main_not_audio();
+   return 1U;
+}
+
+static bool fixture_parameter_get_info(const clap_plugin_t *plugin,
+                                       uint32_t index, clap_param_info_t *info) {
+   (void)plugin;
+   require_main_not_audio();
+   if (index != 0U || info == NULL)
+      return false;
+   memset(info, 0, sizeof(*info));
+   info->id = 301U;
+   info->min_value = 0.0;
+   info->max_value = 1.0;
+   info->default_value = 0.5;
+   (void)snprintf(info->name, sizeof(info->name), "Fixture Parameter");
+   return true;
+}
+
+static bool fixture_parameter_get_value(const clap_plugin_t *plugin,
+                                         clap_id param_id, double *value) {
+   (void)plugin;
+   require_main_not_audio();
+   if (param_id != 301U || value == NULL)
+      return false;
+   *value = 0.5;
+   return true;
+}
+
+static bool emit_parameter_value(const clap_output_events_t *output,
+                                 uint32_t time, double value) {
+   clap_event_param_value_t event = {
+      .header = {sizeof(event), time, CLAP_CORE_EVENT_SPACE_ID,
+                 CLAP_EVENT_PARAM_VALUE, CLAP_EVENT_IS_LIVE},
+      .param_id = 301U,
+.cookie = NULL,
+.note_id = -1,
+.port_index = -1,
+.channel = -1,
+.key = -1,
+.value = value,
+   };
+   return output != NULL && output->try_push != NULL &&
+      output->try_push(output, &event.header);
+}
+
+static void fixture_parameter_flush(const clap_plugin_t *plugin,
+                                    const clap_input_events_t *input,
+                                    const clap_output_events_t *output) {
+   (void)plugin;
+   require_main_not_audio();
+   if (input == NULL || input->size == NULL || input->get == NULL ||
+       input->size(input) != 0U || input->get(input, 0U) != NULL ||
+       !emit_parameter_value(output, 0U, 0.75))
+      ++contract_failures;
+   ++parameter_flush_count;
+}
+
+static const clap_plugin_params_t fixture_params = {
+   .count = fixture_parameter_count,
+   .get_info = fixture_parameter_get_info,
+   .get_value = fixture_parameter_get_value,
+   .value_to_text = NULL,
+   .text_to_value = NULL,
+   .flush = fixture_parameter_flush,
 };
 
 static uint32_t fixture_latency_get(const clap_plugin_t *plugin) {
@@ -259,6 +369,24 @@ static bool fixture_plugin_init(const clap_plugin_t *plugin) {
    require_main_not_audio();
    if (fixture_host == NULL || fixture_host->get_extension == NULL)
       return false;
+   if (PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_PARAMS) {
+      fixture_host_params = (const clap_host_params_t *)
+         fixture_host->get_extension(fixture_host, CLAP_EXT_PARAMS);
+      if (fixture_host_params == NULL || fixture_host_params->rescan == NULL ||
+          fixture_host_params->clear == NULL ||
+          fixture_host_params->request_flush == NULL)
+         return false;
+   }
+   if (PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_PORT_RESCAN) {
+      fixture_host_audio_ports = (const clap_host_audio_ports_t *)
+         fixture_host->get_extension(fixture_host, CLAP_EXT_AUDIO_PORTS);
+      if (fixture_host_audio_ports == NULL ||
+          fixture_host_audio_ports->is_rescan_flag_supported == NULL ||
+          fixture_host_audio_ports->rescan == NULL ||
+          !fixture_host_audio_ports->is_rescan_flag_supported(
+             fixture_host, CLAP_AUDIO_PORTS_RESCAN_LIST))
+         return false;
+   }
    fixture_host_timers = (const clap_host_timer_support_t *)
       fixture_host->get_extension(fixture_host, CLAP_EXT_TIMER_SUPPORT);
    fixture_host_fds = (const clap_host_posix_fd_support_t *)
@@ -324,6 +452,13 @@ static void fixture_plugin_deactivate(const clap_plugin_t *plugin) {
    (void)plugin;
    require_main_not_audio();
    ++deactivate_count;
+   if (PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_PORT_RESCAN &&
+       pending_port_rescan) {
+      pending_port_rescan = false;
+      rescan_port_layout = true;
+      fixture_host_audio_ports->rescan(
+         fixture_host, CLAP_AUDIO_PORTS_RESCAN_LIST);
+   }
    record_lifecycle(5);
 }
 
@@ -368,7 +503,13 @@ static clap_process_status fixture_plugin_process(const clap_plugin_t *plugin,
    if (process->out_events->try_push == NULL ||
        process->out_events->try_push(process->out_events, &rejected_event))
       ++contract_failures;
-   if (fixture_host != NULL && fixture_host->request_process != NULL)
+   if (PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_PARAMS && !parameter_emitted) {
+      if (!emit_parameter_value(process->out_events, 0U, 0.6))
+         ++contract_failures;
+      parameter_emitted = true;
+   }
+   if (PLUGINHOST_AUDIO_FIXTURE_MODE != MODE_TONE_SLEEP &&
+       fixture_host != NULL && fixture_host->request_process != NULL)
       fixture_host->request_process(fixture_host);
    if (fixture_host != NULL && fixture_host->request_callback != NULL)
       fixture_host->request_callback(fixture_host);
@@ -411,7 +552,8 @@ static clap_process_status fixture_plugin_process(const clap_plugin_t *plugin,
       }
    }
 
-   if (PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_TONE) {
+   if (PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_TONE ||
+       PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_TONE_SLEEP) {
       clap_audio_buffer_t *output = &process->audio_outputs[0];
       if (output->channel_count != 2U)
          ++contract_failures;
@@ -435,6 +577,22 @@ static clap_process_status fixture_plugin_process(const clap_plugin_t *plugin,
          process->audio_outputs[1].data32[0][channel] =
             process->audio_inputs[1].data32[0][channel] * 3.0f;
       }
+   } else if (PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_PORT_RESCAN &&
+              rescan_port_layout) {
+      if (process->audio_inputs_count != 1U ||
+          process->audio_outputs_count != 2U ||
+          process->audio_inputs[0].channel_count != 2U ||
+          process->audio_outputs[0].channel_count != 2U ||
+          process->audio_outputs[1].channel_count != 1U)
+         ++contract_failures;
+      for (channel = 0U; channel < process->frames_count; ++channel) {
+         process->audio_outputs[0].data32[0][channel] =
+            process->audio_inputs[0].data32[0][channel] * 2.0f;
+         process->audio_outputs[0].data32[1][channel] =
+            process->audio_inputs[0].data32[1][channel] * 2.0f;
+         process->audio_outputs[1].data32[0][channel] =
+            process->audio_inputs[0].data32[0][channel] * 3.0f;
+      }
    } else {
       if (process->audio_inputs_count != 1U ||
           process->audio_inputs[0].channel_count != 2U ||
@@ -452,7 +610,8 @@ static clap_process_status fixture_plugin_process(const clap_plugin_t *plugin,
    record_lifecycle(3);
    if (PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_PROCESS_ERROR)
       last_process_status = CLAP_PROCESS_ERROR;
-   else if (PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_PROCESS_SLEEP)
+   else if (PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_PROCESS_SLEEP ||
+            PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_TONE_SLEEP)
       last_process_status = CLAP_PROCESS_SLEEP;
    else if (PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_PROCESS_TAIL)
       last_process_status = CLAP_PROCESS_TAIL;
@@ -468,6 +627,9 @@ static const void *fixture_plugin_get_extension(const clap_plugin_t *plugin,
    (void)plugin;
    if (extension_id != NULL && strcmp(extension_id, CLAP_EXT_AUDIO_PORTS) == 0)
       return &fixture_audio_ports;
+   if (extension_id != NULL && strcmp(extension_id, CLAP_EXT_PARAMS) == 0 &&
+       PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_PARAMS)
+      return &fixture_params;
    if (extension_id != NULL && strcmp(extension_id, CLAP_EXT_LATENCY) == 0)
       return PLUGINHOST_AUDIO_FIXTURE_MODE == MODE_LATENCY_MISSING_GET
          ? &fixture_bad_latency
@@ -568,11 +730,48 @@ AUDIO_FIXTURE_EXPORT void pluginhost_audio_fixture_reset(void) {
    on_main_thread_count = 0U;
    fixture_host_timers = NULL;
    fixture_host_fds = NULL;
+   fixture_host_params = NULL;
+   fixture_host_audio_ports = NULL;
+   parameter_flush_count = 0U;
+   parameter_emitted = false;
+   pending_port_rescan = false;
+   rescan_port_layout = false;
    fixture_timer_id = CLAP_INVALID_ID;
    fixture_pipe[0] = -1;
    fixture_pipe[1] = -1;
    timer_callback_count = 0U;
    fd_callback_count = 0U;
+}
+
+AUDIO_FIXTURE_EXPORT void pluginhost_audio_fixture_trigger_parameter_rescan(
+   uint32_t flags) {
+   if (fixture_host_params != NULL)
+      fixture_host_params->rescan(fixture_host, flags);
+}
+
+AUDIO_FIXTURE_EXPORT void pluginhost_audio_fixture_trigger_process(void) {
+   if (fixture_host != NULL && fixture_host->request_process != NULL)
+      fixture_host->request_process(fixture_host);
+}
+
+AUDIO_FIXTURE_EXPORT void pluginhost_audio_fixture_trigger_parameter_flush(void) {
+   const clap_host_params_t *params = fixture_host == NULL ? NULL :
+      (const clap_host_params_t *)fixture_host->get_extension(
+         fixture_host, CLAP_EXT_PARAMS);
+   if (params != NULL && params->request_flush != NULL)
+      params->request_flush(fixture_host);
+}
+
+AUDIO_FIXTURE_EXPORT void pluginhost_audio_fixture_trigger_restart(void) {
+   if (fixture_host != NULL && fixture_host->request_restart != NULL)
+      fixture_host->request_restart(fixture_host);
+}
+
+AUDIO_FIXTURE_EXPORT void pluginhost_audio_fixture_trigger_port_restart(void) {
+   if (fixture_host != NULL && fixture_host->request_restart != NULL) {
+      pending_port_rescan = true;
+      fixture_host->request_restart(fixture_host);
+   }
 }
 
 #define EXPORT_COUNTER(name, value) \
@@ -585,6 +784,7 @@ EXPORT_COUNTER(pluginhost_audio_fixture_stop_calls, stop_count)
 EXPORT_COUNTER(pluginhost_audio_fixture_process_calls, process_count)
 EXPORT_COUNTER(pluginhost_audio_fixture_destroy_calls, destroy_count)
 EXPORT_COUNTER(pluginhost_audio_fixture_contract_failures, contract_failures)
+EXPORT_COUNTER(pluginhost_audio_fixture_parameter_flush_count, parameter_flush_count)
 EXPORT_COUNTER(pluginhost_audio_fixture_last_activate_min_frames,
                last_activate_min_frames)
 EXPORT_COUNTER(pluginhost_audio_fixture_last_activate_max_frames,

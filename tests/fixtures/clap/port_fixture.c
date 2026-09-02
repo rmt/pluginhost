@@ -350,10 +350,23 @@ static const clap_plugin_render_t fixture_render_missing_set = {
 static bool fixture_plugin_init(const clap_plugin_t *plugin) {
    (void)plugin;
    expect_main_thread();
-   if (fixture_host != NULL &&
-       (fixture_host->get_extension(fixture_host, CLAP_EXT_AUDIO_PORTS) != NULL ||
-        fixture_host->get_extension(fixture_host, CLAP_EXT_NOTE_PORTS) != NULL))
+   if (fixture_host == NULL || fixture_host->get_extension == NULL) {
       ++contract_failures;
+   } else {
+      const clap_host_audio_ports_t *audio = (const clap_host_audio_ports_t *)
+         fixture_host->get_extension(fixture_host, CLAP_EXT_AUDIO_PORTS);
+      const clap_host_note_ports_t *notes = (const clap_host_note_ports_t *)
+         fixture_host->get_extension(fixture_host, CLAP_EXT_NOTE_PORTS);
+      if (audio == NULL || audio->is_rescan_flag_supported == NULL ||
+          audio->rescan == NULL ||
+          !audio->is_rescan_flag_supported(fixture_host,
+                                            CLAP_AUDIO_PORTS_RESCAN_NAMES) ||
+          notes == NULL || notes->supported_dialects == NULL ||
+          notes->rescan == NULL ||
+          (notes->supported_dialects(fixture_host) &
+           (CLAP_NOTE_DIALECT_CLAP | CLAP_NOTE_DIALECT_MIDI)) == 0U)
+         ++contract_failures;
+   }
    return true;
 }
 

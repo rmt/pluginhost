@@ -1,9 +1,12 @@
 import std/math
 
 import ./[audio_process, ffi, host_bridge, loader, main_thread_services,
-          port_inspector]
+          parameter_transport, port_inspector]
 import ../domain/[errors, plugin_catalog, port_plan, result]
 import ../rt/role_guard
+
+const
+  MaxClapParameters* = 4_096'u32
 
 type
   ClapInstanceState* = enum
@@ -21,6 +24,15 @@ type
     latency*: ptr ClapPluginLatency
     timerSupport*: ptr ClapPluginTimerSupport
     posixFdSupport*: ptr ClapPluginPosixFdSupport
+    params*: ptr ClapPluginParams
+
+  ClapParameterSnapshot* = object
+    id*: ClapId
+    flags*: uint32
+    minValue*: cdouble
+    maxValue*: cdouble
+    defaultValue*: cdouble
+    value*: cdouble
 
   ClapInstance* = object
     module: ClapModule
@@ -30,6 +42,9 @@ type
     extensions: ClapPluginExtensions
     state: ClapInstanceState
     nextPortPlanVersion: uint64
+    parameterTransport: ptr ClapParameterTransport
+    parameterSnapshots: seq[ClapParameterSnapshot]
+    parameterCatalogGeneration: uint64
 
 proc `=destroy`*(instance: var ClapInstance) =
   doAssert instance.plugin == nil,
@@ -37,6 +52,7 @@ proc `=destroy`*(instance: var ClapInstance) =
   `=destroy`(instance.module)
   `=destroy`(instance.bridge)
   `=destroy`(instance.descriptor)
+  `=destroy`(instance.parameterSnapshots)
 
 proc `=copy`*(destination: var ClapInstance; source: ClapInstance) {.error:
   "ClapInstance owns foreign resources and cannot be copied; use move".}
@@ -53,6 +69,9 @@ proc `=sink`*(destination: var ClapInstance; source: ClapInstance) =
   destination.extensions = source.extensions
   destination.state = source.state
   destination.nextPortPlanVersion = source.nextPortPlanVersion
+  destination.parameterTransport = source.parameterTransport
+  `=sink`(destination.parameterSnapshots, source.parameterSnapshots)
+  destination.parameterCatalogGeneration = source.parameterCatalogGeneration
 
 proc instanceError(kind: HostErrorKind; message, path: string;
                    detail = ""): HostError =
@@ -119,6 +138,56 @@ proc invalidCreatedDescriptor(plugin: ptr ClapPlugin;
     return "desc.id"
   ""
 
+proc isFiniteParameter(value: cdouble): bool =
+  classify(value) notin {fcNan, fcInf, fcNegInf}
+
+proc scanParameterSnapshots(plugin: ptr ClapPlugin;
+                            params: ptr ClapPluginParams;
+                            path, pluginId: string): Result[seq[ClapParameterSnapshot]] =
+  if params == nil:
+    return success(newSeq[ClapParameterSnapshot]())
+  if params.count == nil or params.getInfo == nil or params.getValue == nil:
+    return failure[seq[ClapParameterSnapshot]](instanceError(
+      hekClapPlugin, "CLAP parameter extension has a missing required callback",
+      path, "id=" & pluginId))
+  let count = params.count(plugin)
+  if count > MaxClapParameters:
+    return failure[seq[ClapParameterSnapshot]](instanceError(
+      hekClapPlugin, "CLAP parameter count exceeds the host limit", path,
+      "id=" & pluginId & "; count=" & $count & "; limit=" & $MaxClapParameters))
+  var snapshots = newSeqOfCap[ClapParameterSnapshot](int(count))
+  var index = 0'u32
+  while index < count:
+    var info: ClapParamInfo
+    if not params.getInfo(plugin, index, addr info):
+      return failure[seq[ClapParameterSnapshot]](instanceError(
+        hekClapPlugin, "CLAP parameter information query failed", path,
+        "id=" & pluginId & "; index=" & $index))
+    if info.id == ClapInvalidId or not info.minValue.isFiniteParameter or
+        not info.maxValue.isFiniteParameter or
+        not info.defaultValue.isFiniteParameter or info.minValue > info.maxValue or
+        info.defaultValue < info.minValue or info.defaultValue > info.maxValue:
+      return failure[seq[ClapParameterSnapshot]](instanceError(
+        hekClapPlugin, "CLAP parameter information is invalid", path,
+        "id=" & pluginId & "; index=" & $index))
+    for previous in snapshots:
+      if previous.id == info.id:
+        return failure[seq[ClapParameterSnapshot]](instanceError(
+          hekClapPlugin, "CLAP parameter identifiers must be unique", path,
+          "id=" & pluginId & "; param-id=" & $info.id))
+    var value: cdouble
+    if not params.getValue(plugin, info.id, addr value) or
+        not value.isFiniteParameter or value < info.minValue or value > info.maxValue:
+      return failure[seq[ClapParameterSnapshot]](instanceError(
+        hekClapPlugin, "CLAP parameter value query returned an invalid value", path,
+        "id=" & pluginId & "; param-id=" & $info.id))
+    snapshots.add(ClapParameterSnapshot(
+      id: info.id, flags: info.flags,
+      minValue: info.minValue, maxValue: info.maxValue,
+      defaultValue: info.defaultValue, value: value))
+    inc index
+  success(move(snapshots))
+
 proc createClapInstance*(module: sink ClapModule;
                          descriptor: sink PluginDescriptor;
                          mainServices: ptr ClapMainThreadServices = nil):
@@ -177,7 +246,24 @@ proc createClapInstance*(module: sink ClapModule;
       plugin.getExtension(plugin, ClapExtTimerSupport.cstring)),
     posixFdSupport: cast[ptr ClapPluginPosixFdSupport](
       plugin.getExtension(plugin, ClapExtPosixFdSupport.cstring)),
+    params: cast[ptr ClapPluginParams](
+      plugin.getExtension(plugin, ClapExtParams.cstring)),
   )
+  let parameterTransport = newClapParameterTransport()
+  if parameterTransport == nil:
+    let primary = instanceError(
+      hekClapPlugin, "could not allocate CLAP parameter transport",
+      ownedModule.modulePath, "id=" & descriptor.id)
+    return failure[ClapInstance](cleanupPluginFailure(
+      ownedModule, plugin, primary))
+
+  var scannedParameters = scanParameterSnapshots(
+    plugin, extensions.params, ownedModule.modulePath, descriptor.id)
+  if not scannedParameters.isOk:
+    var transport = parameterTransport
+    transport.close()
+    return failure[ClapInstance](cleanupPluginFailure(
+      ownedModule, plugin, move(scannedParameters.error)))
 
   success(ClapInstance(
     module: move(ownedModule),
@@ -187,6 +273,9 @@ proc createClapInstance*(module: sink ClapModule;
     extensions: extensions,
     state: cisInitialized,
     nextPortPlanVersion: 1'u64,
+    parameterTransport: parameterTransport,
+    parameterSnapshots: move(scannedParameters.value),
+    parameterCatalogGeneration: if extensions.params == nil: 0'u64 else: 1'u64,
   ))
 
 proc state*(instance: ClapInstance): ClapInstanceState {.inline, gcsafe,
@@ -201,6 +290,89 @@ proc selectedDescriptor*(instance: ClapInstance): PluginDescriptor =
 
 proc pluginExtensions*(instance: ClapInstance): ClapPluginExtensions =
   instance.extensions
+
+type
+  ClapParameterDrain* = object
+    events*: uint32
+    valueChanges*: uint32
+
+proc parameterCount*(instance: ClapInstance): int {.inline.} =
+  instance.parameterSnapshots.len
+
+proc parameterCatalogGeneration*(instance: ClapInstance): uint64 {.inline.} =
+  instance.parameterCatalogGeneration
+
+proc rescanParameters*(instance: var ClapInstance; flags: uint32): Result[Unit] =
+  if flags == 0'u32 or (flags and not ClapParamRescanKnown) != 0'u32:
+    return failure[Unit](instanceError(
+      hekClapPlugin, "CLAP parameter rescan flags are invalid",
+      instance.module.modulePath, "id=" & instance.descriptor.id & "; flags=" & $flags))
+  if instance.extensions.params == nil:
+    return success()
+  if instance.state notin {cisInitialized, cisActivated, cisProcessing} or
+      not instance.bridge.isMainThread:
+    return failure[Unit](instanceError(
+      hekClapPlugin, "CLAP parameter rescan requires the main-thread live-plugin state",
+      instance.module.modulePath, "id=" & instance.descriptor.id & "; state=" & $instance.state))
+  if (flags and ClapParamRescanAll) != 0'u32 and instance.state != cisInitialized:
+    return failure[Unit](instanceError(
+      hekClapPlugin, "CLAP parameter full rescan requires a deactivated plugin",
+      instance.module.modulePath, "id=" & instance.descriptor.id))
+  var scanned = scanParameterSnapshots(
+    instance.plugin, instance.extensions.params, instance.module.modulePath,
+    instance.descriptor.id)
+  if not scanned.isOk:
+    return failure[Unit](move(scanned.error))
+  if instance.parameterCatalogGeneration == high(uint64):
+    return failure[Unit](instanceError(
+      hekClapPlugin, "CLAP parameter catalog generation is exhausted",
+      instance.module.modulePath, "id=" & instance.descriptor.id))
+  # The host never retains plugin cookies across this replacement.
+  instance.parameterSnapshots.setLen(0)
+  instance.parameterSnapshots = move(scanned.value)
+  inc instance.parameterCatalogGeneration
+  success()
+
+proc drainParameterEvents*(instance: var ClapInstance;
+                           limit = uint32(ClapParameterEventCapacity)): ClapParameterDrain =
+  var event: ClapParameterEvent
+  while result.events < limit and instance.parameterTransport.tryPop(event):
+    inc result.events
+    if event.kind == cpekValue:
+      for snapshot in instance.parameterSnapshots.mitems:
+        if snapshot.id == event.paramId:
+          snapshot.value = event.value
+          break
+      inc result.valueChanges
+
+proc takeParameterMetrics*(instance: ClapInstance): ClapParameterMetrics =
+  instance.parameterTransport.takeMetrics()
+
+proc flushParameters*(instance: var ClapInstance): Result[Unit] =
+  if instance.extensions.params == nil:
+    return success()
+  if instance.state != cisInitialized or not instance.bridge.isMainThread or
+      instance.parameterTransport == nil:
+    return failure[Unit](instanceError(
+      hekClapPlugin, "CLAP parameter flush requires a main-thread deactivated plugin",
+      instance.module.modulePath, "id=" & instance.descriptor.id & "; state=" & $instance.state))
+  if instance.extensions.params.flush == nil:
+    return failure[Unit](instanceError(
+      hekClapPlugin, "CLAP parameter extension has a missing flush callback",
+      instance.module.modulePath, "id=" & instance.descriptor.id))
+  instance.extensions.params.flush(
+    instance.plugin, addr instance.parameterTransport.emptyInputEvents,
+    addr instance.parameterTransport.outputEvents)
+  success()
+
+proc takeParamsRescan*(instance: ClapInstance): uint32 {.gcsafe, raises: [].} =
+  instance.bridge.takeParamsRescan()
+
+proc takeAudioPortsRescan*(instance: ClapInstance): uint32 {.gcsafe, raises: [].} =
+  instance.bridge.takeAudioPortsRescan()
+
+proc takeNotePortsRescan*(instance: ClapInstance): uint32 {.gcsafe, raises: [].} =
+  instance.bridge.takeNotePortsRescan()
 
 proc inspectPortPlan*(instance: var ClapInstance): Result[PortPlan] =
   if instance.state != cisInitialized:
@@ -429,11 +601,17 @@ proc newAudioProcess*(instance: var ClapInstance; plan: PortPlan;
       instance.module.modulePath,
       "id=" & instance.descriptor.id & "; state=" & $instance.state,
     ))
-  newClapAudioProcess(instance.plugin, plan, maxFrames, role,
+  newClapAudioProcess(
+   instance.plugin, plan, instance.parameterTransport,
+   instance.bridge.processWakePointer, instance.bridge.flushWakePointer,
+   maxFrames, role,
                       instance.module.modulePath, instance.descriptor.id)
 
 proc takeRequests*(instance: ClapInstance): uint32 {.gcsafe, raises: [].} =
   instance.bridge.takeRequests()
+
+proc restoreRequests*(instance: ClapInstance; requests: uint32) {.gcsafe, raises: [].} =
+  instance.bridge.restoreRequests(requests)
 
 proc tryPopLog*(instance: ClapInstance;
                 record: var ClapHostLogRecord): bool {.gcsafe, raises: [].} =
@@ -549,6 +727,7 @@ proc close*(instance: var ClapInstance): Result[Unit] =
   if not destroyed.isOk:
     return destroyed
 
+  instance.parameterTransport.close()
   let closed = instance.module.close()
   if not closed.isOk:
     return failure[Unit](closed.error)

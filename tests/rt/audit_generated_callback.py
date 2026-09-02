@@ -12,6 +12,7 @@ COMPLETE_MODULES = (
     "@ppluginhost@sjack@scallbacks.nim.c",
     "@ppluginhost@srt@sengine.nim.c",
     "@ppluginhost@srt@srole_guard.nim.c",
+    "@ppluginhost@sclap@sparameter_transport.nim.c",
 )
 
 JACK_ROOTS = (
@@ -48,6 +49,13 @@ CLAP_ROOTS = (
     "pluginhost_clap_host_log",
     "pluginhost_clap_host_is_main_thread",
     "pluginhost_clap_host_is_audio_thread",
+    "pluginhost_clap_host_params_rescan",
+    "pluginhost_clap_host_params_clear",
+    "pluginhost_clap_host_params_request_flush",
+    "pluginhost_clap_host_audio_ports_is_rescan_supported",
+    "pluginhost_clap_host_audio_ports_rescan",
+    "pluginhost_clap_host_note_ports_supported_dialects",
+    "pluginhost_clap_host_note_ports_rescan",
 )
 
 CLAP_PROCESS_ROOTS = (
@@ -119,6 +127,7 @@ ALLOWED_EXTERNAL_PREFIXES = (
     "initAudioRoleGuard__",
     "initRtEngine__",
     "pluginhost_clap_event_cycle_",
+    "tryPushOutput__OOZOOZsrcZpluginhostZclapZparameter95transport_",
 )
 
 

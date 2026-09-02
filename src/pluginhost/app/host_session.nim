@@ -1,7 +1,7 @@
 import std/options
 
 import ./[audio_slice, main_reactor, plugin_services, run_config]
-import ../clap/[loader, main_thread_services]
+import ../clap/[ffi, loader, main_thread_services]
 import ../domain/[errors, lifecycle, plugin_catalog, reactor, result]
 import ../jack/backend
 import ../platform/linux/[pid_file, reactor as linux_reactor, signals]
@@ -10,6 +10,7 @@ import ../support/names
 const
   ControlServiceNanos = 16_000_000'i64
   MaxPluginLogsPerTurn = 64
+  MaxConsecutiveRestarts = 4'u32
 
 
 type
@@ -25,9 +26,13 @@ type
     lastXruns: uint64
     lastFreewheelChanges: uint64
     stateDirty: bool
+    consecutiveRestarts: uint32
 
 proc initHostSession*(): HostSession =
   HostSession(state: ssNew)
+
+proc hasDirtyState*(session: HostSession): bool {.inline.} =
+  session.stateDirty
 
 proc attachInternalAudioSlice*(session: var HostSession;
                                slice: var InternalAudioSlice): Result[Unit] =
@@ -235,30 +240,45 @@ proc serviceAudioControl(session: var HostSession; config: RunConfig;
       context.add("; reason=" & snapshot.jackShutdownReason)
     return failure[Unit](hostError(
       hsJack, hekJackClientClose, "JACK server shut down the host client", context))
-  if snapshot.configurationPending:
-    var refreshed = session.audioSlice.refreshRuntimeConfiguration()
-    if not refreshed.isOk:
-      return refreshed
-
   let requests = session.audioSlice.controlRequests()
-  if requests.restart:
-    return failure[Unit](hostError(
-      hsClap, hekClapPlugin,
-      "CLAP plugin requested restart, which is not implemented in this development increment",
-      "path=" & session.audioSlice.pluginPath & "; id=" & session.audioSlice.pluginId,
-    ))
-  if requests.flush:
-    return failure[Unit](hostError(
-      hsInternal, hekInternal,
-      "an unadvertised parameter flush request reached the control plane",
-      "id=" & session.audioSlice.pluginId,
-    ))
+  let rescans = session.audioSlice.takeRescanRequests()
+  let parameterFullRescan = (rescans.parameters and ClapParamRescanAll) != 0'u32
+  let parameterImmediateRescan = rescans.parameters and not ClapParamRescanAll
+  let latencyChanged = session.audioSlice.takeLatencyChanged()
+  let restartRequired = snapshot.configurationPending or requests.restart or
+    latencyChanged or rescans.audioPorts != 0'u32 or rescans.notePorts != 0'u32 or
+    parameterFullRescan
+
+  if restartRequired:
+    if session.consecutiveRestarts >= MaxConsecutiveRestarts:
+      return failure[Unit](hostError(
+        hsClap, hekClapPlugin, "CLAP restart request limit exceeded",
+        "path=" & session.audioSlice.pluginPath & "; id=" & session.audioSlice.pluginId &
+          "; limit=" & $MaxConsecutiveRestarts,
+      ))
+    inc session.consecutiveRestarts
+    var restarted = session.audioSlice.restart(parameterFullRescan)
+    if not restarted.isOk:
+      return restarted
+    let reconnection = session.audioSlice.takeReconnectionReport()
+    if reconnection.lost.len > 0 and config.verbosity != vbQuiet:
+      warning(errorOutput, "JACK port rebuild could not restore " &
+        $reconnection.lost.len & " external connection(s)")
+  else:
+    session.consecutiveRestarts = 0'u32
+  if parameterImmediateRescan != 0'u32:
+    var rescanned = session.audioSlice.rescanParameters(parameterImmediateRescan)
+    if not rescanned.isOk:
+      return rescanned
+
   if requests.callback:
     var called = session.audioSlice.callOnMainThread()
     if not called.isOk:
       return called
-  # request_process is satisfied by Increment 7's continuous JACK processing.
+  # request_process/request_flush atomics wake the RT endpoint directly. While
+  # active, parameter output is exchanged through process(), never flush().
   discard requests.process
+  discard requests.flush
 
   if snapshot.xrunCount > session.lastXruns and config.verbosity != vbQuiet:
     warning(errorOutput, "JACK reported " &
@@ -276,14 +296,15 @@ proc serviceAudioControl(session: var HostSession; config: RunConfig;
   if droppedEvents > 0'u64 and config.verbosity != vbQuiet:
     warning(errorOutput, "audio event bridge dropped or rejected " &
       $droppedEvents & " events")
+  let parameterEvents = session.audioSlice.drainParameterEvents()
+  let parameterMetrics = session.audioSlice.takeParameterMetrics()
+  if parameterMetrics.dropped > 0'u64 and config.verbosity != vbQuiet:
+    warning(errorOutput, "CLAP parameter transport dropped or rejected " &
+      $parameterMetrics.dropped & " events")
+  if parameterEvents.valueChanges > 0'u32:
+    session.stateDirty = true
   if session.audioSlice.takeStateDirty():
     session.stateDirty = true
-  if session.audioSlice.takeLatencyChanged():
-    return failure[Unit](hostError(
-      hsClap, hekClapPlugin,
-      "CLAP plugin reported a latency change outside activation",
-      "path=" & session.audioSlice.pluginPath & "; id=" & session.audioSlice.pluginId,
-    ))
   session.drainPluginLogs(config, errorOutput)
   success()
 

@@ -10,7 +10,9 @@ import ../rt/[engine, role_guard]
 import ../support/utf8
 import ./[api, callbacks, ffi, ports]
 
-const RuntimeConfigurationReadAttempts = 8
+const
+  RuntimeConfigurationReadAttempts = 8
+  MaxConnectionsPerPortSnapshot = 1_024
 
 type
   JackBackendState* = enum
@@ -46,6 +48,14 @@ type
   JackRuntimeConfiguration* = object
     sampleRate*: uint32
     bufferSize*: uint32
+
+  JackConnectionCandidate* = object
+    identity*: JackPortIdentity
+    peerName*: string
+
+  JackReconnectionReport* = object
+    restored*: uint32
+    lost*: seq[JackConnectionCandidate]
 
   JackBackend* = object
     api: JackApi
@@ -110,6 +120,11 @@ proc initJackBackendOpenConfig*(clientName: string;
     libraryPath: libraryPath,
   )
 
+proc backendError(kind: HostErrorKind; message: string;
+                  backend: JackBackend; detail = ""): HostError
+proc copiedJackName(value: cstring; maximumBytes: int; kind: HostErrorKind;
+                    message: string; backend: JackBackend): Result[string]
+
 proc state*(backend: JackBackend): JackBackendState {.inline.} =
   backend.stateValue
 
@@ -140,6 +155,83 @@ proc configurationChangePending*(backend: JackBackend): bool {.inline.} =
 proc realizedPortCount*(backend: JackBackend): int {.inline.} =
   backend.portOwner.registeredPortCount
 
+proc snapshotConnections*(backend: JackBackend):
+    Result[seq[JackConnectionCandidate]] =
+  if backend.stateValue != jbsConfigured or backend.client == nil:
+    return failure[seq[JackConnectionCandidate]](backendError(
+      hekJackPortRegistration,
+      "JACK connections can only be captured from an inactive configured backend",
+      backend, "state=" & $backend.stateValue))
+  var candidates: seq[JackConnectionCandidate]
+  for owned in backend.portOwner.ownedPorts:
+    let ownName = copiedJackName(
+      backend.api.functions.portName(owned.port), backend.portNameSizeValue,
+      hekJackPortRegistration, "JACK returned an invalid realized port name", backend)
+    if not ownName.isOk:
+      return failure[seq[JackConnectionCandidate]](ownName.error)
+    let rawConnections = backend.api.functions.portGetConnections(owned.port)
+    if rawConnections == nil:
+      continue
+    let connections = cast[ptr UncheckedArray[cstring]](rawConnections)
+    var complete = false
+    var invalidPeer = false
+    for index in 0 ..< MaxConnectionsPerPortSnapshot:
+      let rawPeer = connections[index]
+      if rawPeer == nil:
+        complete = true
+        break
+      let peer = copiedJackName(
+        rawPeer, backend.portNameSizeValue, hekJackPortRegistration,
+        "JACK returned an invalid connected port name", backend)
+      if not peer.isOk:
+        invalidPeer = true
+        break
+      candidates.add(JackConnectionCandidate(
+        identity: owned.identity, peerName: peer.value))
+    backend.api.functions.free(cast[pointer](rawConnections))
+    if invalidPeer:
+      return failure[seq[JackConnectionCandidate]](backendError(
+        hekJackPortRegistration, "JACK returned an invalid connected port name", backend))
+    if not complete:
+      return failure[seq[JackConnectionCandidate]](backendError(
+        hekJackPortRegistration, "JACK returned an unterminated connection list",
+        backend, "limit=" & $MaxConnectionsPerPortSnapshot))
+  success(move(candidates))
+
+proc restoreConnections*(backend: var JackBackend;
+                         snapshot: sink seq[JackConnectionCandidate]):
+    Result[JackReconnectionReport] =
+  if backend.stateValue != jbsConfigured or backend.client == nil:
+    return failure[JackReconnectionReport](backendError(
+      hekJackPortRegistration,
+      "JACK connections can only be restored to an inactive configured backend",
+      backend, "state=" & $backend.stateValue))
+  var report: JackReconnectionReport
+  for candidate in snapshot:
+    var replacement: JackPort
+    for owned in backend.portOwner.ownedPorts:
+      if owned.identity == candidate.identity:
+        replacement = owned.port
+        break
+    if replacement == nil:
+      report.lost.add(candidate)
+      continue
+    let ownName = copiedJackName(
+      backend.api.functions.portName(replacement), backend.portNameSizeValue,
+      hekJackPortRegistration, "JACK returned an invalid rebuilt port name", backend)
+    if not ownName.isOk:
+      return failure[JackReconnectionReport](ownName.error)
+    let (sourceName, destinationName) = if candidate.identity.direction == pdInput:
+        (candidate.peerName, ownName.value)
+      else:
+        (ownName.value, candidate.peerName)
+    if backend.api.functions.connect(
+        backend.client, sourceName.cstring, destinationName.cstring) == 0:
+      inc report.restored
+    else:
+      report.lost.add(candidate)
+  success(move(report))
+
 proc notifications*(backend: JackBackend): JackNotificationSnapshot =
   let snapshot = backend.callbackContext.snapshotNotificationState()
   result.shutdownCount = snapshot.shutdownCount
@@ -165,7 +257,7 @@ proc notifications*(backend: JackBackend): JackNotificationSnapshot =
   result.configurationPending = snapshot.configurationPending
 
 proc backendError(kind: HostErrorKind; message: string;
-                  backend: JackBackend; detail = ""): HostError =
+                  backend: JackBackend; detail: string): HostError =
   var context = "client=" & backend.requestedClientName
   if backend.serverNameValue.isSome:
     context.add("; server=" & backend.serverNameValue.get)
@@ -206,6 +298,22 @@ proc formatJackStatus*(status: JackStatus): string =
   let rendered = if names.len == 0: "none" else: names.join(",")
   "status=0x" & toHex(cast[uint32](status), 8).toLowerAscii &
     " [" & rendered & "]"
+
+proc copiedJackName(value: cstring; maximumBytes: int; kind: HostErrorKind;
+                    message: string; backend: JackBackend): Result[string] =
+  if value == nil or maximumBytes <= 1:
+    return failure[string](backendError(kind, message, backend,
+      "port-name-limit=" & $maximumBytes))
+  let bytes = cast[ptr UncheckedArray[char]](value)
+  var length = 0
+  while length < maximumBytes and bytes[length] != '\0':
+    inc length
+  if length == maximumBytes or length == 0:
+    return failure[string](backendError(kind, message, backend,
+      "port-name-limit=" & $maximumBytes))
+  var raw = newString(length)
+  copyMem(addr raw[0], unsafeAddr bytes[0], length)
+  success(raw.replaceInvalidUtf8())
 
 proc copiedClientName(value: cstring; maximumBytes: int;
                       config: JackBackendOpenConfig): Result[string] =
@@ -659,6 +767,32 @@ proc configure*(backend: var JackBackend; plan: PortPlan;
       backend,
     ))
   backend.configureRealized(plan, fpmSilence, endpoint)
+
+proc reconfigure*(backend: var JackBackend; plan: PortPlan;
+                  endpoint: RtProcessEndpoint): Result[Unit] =
+  if backend.stateValue != jbsConfigured or backend.client == nil or
+      backend.callbackContext == nil or endpoint.callback == nil:
+    return failure[Unit](backendError(
+      hekJackPortRegistration, "JACK port rebuild requires an inactive configured backend",
+      backend, "state=" & $backend.stateValue))
+  if not backend.callbackContext.suspendPortMapAccess():
+    return failure[Unit](backendError(
+      hekJackQuiescence, "JACK callbacks did not quiesce for a port rebuild", backend))
+  var released = backend.portOwner.unregisterOwnedPorts(
+    backend.api.functions, backend.client, backend.actualClientNameValue)
+  if not released.isOk:
+    let cleanup = backend.close()
+    if not cleanup.isOk:
+      return failure[Unit](appendPrimary(cleanup.error, released.error))
+    return released
+  backend.stateValue = jbsOpen
+  var configured = backend.configureRealized(plan, fpmSilence, endpoint)
+  if configured.isOk:
+    return configured
+  let cleanup = backend.close()
+  if not cleanup.isOk:
+    return failure[Unit](appendPrimary(cleanup.error, configured.error))
+  configured
 
 proc pluginLatency*(backend: JackBackend): uint32 =
   if backend.callbackContext == nil:
