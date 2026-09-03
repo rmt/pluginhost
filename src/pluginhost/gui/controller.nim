@@ -168,6 +168,9 @@ proc validateSize(size: GuiSize): bool {.inline.} =
   size.width > 0'u32 and size.height > 0'u32 and
     size.width <= uint32(high(int32)) and size.height <= uint32(high(int32))
 
+proc sameSize(a, b: GuiSize): bool {.inline.} =
+  a.width == b.width and a.height == b.height
+
 proc ensureCreated*(controller: GuiController): Result[Unit] =
   if controller == nil:
     return failure[Unit](controllerError("GUI controller is not initialized"))
@@ -460,30 +463,35 @@ proc handleWindowEvents*(controller: GuiController;
                              height: polled.value.event.height)
       if not validateSize(incoming):
         continue
+      if controller.hasPendingHostSize and
+          sameSize(controller.pendingHostSize, incoming):
+        controller.hasPendingHostSize = false
+        controller.sizeValue = incoming
+        continue
+      if sameSize(controller.sizeValue, incoming):
+        continue
+
+      controller.hasPendingHostSize = false
       controller.sizeValue = incoming
-      if controller.modeValue == gmEmbedded and controller.pluginCreated:
-        if controller.hasPendingHostSize and
-            controller.pendingHostSize.width == incoming.width and
-            controller.pendingHostSize.height == incoming.height:
-          controller.hasPendingHostSize = false
-        elif controller.canResizeValue:
-          var adjusted = incoming
-          var adjustedResult = controller.plugin.adjustSize(adjusted)
-          if not adjustedResult.isOk:
-            return failure[Unit](move(adjustedResult.error))
-          if adjustedResult.value:
-            let resized = controller.window.resize(adjusted.width, adjusted.height)
-            if not resized.isOk:
-              return resized
-            controller.pendingHostSize = adjusted
-            controller.hasPendingHostSize = true
-            controller.sizeValue = adjusted
-          var accepted = controller.plugin.setSize(adjusted)
-          if not accepted.isOk:
-            return failure[Unit](move(accepted.error))
-          if not accepted.value:
-            return failure[Unit](controllerError(
-              "CLAP plugin rejected the host-requested GUI size"))
+      if controller.modeValue == gmEmbedded and controller.pluginCreated and
+          controller.canResizeValue:
+        var adjusted = incoming
+        var adjustedResult = controller.plugin.adjustSize(adjusted)
+        if not adjustedResult.isOk:
+          return failure[Unit](move(adjustedResult.error))
+        if adjustedResult.value and not sameSize(adjusted, incoming):
+          let resized = controller.window.resize(adjusted.width, adjusted.height)
+          if not resized.isOk:
+            return resized
+          controller.pendingHostSize = adjusted
+          controller.hasPendingHostSize = true
+          controller.sizeValue = adjusted
+        var accepted = controller.plugin.setSize(adjusted)
+        if not accepted.isOk:
+          return failure[Unit](move(accepted.error))
+        if not accepted.value:
+          return failure[Unit](controllerError(
+            "CLAP plugin rejected the host-requested GUI size"))
     of wekMap:
       if controller.stateValue != gcsHidden:
         controller.stateValue = gcsVisible

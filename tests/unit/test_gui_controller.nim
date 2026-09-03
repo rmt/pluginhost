@@ -19,6 +19,9 @@ type
     showCount: int
     hideCount: int
     setSizeCount: int
+    adjustSizeCount: int
+    adjustReturns: bool
+    adjustedSize: GuiSize
     scaleCount: int
 
   FakeWindowBackend = ref object of WindowHostBackend
@@ -78,9 +81,10 @@ method getResizeHints*(client: FakeGuiClient;
 
 method adjustSize*(client: FakeGuiClient; size: var GuiSize): Result[bool] {.
     raises: [].} =
-  discard client
-  discard size
-  success(false)
+  inc client.adjustSizeCount
+  if client.adjustedSize.width > 0'u32 and client.adjustedSize.height > 0'u32:
+    size = client.adjustedSize
+  success(client.adjustReturns)
 
 method setSize*(client: FakeGuiClient; size: GuiSize): Result[bool] {.
     raises: [].} =
@@ -171,6 +175,16 @@ method handle*(backend: FakeWindowBackend): GuiWindowHandle {.raises: [].} =
   discard backend
   GuiWindowHandle(api: gwaX11, id: 42)
 
+proc dispatchWindowEvent(reactor: var MainReactor; controller: GuiController;
+                         backend: FakeWindowBackend; event: WindowEvent) =
+  backend.hasEvent = true
+  backend.pendingEvent = WindowPollResult(available: true, event: event)
+  var byte = 'x'
+  check posix.write(backend.writeFd, addr byte, 1) == 1
+  var events = reactor.wait(monotonicNanos(50_000_000))
+  require events.isOk
+  check controller.handleWindowEvents(events.value).isOk
+
 proc openTestReactor(): MainReactor =
   var driver = linux_reactor.openLinuxReactorDriver()
   doAssert driver.isOk
@@ -247,6 +261,53 @@ suite "GUI controller policy and lifecycle":
     check controller.close().isOk
     check plugin.hideCount == 1
     check plugin.destroyCount == 2
+
+  test "position-only ConfigureNotify events do not renegotiate plugin size":
+    var reactor = openTestReactor()
+    var plugin = newFakeGui()
+    var produced: FakeWindowBackend
+    let factory: WindowHostFactory = proc(): WindowHostBackend =
+      produced = newFakeWindow()
+      produced
+    var controller = newGuiController(plugin, addr reactor, factory, "test")
+    defer:
+      check controller.close().isOk
+      check reactor.close().isOk
+
+    check controller.start(false).isOk
+    let initialResizeCount = produced.resizeCount
+    let sameSize = WindowEvent(kind: wekConfigure, width: 400, height: 300)
+    dispatchWindowEvent(reactor, controller, produced, sameSize)
+    dispatchWindowEvent(reactor, controller, produced, sameSize)
+
+    check plugin.adjustSizeCount == 0
+    check plugin.setSizeCount == 0
+    check produced.resizeCount == initialResizeCount
+    check controller.size == GuiSize(width: 400, height: 300)
+
+  test "real ConfigureNotify size changes still notify the plugin":
+    var reactor = openTestReactor()
+    var plugin = newFakeGui()
+    plugin.adjustReturns = true
+    var produced: FakeWindowBackend
+    let factory: WindowHostFactory = proc(): WindowHostBackend =
+      produced = newFakeWindow()
+      produced
+    var controller = newGuiController(plugin, addr reactor, factory, "test")
+    defer:
+      check controller.close().isOk
+      check reactor.close().isOk
+
+    check controller.start(false).isOk
+    let initialResizeCount = produced.resizeCount
+    dispatchWindowEvent(reactor, controller, produced,
+      WindowEvent(kind: wekConfigure, width: 512, height: 384))
+
+    check plugin.adjustSizeCount == 1
+    check plugin.setSizeCount == 1
+    check plugin.sizeValue == GuiSize(width: 512, height: 384)
+    check produced.resizeCount == initialResizeCount
+    check controller.size == GuiSize(width: 512, height: 384)
 
   test "plugin-owned GUI destruction releases the host surface without double destroy":
     var reactor = openTestReactor()
