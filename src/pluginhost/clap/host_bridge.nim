@@ -12,6 +12,11 @@ const
   ClapRequestProcess* = 1'u32 shl 1
   ClapRequestCallback* = 1'u32 shl 2
   ClapRequestFlush* = 1'u32 shl 3
+  ClapGuiRequestShow = 1'u32 shl 0
+  ClapGuiRequestHide = 1'u32 shl 1
+  ClapGuiRequestResize = 1'u32 shl 2
+  ClapGuiRequestResizeHints = 1'u32 shl 3
+  ClapGuiRequestClosed = 1'u32 shl 4
 
 
 type
@@ -37,6 +42,11 @@ type
     droppedLogs: ptr RtAtomicU64
     logExtension: ptr ClapHostLog
     stateExtension: ptr ClapHostState
+    guiExtension: ptr ClapHostGui
+    guiEnabled: ptr bool
+    guiRequests: ptr RtAtomicU32
+    guiResize: ptr RtAtomicU64
+    guiClosedDestroyed: ptr RtAtomicU32
     paramsExtension: ptr ClapHostParams
     audioPortsExtension: ptr ClapHostAudioPorts
     notePortsExtension: ptr ClapHostNotePorts
@@ -66,6 +76,11 @@ type
     timerExtension: ClapHostTimerSupport
     posixFdExtension: ClapHostPosixFdSupport
     threadCheckExtension: ClapHostThreadCheck
+    guiExtension: ClapHostGui
+    guiEnabled: bool
+    guiRequests: RtAtomicU32
+    guiResize: RtAtomicU64
+    guiClosedDestroyed: RtAtomicU32
     callbackData: HostCallbackData
     requests: RtAtomicU32
     droppedLogs: RtAtomicU64
@@ -181,6 +196,9 @@ proc hostGetExtension(host: ptr ClapHost; extensionId: cstring): pointer {.
   if cstringEquals(extensionId, ClapExtPosixFdSupport.cstring) and
       data.mainServices.isComplete:
     return cast[pointer](data.posixFdExtension)
+  if cstringEquals(extensionId, ClapExtGui.cstring) and data.guiEnabled != nil and
+      data.guiEnabled[]:
+    return cast[pointer](data.guiExtension)
   if cstringEquals(extensionId, ClapExtThreadCheck.cstring):
     return cast[pointer](data.threadCheckExtension)
   nil
@@ -254,6 +272,59 @@ proc hostLatencyChanged(host: ptr ClapHost) {.
   if data != nil and data.latencyChanged != nil and
       pthread_equal(pthread_self(), data.mainThread) != 0:
     data.latencyChanged[].storeRelease(1'u32)
+
+proc guiCallbackEnabled(data: ptr HostCallbackData): bool {.inline, gcsafe, raises: [].} =
+  data != nil and data.guiEnabled != nil and data.guiEnabled[] and
+    data.guiRequests != nil and data.guiResize != nil and
+    data.guiClosedDestroyed != nil
+
+proc hostGuiResizeHintsChanged(host: ptr ClapHost) {.
+    exportc: "pluginhost_clap_host_gui_resize_hints_changed", cdecl, gcsafe,
+    raises: [].} =
+  let data = callbackData(host)
+  if guiCallbackEnabled(data):
+    discard data.guiRequests[].fetchOrRelease(ClapGuiRequestResizeHints)
+
+proc validGuiDimension(value: uint32): bool {.inline, gcsafe, raises: [].} =
+  value > 0'u32 and value <= uint32(high(int32))
+
+proc hostGuiRequestResize(host: ptr ClapHost; width, height: uint32): bool {.
+    exportc: "pluginhost_clap_host_gui_request_resize", cdecl, gcsafe,
+    raises: [].} =
+  let data = callbackData(host)
+  if not guiCallbackEnabled(data) or not validGuiDimension(width) or
+      not validGuiDimension(height):
+    return false
+  data.guiResize[].storeRelease((uint64(width) shl 32) or uint64(height))
+  discard data.guiRequests[].fetchOrRelease(ClapGuiRequestResize)
+  true
+
+proc hostGuiRequestShow(host: ptr ClapHost): bool {.
+    exportc: "pluginhost_clap_host_gui_request_show", cdecl, gcsafe,
+    raises: [].} =
+  let data = callbackData(host)
+  if not guiCallbackEnabled(data):
+    return false
+  discard data.guiRequests[].fetchOrRelease(ClapGuiRequestShow)
+  true
+
+proc hostGuiRequestHide(host: ptr ClapHost): bool {.
+    exportc: "pluginhost_clap_host_gui_request_hide", cdecl, gcsafe,
+    raises: [].} =
+  let data = callbackData(host)
+  if not guiCallbackEnabled(data):
+    return false
+  discard data.guiRequests[].fetchOrRelease(ClapGuiRequestHide)
+  true
+
+proc hostGuiClosed(host: ptr ClapHost; wasDestroyed: bool) {.
+    exportc: "pluginhost_clap_host_gui_closed", cdecl, gcsafe, raises: [].} =
+  let data = callbackData(host)
+  if not guiCallbackEnabled(data):
+    return
+  if wasDestroyed:
+    discard data.guiClosedDestroyed[].fetchOrRelease(1'u32)
+  discard data.guiRequests[].fetchOrRelease(ClapGuiRequestClosed)
 
 const
   ClapAudioPortsRescanKnown = ClapAudioPortsRescanNames or
@@ -372,13 +443,18 @@ proc hostUnregisterFd(host: ptr ClapHost; fd: cint): bool {.
 
 {.pop.}
 
-proc newClapHostBridge*(mainServices: ptr ClapMainThreadServices = nil): ClapHostBridge =
+proc newClapHostBridge*(mainServices: ptr ClapMainThreadServices = nil;
+                       guiEnabled = false): ClapHostBridge =
   new(result)
   result.name = ProductName
   result.vendor = ProductName
   result.url = ""
   result.version = Version
   result.requests.storeRelaxed(0'u32)
+  result.guiEnabled = guiEnabled
+  result.guiRequests.storeRelaxed(0'u32)
+  result.guiResize.storeRelaxed(0'u64)
+  result.guiClosedDestroyed.storeRelaxed(0'u32)
   result.droppedLogs.storeRelaxed(0'u64)
   result.stateDirty.storeRelaxed(0'u32)
   result.latencyChanged.storeRelaxed(0'u32)
@@ -390,6 +466,11 @@ proc newClapHostBridge*(mainServices: ptr ClapMainThreadServices = nil): ClapHos
   result.audioRoleAddress.storeRelaxed(0'u64)
   result.logs.initLogQueue()
   result.callbackData.requests = addr result.requests
+  result.callbackData.guiExtension = addr result.guiExtension
+  result.callbackData.guiEnabled = addr result.guiEnabled
+  result.callbackData.guiRequests = addr result.guiRequests
+  result.callbackData.guiResize = addr result.guiResize
+  result.callbackData.guiClosedDestroyed = addr result.guiClosedDestroyed
   result.callbackData.logs = addr result.logs
   result.callbackData.droppedLogs = addr result.droppedLogs
   result.callbackData.stateDirty = addr result.stateDirty
@@ -422,6 +503,13 @@ proc newClapHostBridge*(mainServices: ptr ClapMainThreadServices = nil): ClapHos
   result.threadCheckExtension = ClapHostThreadCheck(
     isMainThread: hostIsMainThread,
     isAudioThread: hostIsAudioThread,
+  )
+  result.guiExtension = ClapHostGui(
+    resizeHintsChanged: hostGuiResizeHintsChanged,
+    requestResize: hostGuiRequestResize,
+    requestShow: hostGuiRequestShow,
+    requestHide: hostGuiRequestHide,
+    closed: hostGuiClosed,
   )
   result.callbackData.logExtension = addr result.logExtension
   result.callbackData.stateExtension = addr result.stateExtension
@@ -477,6 +565,33 @@ proc takeRequests*(bridge: ClapHostBridge): uint32 {.gcsafe, raises: [].} =
   if bridge == nil:
     return 0'u32
   bridge.requests.exchangeAcquire(0'u32)
+
+type
+  ClapGuiRequests* = object
+    show*: bool
+    hide*: bool
+    resize*: bool
+    resizeHints*: bool
+    closed*: bool
+    wasDestroyed*: bool
+    width*: uint32
+    height*: uint32
+
+proc takeGuiRequests*(bridge: ClapHostBridge): ClapGuiRequests {.gcsafe, raises: [].} =
+  if bridge == nil:
+    return
+  let requests = bridge.guiRequests.exchangeAcquire(0'u32)
+  result.show = (requests and ClapGuiRequestShow) != 0'u32
+  result.hide = (requests and ClapGuiRequestHide) != 0'u32
+  result.resize = (requests and ClapGuiRequestResize) != 0'u32
+  result.resizeHints = (requests and ClapGuiRequestResizeHints) != 0'u32
+  result.closed = (requests and ClapGuiRequestClosed) != 0'u32
+  if result.resize:
+    let packed = bridge.guiResize.loadAcquire()
+    result.width = uint32(packed shr 32)
+    result.height = uint32(packed and 0xffff_ffff'u64)
+  if result.closed:
+    result.wasDestroyed = bridge.guiClosedDestroyed.exchangeAcquire(0'u32) != 0'u32
 
 proc tryPopLog*(bridge: ClapHostBridge;
                 record: var ClapHostLogRecord): bool {.gcsafe, raises: [].} =

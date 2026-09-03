@@ -227,25 +227,30 @@ The JACK callback reaches it through a non-capturing `{.cdecl.}` trampoline. The
 
 Responsibilities:
 
-- Negotiate embedded/floating X11 and floating Wayland-compatible modes.
-- Maintain the GUI state machine.
-- Create/destroy the host window through a `WindowHost` adapter.
-- Execute the CLAP GUI creation and size/parent/show/hide sequence.
-- Translate CLAP host GUI callbacks into main-thread actions.
-- Register display FDs and process window events through `MainReactor`.
+- Negotiate embedded X11 first and supported floating X11 second.
+- Maintain the GUI state machine independently of audio activation.
+- Create/destroy the host window through a `WindowHostBackend` adapter.
+- Execute the checked CLAP GUI creation, scale, size, parent/transient,
+  show/hide, and destroy sequence.
+- Translate bounded CLAP host GUI requests into main-thread actions.
+- Register the display FD and process window events through `MainReactor`.
 
-Initial concrete window adapters:
+The controller depends on `GuiPluginClient` rather than raw CLAP GUI pointers and
+on `WindowHostBackend` rather than X11 declarations. This keeps policy unit-testable
+with fake plugin/window clients while the production path uses `ClapGuiClient`,
+`X11WindowBackend`, and the dynamically loaded `X11WindowHost`.
 
-- `X11WindowHost` for XEmbed and floating-X11 parent/transient support.
-- `PluginFloatingWindowHost` for a plugin-owned floating GUI that requires no embedded host surface.
+The host bridge exposes `clap.gui` only when GUI hosting is enabled. GUI callback
+bits, packed resize dimensions, and plugin-owned close state are atomically
+coalesced; callbacks never call CLAP or Xlib policy directly. A bounded main-loop
+turn drains those requests and X11 events. WM close releases the host surface for
+recreation, while `clap_host_gui.closed(true)` causes one host-side
+`clap_plugin_gui.destroy()` acknowledgement before the surface is released.
 
-Increment 10A implements only the X11 window-host spike. `platform/x11/ffi.nim` is a
-declaration-only event/API boundary, `api.nim` owns the dynamically loaded Xlib
-procedure table, and `window_host.nim` owns the display, top-level parent surface, WM
-atoms, connection FD, and window lifecycle. It is not yet a `GuiController`: no CLAP
-GUI extension is advertised and no plugin window is parented.
-
-A future native Wayland host can be added as another adapter without changing session or CLAP lifecycle code. Native Wayland embedding remains impossible under the current stable CLAP contract.
+Increment 10A established the X11 declaration/API/window ownership boundary.
+Increment 10B connects it to CLAP and the session. Native Wayland remains deferred;
+the stable CLAP contract permits only floating Wayland and no native embedded path in
+this design.
 
 ### 5.7 `MainReactor`
 

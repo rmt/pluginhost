@@ -17,6 +17,7 @@
 #include <clap/ext/log.h>
 #include <clap/ext/thread-check.h>
 #include <clap/plugin.h>
+#include <clap/ext/gui.h>
 #include <clap/process.h>
 #include <clap/version.h>
 
@@ -157,6 +158,54 @@ ABI_ASSERT_FIELD(clap_host_params_t, clear,
 ABI_ASSERT_FIELD(clap_host_params_t, request_flush,
                  void(CLAP_ABI *)(const clap_host_t *));
 
+ABI_ASSERT_FIELD(clap_window_t, api, const char *);
+ABI_ASSERT_FIELD(clap_window_t, x11, clap_xwnd);
+ABI_ASSERT_FIELD(clap_gui_resize_hints_t, can_resize_horizontally, bool);
+ABI_ASSERT_FIELD(clap_gui_resize_hints_t, can_resize_vertically, bool);
+ABI_ASSERT_FIELD(clap_gui_resize_hints_t, preserve_aspect_ratio, bool);
+ABI_ASSERT_FIELD(clap_gui_resize_hints_t, aspect_ratio_width, uint32_t);
+ABI_ASSERT_FIELD(clap_gui_resize_hints_t, aspect_ratio_height, uint32_t);
+ABI_ASSERT_FIELD(clap_plugin_gui_t, is_api_supported,
+                  bool(CLAP_ABI *)(const clap_plugin_t *, const char *, bool));
+ABI_ASSERT_FIELD(clap_plugin_gui_t, get_preferred_api,
+                  bool(CLAP_ABI *)(const clap_plugin_t *, const char **, bool *));
+ABI_ASSERT_FIELD(clap_plugin_gui_t, create,
+                  bool(CLAP_ABI *)(const clap_plugin_t *, const char *, bool));
+ABI_ASSERT_FIELD(clap_plugin_gui_t, destroy,
+                  void(CLAP_ABI *)(const clap_plugin_t *));
+ABI_ASSERT_FIELD(clap_plugin_gui_t, set_scale,
+                  bool(CLAP_ABI *)(const clap_plugin_t *, double));
+ABI_ASSERT_FIELD(clap_plugin_gui_t, get_size,
+                  bool(CLAP_ABI *)(const clap_plugin_t *, uint32_t *, uint32_t *));
+ABI_ASSERT_FIELD(clap_plugin_gui_t, can_resize,
+                  bool(CLAP_ABI *)(const clap_plugin_t *));
+ABI_ASSERT_FIELD(clap_plugin_gui_t, get_resize_hints,
+                  bool(CLAP_ABI *)(const clap_plugin_t *, clap_gui_resize_hints_t *));
+ABI_ASSERT_FIELD(clap_plugin_gui_t, adjust_size,
+                  bool(CLAP_ABI *)(const clap_plugin_t *, uint32_t *, uint32_t *));
+ABI_ASSERT_FIELD(clap_plugin_gui_t, set_size,
+                  bool(CLAP_ABI *)(const clap_plugin_t *, uint32_t, uint32_t));
+ABI_ASSERT_FIELD(clap_plugin_gui_t, set_parent,
+                  bool(CLAP_ABI *)(const clap_plugin_t *, const clap_window_t *));
+ABI_ASSERT_FIELD(clap_plugin_gui_t, set_transient,
+                  bool(CLAP_ABI *)(const clap_plugin_t *, const clap_window_t *));
+ABI_ASSERT_FIELD(clap_plugin_gui_t, suggest_title,
+                  void(CLAP_ABI *)(const clap_plugin_t *, const char *));
+ABI_ASSERT_FIELD(clap_plugin_gui_t, show,
+                  bool(CLAP_ABI *)(const clap_plugin_t *));
+ABI_ASSERT_FIELD(clap_plugin_gui_t, hide,
+                  bool(CLAP_ABI *)(const clap_plugin_t *));
+ABI_ASSERT_FIELD(clap_host_gui_t, resize_hints_changed,
+                  void(CLAP_ABI *)(const clap_host_t *));
+ABI_ASSERT_FIELD(clap_host_gui_t, request_resize,
+                  bool(CLAP_ABI *)(const clap_host_t *, uint32_t, uint32_t));
+ABI_ASSERT_FIELD(clap_host_gui_t, request_show,
+                  bool(CLAP_ABI *)(const clap_host_t *));
+ABI_ASSERT_FIELD(clap_host_gui_t, request_hide,
+                  bool(CLAP_ABI *)(const clap_host_t *));
+ABI_ASSERT_FIELD(clap_host_gui_t, closed,
+                  void(CLAP_ABI *)(const clap_host_t *, bool));
+
 /* JACK callback and function signatures used by the raw module. */
 _Static_assert(__builtin_types_compatible_p(JackProcessCallback,
                                              int (*)(jack_nframes_t, void *)),
@@ -288,6 +337,10 @@ uint64_t pluginhost_abi_size(int32_t type_id) {
       ABI_TYPE_CASE(47, clap_istream_t);
       ABI_TYPE_CASE(48, clap_ostream_t);
       ABI_TYPE_CASE(49, clap_plugin_state_t);
+      ABI_TYPE_CASE(50, clap_window_t);
+      ABI_TYPE_CASE(51, clap_gui_resize_hints_t);
+      ABI_TYPE_CASE(52, clap_plugin_gui_t);
+      ABI_TYPE_CASE(53, clap_host_gui_t);
       ABI_TYPE_CASE(27, clap_id);
       ABI_TYPE_CASE(28, clap_beattime);
       ABI_TYPE_CASE(29, clap_sectime);
@@ -362,6 +415,10 @@ uint64_t pluginhost_abi_align(int32_t type_id) {
       ABI_ALIGN_CASE(47, clap_istream_t);
       ABI_ALIGN_CASE(48, clap_ostream_t);
       ABI_ALIGN_CASE(49, clap_plugin_state_t);
+      ABI_ALIGN_CASE(50, clap_window_t);
+      ABI_ALIGN_CASE(51, clap_gui_resize_hints_t);
+      ABI_ALIGN_CASE(52, clap_plugin_gui_t);
+      ABI_ALIGN_CASE(53, clap_host_gui_t);
       ABI_ALIGN_CASE(27, clap_id);
       ABI_ALIGN_CASE(28, clap_beattime);
       ABI_ALIGN_CASE(29, clap_sectime);
@@ -570,6 +627,33 @@ uint64_t pluginhost_abi_offset(int32_t field_id) {
       ABI_FIELD_CASE(48, 2, clap_ostream_t, write);
       ABI_FIELD_CASE(49, 1, clap_plugin_state_t, save);
       ABI_FIELD_CASE(49, 2, clap_plugin_state_t, load);
+      ABI_FIELD_CASE(50, 1, clap_window_t, api);
+      ABI_FIELD_CASE(50, 2, clap_window_t, x11);
+      ABI_FIELD_CASE(51, 1, clap_gui_resize_hints_t, can_resize_horizontally);
+      ABI_FIELD_CASE(51, 2, clap_gui_resize_hints_t, can_resize_vertically);
+      ABI_FIELD_CASE(51, 3, clap_gui_resize_hints_t, preserve_aspect_ratio);
+      ABI_FIELD_CASE(51, 4, clap_gui_resize_hints_t, aspect_ratio_width);
+      ABI_FIELD_CASE(51, 5, clap_gui_resize_hints_t, aspect_ratio_height);
+      ABI_FIELD_CASE(52, 1, clap_plugin_gui_t, is_api_supported);
+      ABI_FIELD_CASE(52, 2, clap_plugin_gui_t, get_preferred_api);
+      ABI_FIELD_CASE(52, 3, clap_plugin_gui_t, create);
+      ABI_FIELD_CASE(52, 4, clap_plugin_gui_t, destroy);
+      ABI_FIELD_CASE(52, 5, clap_plugin_gui_t, set_scale);
+      ABI_FIELD_CASE(52, 6, clap_plugin_gui_t, get_size);
+      ABI_FIELD_CASE(52, 7, clap_plugin_gui_t, can_resize);
+      ABI_FIELD_CASE(52, 8, clap_plugin_gui_t, get_resize_hints);
+      ABI_FIELD_CASE(52, 9, clap_plugin_gui_t, adjust_size);
+      ABI_FIELD_CASE(52, 10, clap_plugin_gui_t, set_size);
+      ABI_FIELD_CASE(52, 11, clap_plugin_gui_t, set_parent);
+      ABI_FIELD_CASE(52, 12, clap_plugin_gui_t, set_transient);
+      ABI_FIELD_CASE(52, 13, clap_plugin_gui_t, suggest_title);
+      ABI_FIELD_CASE(52, 14, clap_plugin_gui_t, show);
+      ABI_FIELD_CASE(52, 15, clap_plugin_gui_t, hide);
+      ABI_FIELD_CASE(53, 1, clap_host_gui_t, resize_hints_changed);
+      ABI_FIELD_CASE(53, 2, clap_host_gui_t, request_resize);
+      ABI_FIELD_CASE(53, 3, clap_host_gui_t, request_show);
+      ABI_FIELD_CASE(53, 4, clap_host_gui_t, request_hide);
+      ABI_FIELD_CASE(53, 5, clap_host_gui_t, closed);
       ABI_FIELD_CASE(109, 1, jack_latency_range_t, min);
       ABI_FIELD_CASE(109, 2, jack_latency_range_t, max);
       ABI_FIELD_CASE(110, 1, jack_midi_event_t, time);
@@ -716,6 +800,8 @@ const char *pluginhost_abi_string(int32_t string_id) {
       case 11: return CLAP_EXT_TIMER_SUPPORT;
       case 12: return CLAP_EXT_POSIX_FD_SUPPORT;
       case 13: return CLAP_EXT_PARAMS;
+      case 14: return CLAP_EXT_GUI;
+      case 15: return CLAP_WINDOW_API_X11;
       case 101: return JACK_DEFAULT_AUDIO_TYPE;
       case 102: return JACK_DEFAULT_MIDI_TYPE;
       default: return NULL;

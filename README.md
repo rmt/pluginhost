@@ -2,7 +2,7 @@
 
 `pluginhost` is an in-progress standalone Linux JACK host for native CLAP plugins, implemented in Nim. Its intended role is similar to `carla-single`, with one plugin instance and one JACK client per process.
 
-The current development version is **0.0.10-dev**. The implementation includes checked CLAP ownership/catalog/lifecycle, human/JSON `list` and recursive `scan`, grouped zero-copy JACK audio, and a fixed-capacity sample-accurate JACK MIDI/CLAP event bridge. The canonical public command runs one plugin headlessly under an `epoll`/`signalfd` main reactor, handles orderly signals and JACK/process failures, services CLAP main-thread callbacks plus generation-safe plugin timers and POSIX FDs, reflects plugin latency through JACK, tracks dirty-state notification, handles bounded CLAP parameter output/rescans, sleep/wake requests, and safe restart/port rebuild requests, and owns an optional atomic PID file. It loads requested CLAP state before audio configuration and atomically saves requested state on clean signal shutdown. Increment 10A now provides an independently tested, dynamically loaded Xlib window-host spike; CLAP GUI negotiation and plugin parenting remain unavailable.
+The current development version is **0.0.10-dev**. The implementation includes checked CLAP ownership/catalog/lifecycle, human/JSON `list` and recursive `scan`, grouped zero-copy JACK audio, and a fixed-capacity sample-accurate JACK MIDI/CLAP event bridge. The canonical public command runs one plugin instance as one JACK client under an `epoll`/`signalfd` main reactor, handles orderly signals and JACK/process failures, services CLAP main-thread callbacks plus generation-safe plugin timers and POSIX FDs, reflects plugin latency through JACK, tracks dirty-state notification, handles bounded CLAP parameter output/rescans, sleep/wake requests, and safe restart/port rebuild requests, and owns an optional atomic PID file. It loads requested CLAP state before audio configuration and atomically saves requested state on clean signal shutdown. Increment 10B now negotiates CLAP GUI extensions through the dynamically loaded X11/XEmbed window host, supports embedded/floating fallback, show/hide/recreate, plugin resize requests, GUI signals, and `--no-gui`/`--require-gui` policy without entering the JACK process path.
 
 ## Build
 
@@ -45,12 +45,9 @@ has no transitive package dependencies, and is used only in the non-real-time
 control plane.
 
 `nimble testAbi` verifies the handwritten raw bindings against the vendored
-official CLAP 1.2.10 headers, the installed JACK development headers, and the
-installed Xlib event layouts. It also checks missing-library/symbol rollback and
-runtime calls through the owned JACK procedure table. `nimble testGui` compiles
-the independent X11 window-host/reactor test and runs it under a disposable
-Xvfb server; it does not instantiate a CLAP GUI. The complete CLAP header tree is
-preserved under `vendor/clap/`
+official CLAP 1.2.10 headers, the installed JACK development headers, and the installed Xlib event layouts. It also checks missing-library/symbol rollback and
+runtime calls through the owned JACK procedure table. `nimble testGui` compiles an independently built CLAP GUI fixture and the X11 window-host/controller test, then runs them under a disposable
+Xvfb server. The complete CLAP header tree is preserved under `vendor/clap/`
 with its MIT license and exact upstream provenance. Draft headers are vendored
 unchanged but are not part of pluginhost's bound or supported ABI surface.
 
@@ -58,7 +55,7 @@ unchanged but are not part of pluginhost's bound or supported ABI surface.
 statuses, callback registration, transactional ports, quiescence, role exclusivity, and
 fake silence/copy/deterministic processing without requiring a JACK server.
 
-`nimble testFixtures` independently compiles synthetic CLAP libraries and checks entry/factory ownership, descriptor validation, instance cleanup, bounded CLAP state load/save and rollback, deactivated port inspection, render negotiation, internal grouped float32 audio, fixed-capacity event/parameter translation, sleep/wake, main-thread timer/FD/dirty/latency services, restart/rescan rebuild, and compatible JACK reconnection/loss reporting. Event cases cover global ordering, equal timestamps, raw MIDI/SysEx lifetime, CLAP-only note conversion, malformed events, exact capacity, output reserve failure, recovery, and MIDI2-only rejection.
+`nimble testFixtures` independently compiles synthetic CLAP libraries and checks entry/factory ownership, descriptor validation, instance cleanup, bounded CLAP state load/save and rollback, deactivated port inspection, render negotiation, internal grouped float32 audio, fixed-capacity event/parameter translation, CLAP GUI call order/policy, sleep/wake, main-thread timer/FD/dirty/latency services, restart/rescan rebuild, and compatible JACK reconnection/loss reporting. Event cases cover global ordering, equal timestamps, raw MIDI/SysEx lifetime, CLAP-only note conversion, malformed events, exact capacity, output reserve failure, recovery, and MIDI2-only rejection.
 
 All builds share `--mm:arc --threads:on --panics:on -d:noSignalHandler` through
 `config.nims`. Foreign callbacks additionally disable checks and trace setup locally
@@ -113,13 +110,9 @@ plugin instance. `scan` recursively discovers canonical `.clap` files, continues
 past per-root and per-candidate failures, reports successful descriptors, and uses
 exit status 3 when any issue occurred. Relative explicit/`CLAP_PATH` roots resolve
 from the current working directory; environment values do not expand `~`.
-The canonical path-only command runs headlessly. `SIGINT` and `SIGTERM` request clean
-shutdown; `SIGUSR1` and `SIGUSR2` are safely consumed but only warn until CLAP GUI
-hosting lands. `--pid-file` atomically publishes the running PID and removes only the
-entry the process owns. Default/show/hidden GUI policies warn and fall back to headless
-operation; `--require-gui` and `--gui-scale` fail explicitly until CLAP GUI hosting lands.
-The 10A X11 window host is an internal spike exercised by `testGui`, not a CLI GUI
-feature. `--load-state`
+The canonical path-only command runs one plugin instance as one JACK client. `SIGINT` and `SIGTERM` request clean
+shutdown; `SIGUSR1` shows and `SIGUSR2` hides the GUI when enabled, while `--no-gui` retains a rate-limited disabled-GUI warning. `--pid-file` atomically publishes the running PID and removes only the entry the process owns. By default the host attempts an embedded X11 GUI, falls back to floating X11 when supported, and otherwise warns and continues headlessly; `--hide-gui` creates it hidden, `--require-gui` makes failure fatal, and `--gui-scale` requests a positive scale.
+The 10B GUI path is main-thread-only and does not enter JACK processing. `--load-state`
 loads state before audio configuration. `--save-state` saves after JACK/CLAP processing is
 quiesced during clean `SIGINT`/`SIGTERM` shutdown; it writes a mode-0600 same-directory
 temporary, synchronizes it, and atomically renames it over the destination. Each CLAP

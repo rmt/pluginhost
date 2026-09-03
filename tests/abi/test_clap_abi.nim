@@ -102,6 +102,8 @@ suite "CLAP raw ABI":
     check $abiString(11) == ClapExtTimerSupport
     check $abiString(12) == ClapExtPosixFdSupport
     check $abiString(13) == ClapExtParams
+    check $abiString(14) == ClapExtGui
+    check $abiString(15) == ClapWindowApiX11
 
   test "structure sizes and alignments match the official headers":
     checkLayout(ClapVersion, 1)
@@ -146,6 +148,10 @@ suite "CLAP raw ABI":
     checkLayout(ClapIStream, 47)
     checkLayout(ClapOStream, 48)
     checkLayout(ClapPluginState, 49)
+    checkLayout(ClapWindow, 50)
+    checkLayout(ClapGuiResizeHints, 51)
+    checkLayout(ClapPluginGui, 52)
+    checkLayout(ClapHostGui, 53)
 
   test "event field offsets match the official headers":
     checkField(ClapVersion, major, 1, 1)
@@ -236,6 +242,35 @@ suite "CLAP raw ABI":
     checkField(ClapOStream, write, 48, 2)
     checkField(ClapPluginState, save, 49, 1)
     checkField(ClapPluginState, load, 49, 2)
+
+  test "GUI extension offsets match the official headers":
+    checkField(ClapWindow, api, 50, 1)
+    checkField(ClapWindow, x11, 50, 2)
+    checkField(ClapGuiResizeHints, canResizeHorizontally, 51, 1)
+    checkField(ClapGuiResizeHints, canResizeVertically, 51, 2)
+    checkField(ClapGuiResizeHints, preserveAspectRatio, 51, 3)
+    checkField(ClapGuiResizeHints, aspectRatioWidth, 51, 4)
+    checkField(ClapGuiResizeHints, aspectRatioHeight, 51, 5)
+    checkField(ClapPluginGui, isApiSupported, 52, 1)
+    checkField(ClapPluginGui, getPreferredApi, 52, 2)
+    checkField(ClapPluginGui, create, 52, 3)
+    checkField(ClapPluginGui, destroy, 52, 4)
+    checkField(ClapPluginGui, setScale, 52, 5)
+    checkField(ClapPluginGui, getSize, 52, 6)
+    checkField(ClapPluginGui, canResize, 52, 7)
+    checkField(ClapPluginGui, getResizeHints, 52, 8)
+    checkField(ClapPluginGui, adjustSize, 52, 9)
+    checkField(ClapPluginGui, setSize, 52, 10)
+    checkField(ClapPluginGui, setParent, 52, 11)
+    checkField(ClapPluginGui, setTransient, 52, 12)
+    checkField(ClapPluginGui, suggestTitle, 52, 13)
+    checkField(ClapPluginGui, show, 52, 14)
+    checkField(ClapPluginGui, hide, 52, 15)
+    checkField(ClapHostGui, resizeHintsChanged, 53, 1)
+    checkField(ClapHostGui, requestResize, 53, 2)
+    checkField(ClapHostGui, requestShow, 53, 3)
+    checkField(ClapHostGui, requestHide, 53, 4)
+    checkField(ClapHostGui, closed, 53, 5)
 
   test "process and callback-container offsets match the official headers":
     checkField(ClapInputEvents, ctx, 12, 1)
@@ -391,3 +426,23 @@ suite "CLAP raw ABI":
     checkFunctionPointer(ClapOStreamWriteProc)
     checkFunctionPointer(ClapPluginStateSaveProc)
     checkFunctionPointer(ClapPluginStateLoadProc)
+    checkFunctionPointer(ClapPluginGuiIsApiSupportedProc)
+    checkFunctionPointer(ClapPluginGuiGetPreferredApiProc)
+    checkFunctionPointer(ClapPluginGuiCreateProc)
+    checkFunctionPointer(ClapPluginGuiDestroyProc)
+    checkFunctionPointer(ClapPluginGuiSetScaleProc)
+    checkFunctionPointer(ClapPluginGuiGetSizeProc)
+    checkFunctionPointer(ClapPluginGuiCanResizeProc)
+    checkFunctionPointer(ClapPluginGuiGetResizeHintsProc)
+    checkFunctionPointer(ClapPluginGuiAdjustSizeProc)
+    checkFunctionPointer(ClapPluginGuiSetSizeProc)
+    checkFunctionPointer(ClapPluginGuiSetParentProc)
+    checkFunctionPointer(ClapPluginGuiSetTransientProc)
+    checkFunctionPointer(ClapPluginGuiSuggestTitleProc)
+    checkFunctionPointer(ClapPluginGuiShowProc)
+    checkFunctionPointer(ClapPluginGuiHideProc)
+    checkFunctionPointer(ClapHostGuiResizeHintsChangedProc)
+    checkFunctionPointer(ClapHostGuiRequestResizeProc)
+    checkFunctionPointer(ClapHostGuiRequestShowProc)
+    checkFunctionPointer(ClapHostGuiRequestHideProc)
+    checkFunctionPointer(ClapHostGuiClosedProc)

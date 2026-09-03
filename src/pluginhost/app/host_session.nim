@@ -2,6 +2,8 @@ import std/options
 
 import ./[audio_slice, main_reactor, plugin_services, run_config]
 import ../clap/[ffi, loader, main_thread_services]
+import ../gui/controller
+import ../platform/x11/gui_adapter
 import ../domain/[errors, lifecycle, plugin_catalog, reactor, result]
 import ../jack/backend
 import ../platform/linux/[pid_file, reactor as linux_reactor, signals]
@@ -17,6 +19,7 @@ type
   HostSession* = object
     state*: SessionState
     audioSlice: InternalAudioSlice
+    gui: GuiController
     reactor: MainReactor
     signalSource: SignalSource
     signalToken: ReactorToken
@@ -89,12 +92,9 @@ proc failSession[T](session: var HostSession; error: sink HostError): Result[T] 
   failure[T](move(error))
 
 proc validateAvailableRunOptions(config: RunConfig): Result[Unit] =
-  if config.requireGui or config.guiScale.isSome:
-    return failure[Unit](hostError(
-      hsGui, hekGui,
-      "required or scaled plugin GUI hosting is not implemented in this development increment",
-      config.pluginPath,
-    ))
+  if config.guiPolicy == gpDisabled and config.guiScale.isSome:
+    return failure[Unit](usageError(
+      "--gui-scale cannot be used with --no-gui"))
   success()
 
 proc cleanupModuleFailure(module: var ClapModule;
@@ -135,7 +135,8 @@ proc openRunSlice(config: RunConfig;
   )
   openInternalAudioSlice(
     move(module), move(selected.value), backendConfig, mainServices,
-    if config.loadStatePath.isSome: config.loadStatePath.get() else: "")
+    if config.loadStatePath.isSome: config.loadStatePath.get() else: "",
+    config.guiPolicy != gpDisabled)
 
 proc warning(errorOutput: File; message: string) =
   errorOutput.write("pluginhost: warning: " & message & "\n")
@@ -166,8 +167,8 @@ proc drainPluginLogs(session: var HostSession; config: RunConfig;
   if dropped > 0'u64 and config.verbosity != vbQuiet:
     warning(errorOutput, "CLAP log queue dropped " & $dropped & " messages")
 
-proc serviceSignals(session: var HostSession; events: seq[ReactorEvent];
-                    errorOutput: File): Result[bool] =
+proc serviceSignals(session: var HostSession; config: RunConfig;
+                     events: seq[ReactorEvent]; errorOutput: File): Result[bool] =
   var signalReady = false
   for event in events:
     if event.kind == rekFd and event.token == session.signalToken:
@@ -187,11 +188,22 @@ proc serviceSignals(session: var HostSession; events: seq[ReactorEvent];
     of siInterrupt, siTerminate:
       shutdown = true
     of siShowGui, siHideGui:
-      if intent notin session.guiSignalWarnings:
-        session.guiSignalWarnings.incl(intent)
-        let operation = if intent == siShowGui: "show" else: "hide"
-        warning(errorOutput, "SIGUSR request to " & operation &
-          " the GUI is unavailable until GUI hosting is implemented")
+      let operation = if intent == siShowGui: "show" else: "hide"
+      if session.gui == nil:
+        if intent notin session.guiSignalWarnings:
+          session.guiSignalWarnings.incl(intent)
+          warning(errorOutput, "SIGUSR request to " & operation &
+            " the GUI is unavailable while GUI hosting is disabled")
+      else:
+        var action = if intent == siShowGui: session.gui.show()
+                     else: session.gui.hide()
+        if not action.isOk:
+          if config.requireGui:
+            return failure[bool](move(action.error))
+          if intent notin session.guiSignalWarnings:
+            session.guiSignalWarnings.incl(intent)
+            warning(errorOutput, "could not " & operation &
+              " the plugin GUI; continuing headless: " & action.error.message)
   success(shutdown)
 
 proc servicePluginEvents(session: var HostSession; events: seq[ReactorEvent]):
@@ -335,6 +347,63 @@ proc openProcessControl(session: var HostSession): Result[Unit] =
   session.pluginServices = newPluginServiceRegistry(session.reactor)
   success()
 
+proc serviceGuiFailure(session: var HostSession; config: RunConfig;
+                       errorOutput: File; operation: string;
+                       error: sink HostError): Result[Unit] =
+  if config.requireGui:
+    return failure[Unit](move(error))
+  if siShowGui notin session.guiSignalWarnings:
+    session.guiSignalWarnings.incl(siShowGui)
+    warning(errorOutput, "could not " & operation &
+      " the plugin GUI; continuing headless: " & error.message)
+  if session.gui != nil:
+    var closed = session.gui.close()
+    if not closed.isOk:
+      error.context.add("; GUI cleanup=" & closed.error.message)
+      if closed.error.context.len > 0:
+        error.context.add(" (" & closed.error.context & ")")
+      return failure[Unit](move(error))
+  success()
+
+proc serviceGuiEvents(session: var HostSession; config: RunConfig;
+                       events: seq[ReactorEvent]; errorOutput: File): Result[Unit] =
+  if session.gui == nil:
+    return success()
+  var handled = session.gui.handleWindowEvents(events)
+  if not handled.isOk:
+    return session.serviceGuiFailure(config, errorOutput, "service",
+      move(handled.error))
+  success()
+
+proc serviceGuiRequests(session: var HostSession; config: RunConfig;
+                         errorOutput: File): Result[Unit] =
+  if session.gui == nil:
+    return success()
+  var requests = session.audioSlice.takeGuiRequests()
+  if not (requests.show or requests.hide or requests.resize or
+          requests.resizeHints or requests.closed):
+    return success()
+  var handled = session.gui.handlePluginRequests(requests)
+  if not handled.isOk:
+    return session.serviceGuiFailure(config, errorOutput, "service",
+      move(handled.error))
+  success()
+
+
+proc openGui(session: var HostSession; config: RunConfig;
+                 errorOutput: File): Result[Unit] =
+  if config.guiPolicy == gpDisabled:
+    return success()
+  let title = "pluginhost: " & session.audioSlice.pluginName
+  session.gui = newGuiController(
+    session.audioSlice.guiClient(), addr session.reactor, newX11WindowBackend,
+    title, config.guiScale)
+  var started = session.gui.start(config.guiPolicy == gpShow)
+  if not started.isOk:
+    return session.serviceGuiFailure(config, errorOutput, "start",
+      move(started.error))
+  success()
+
 proc run*(session: var HostSession; config: RunConfig;
           errorOutput: File): Result[Unit] =
   if session.state != ssNew:
@@ -368,15 +437,15 @@ proc run*(session: var HostSession; config: RunConfig;
       return failSession[Unit](session, move(pidResult.error))
     session.pidFile = move(pidResult.value)
 
-  if config.guiPolicy != gpDisabled:
-    warning(errorOutput,
-      "plugin GUI hosting is unavailable; continuing headless")
+  var guiOpened = session.openGui(config, errorOutput)
+  if not guiOpened.isOk:
+    return failSession[Unit](session, move(guiOpened.error))
 
   while session.state == ssRunning:
     var events = session.reactor.wait(monotonicNanos(ControlServiceNanos))
     if not events.isOk:
       return failSession[Unit](session, move(events.error))
-    var shutdown = session.serviceSignals(events.value, errorOutput)
+    var shutdown = session.serviceSignals(config, events.value, errorOutput)
     if not shutdown.isOk:
       return failSession[Unit](session, move(shutdown.error))
     if shutdown.value:
@@ -384,12 +453,18 @@ proc run*(session: var HostSession; config: RunConfig;
       if not stopping.isOk:
         return stopping
       return success()
+    var guiEvents = session.serviceGuiEvents(config, events.value, errorOutput)
+    if not guiEvents.isOk:
+      return failSession[Unit](session, move(guiEvents.error))
     var pluginEvents = session.servicePluginEvents(events.value)
     if not pluginEvents.isOk:
       return failSession[Unit](session, move(pluginEvents.error))
     var serviced = session.serviceAudioControl(config, errorOutput)
     if not serviced.isOk:
       return failSession[Unit](session, move(serviced.error))
+    var guiRequests = session.serviceGuiRequests(config, errorOutput)
+    if not guiRequests.isOk:
+      return failSession[Unit](session, move(guiRequests.error))
   success()
 
 proc run*(session: var HostSession; config: RunConfig): Result[Unit] =
@@ -410,7 +485,8 @@ proc rememberCleanup(first: var HostError; failed: var bool;
 proc close*(session: var HostSession): Result[Unit] =
   if session.state == ssStopped and session.audioSlice.state in
       {iassEmpty, iassClosed} and not session.pidFile.isOwned and
-      not session.signalSource.isOpen:
+      not session.signalSource.isOpen and
+      (session.gui == nil or session.gui.state == gcsClosed):
     return success()
 
   var first: HostError
@@ -425,6 +501,8 @@ proc close*(session: var HostSession): Result[Unit] =
   if session.audioSlice.state == iassActive:
     var audioStopped = session.audioSlice.stop()
     rememberCleanup(first, failed, audioStopped)
+  var guiClosed = session.gui.close()
+  rememberCleanup(first, failed, guiClosed)
   var servicesClosed = session.pluginServices.close()
   rememberCleanup(first, failed, servicesClosed)
   var audioClosed = session.audioSlice.close()

@@ -72,8 +72,14 @@ pluginhost_rt_atomic_u32_fetch_sub_release(pluginhost_rt_atomic_u32 *value,
 
 static inline uint32_t
 pluginhost_rt_atomic_u32_fetch_or_relaxed(pluginhost_rt_atomic_u32 *value,
-                                           uint32_t bits) {
+                                            uint32_t bits) {
     return atomic_fetch_or_explicit(value, bits, memory_order_relaxed);
+}
+
+static inline uint32_t
+pluginhost_rt_atomic_u32_fetch_or_release(pluginhost_rt_atomic_u32 *value,
+                                            uint32_t bits) {
+    return atomic_fetch_or_explicit(value, bits, memory_order_release);
 }
 
 static inline uint32_t

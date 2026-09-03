@@ -3,7 +3,7 @@
 **Plan version:** 1.0.0  
 **Target product release:** `pluginhost` 0.1.0  
 **Initial development version:** 0.0.1-dev  
-**Status:** Increments 0–9 approved; Increment 10A implementation complete in the current review worktree; 10B not started
+**Status:** Increments 0–10A approved; Increment 10B implementation complete in the current review worktree and pending review
 **Companion documents:** [`REQUIREMENTS.md`](REQUIREMENTS.md), [`DESIGN.md`](DESIGN.md)
 
 ## 1. Purpose
@@ -664,7 +664,7 @@ Add the required plugin-native GUI path with runtime show/hide while preserving 
 
 ### Review unit 10A — Window-host spike
 
-**Current review unit status:** Implemented with Xlib; pending human review gate 10A.
+**Review unit status:** Approved after the 10A review gate.
 
 The 10A review unit implements:
 
@@ -673,9 +673,10 @@ The 10A review unit implements:
 - XEmbed-ready parent-surface ownership, event processing, WM close classification, sizing, and cleanup under Xvfb.
 - An independent spike with no third-party plugin GUI code.
 
-Human review is required before unit 10B.
+The 10A review gate is complete; unit 10B is a separate review unit.
 
 ### Review unit 10B — CLAP GUI integration
+**Current review unit status:** Implemented in the current worktree; pending human review gate 10B.
 
 - Add `GuiController` state machine.
 - Negotiate embedded X11 first, then supported floating fallback.
@@ -784,7 +785,7 @@ This table is updated only when work is reviewed.
 | 7 — Reactor/signals | Approved | Increment 7 review | Public headless run, epoll/signalfd reactor, orderly shutdown, main-thread callbacks, and atomic PID files accepted |
 | 8 — Host extensions/restart | Approved | Review units 8A and 8B | Main-thread timer/FD services, dirty notification, JACK latency, bounded parameter transport, restart/rescan, sleep/wake, and compatible reconnection/loss evidence accepted |
 | 9 — State | Approved | Increment 9 review | Bounded 64 KiB/64 MiB CLAP streams, pre-configuration load, clean-signal transactional save, rollback, and live evidence accepted |
-| 10 — GUI | In progress | Review unit 10A pending | Xlib window-host spike, dynamic loading, reactor FD integration, Xvfb lifecycle/ABI tests; 10B CLAP GUI integration not started |
+| 10 — GUI | In progress | Review unit 10B pending | 10A Xlib window-host spike approved; 10B CLAP GUI negotiation/controller, dynamic X11 adapter, callback transport, CLI policy, fixture, unit, and Xvfb evidence implemented in the current review worktree |
 | 11 — Release candidate | Not started | — | — |
 | 12 — MVP release | Not started | — | Target 0.1.0 |
 
@@ -802,7 +803,7 @@ Allowed statuses: `Not started`, `In progress`, `Changes requested`, `Approved`,
 | MIDI event ordering/capacity corruption | Increment 6 fixed arena and k-way merge tests | Boundary/stress/sanitizer results |
 | Plugin callback reentrancy | Increments 7–8 deferred request dispatch | Reentrant fixture tests |
 | Restart races/use-after-free | Increments 4, 5, and 8 quiescence tests | Repeated restart stress |
-| X11/XEmbed incompatibility | Increment 10A isolated spike | Xvfb and real-plugin matrix |
+| X11/XEmbed incompatibility | Increment 10A isolated spike | Xvfb, GUI fixture, and real-plugin matrix |
 | GUI timer/FD leaks | Increments 8 and 10 | Repeated GUI lifecycle checks |
 | State-file corruption | Increment 9 transaction design | Failure-injection tests |
 | Scope growth obscures review | Review-size rule and per-increment non-goals | Progress/review record |
@@ -830,4 +831,4 @@ Each candidate requires requirements/design updates and, where architectural, an
 
 ## 23. First action after each review gate
 
-After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 9 is approved; its final `nimble --offline all -y` evidence covered 208 tests (106 unit, 26 ABI, 61 fixture, 9 RT, and 6 live integration). Increment 10A is implemented in the current review worktree and awaits review of the Xlib ownership, ABI, reactor, and Xvfb evidence; do not begin 10B without explicit owner approval.
+After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 9 and review unit 10A are approved. Increment 10B is implemented in the current review worktree and awaits review of the CLAP GUI call order, callback transport, controller ownership, X11 integration, and focused/full verification evidence.

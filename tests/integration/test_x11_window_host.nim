@@ -1,10 +1,12 @@
 import std/[os, osproc, unittest]
 
 import pluginhost/app/main_reactor
-import pluginhost/domain/[reactor, result]
-import pluginhost/gui/window_host
+import pluginhost/clap/[gui_client, instance, loader]
+import pluginhost/domain/[plugin_catalog, reactor, result]
+import pluginhost/gui/[controller, window_host]
 import pluginhost/platform/linux/reactor as linux_reactor
-import pluginhost/platform/x11/window_host
+import pluginhost/platform/x11/[gui_adapter, window_host]
+import pluginhost/platform/linux/dynlib
 
 proc drainEvents(host: var X11WindowHost;
                  sawMap, sawUnmap, sawConfigure, sawClose: var bool;
@@ -38,6 +40,22 @@ proc waitForWindowFd(reactor: var MainReactor; token: ReactorToken): bool =
       if event.kind == rekFd and event.token == token:
         return true
   false
+
+proc openGuiFixture(path: string): tuple[instance: ClapInstance, observer: DynamicLibrary] =
+  var observerResult = openDynamicLibrary(path)
+  require observerResult.isOk
+  var observer = move(observerResult.value)
+  var moduleResult = openClapModule(path)
+  require moduleResult.isOk
+  var module = move(moduleResult.value)
+  var catalog = module.readCatalog()
+  require catalog.isOk
+  var selected = catalog.value.selectDescriptor(PluginSelector(
+    kind: pskId, pluginId: "org.pluginhost.fixture.gui"))
+  require selected.isOk
+  var created = createClapInstance(move(module), move(selected.value), nil, true)
+  require created.isOk
+  (move(created.value), move(observer))
 
 suite "X11 window-host integration":
   test "Xvfb window lifecycle and reactor readiness are deterministic":
@@ -116,3 +134,43 @@ suite "X11 window-host integration":
     check not host.isOpen
     check host.state == whClosed
     check host.fileDescriptor == -1
+
+  test "the controller negotiates the fixture GUI through the X11 adapter":
+    require getEnv("DISPLAY").len > 0
+    let fixtureDirectory = getEnv("PLUGINHOST_CLAP_FIXTURE_DIR")
+    require fixtureDirectory.len > 0
+    var opened = openGuiFixture(fixtureDirectory / "gui.clap")
+    var instance = move(opened.instance)
+    var observer = move(opened.observer)
+    defer:
+      doAssert instance.close().isOk
+      doAssert observer.close().isOk
+    var driverResult = linux_reactor.openLinuxReactorDriver()
+    require driverResult.isOk
+    var reactorOpened = initMainReactor(driverResult.value)
+    require reactorOpened.isOk
+    var reactor = move(reactorOpened.value)
+    defer:
+      doAssert reactor.close().isOk
+    var controller = newGuiController(
+      newClapGuiClient(addr instance), addr reactor, newX11WindowBackend,
+      "pluginhost-gui-fixture")
+    defer:
+      doAssert controller.close().isOk
+    var started = controller.start(true)
+    require started.isOk
+    check controller.state == gcsVisible
+    check controller.mode == gmEmbedded
+    check controller.isCreated
+    var sawEvents = false
+    for ignored in 0 ..< 8:
+      discard ignored
+      var events = reactor.wait(monotonicNanos(100_000_000))
+      require events.isOk
+      if events.value.len > 0:
+        sawEvents = true
+        require controller.handleWindowEvents(events.value).isOk
+        break
+    check sawEvents
+    check controller.hide().isOk
+    check controller.state == gcsHidden

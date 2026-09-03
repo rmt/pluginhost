@@ -24,6 +24,8 @@ const
   ClapExtTimerSupport* = "clap.timer-support"
   ClapExtPosixFdSupport* = "clap.posix-fd-support"
   ClapExtThreadCheck* = "clap.thread-check"
+  ClapExtGui* = "clap.gui"
+  ClapWindowApiX11* = "x11"
   ClapPortMono* = "mono"
   ClapPortStereo* = "stereo"
 
@@ -283,6 +285,18 @@ type
     isMainThread*: ClapHostThreadCheckProc
     isAudioThread*: ClapHostThreadCheckProc
 
+  ClapHostGuiResizeHintsChangedProc* = proc(host: ptr ClapHost) {.cdecl, gcsafe, raises: [].}
+  ClapHostGuiRequestResizeProc* = proc(host: ptr ClapHost; width, height: uint32): bool {.cdecl, gcsafe, raises: [].}
+  ClapHostGuiRequestShowProc* = proc(host: ptr ClapHost): bool {.cdecl, gcsafe, raises: [].}
+  ClapHostGuiRequestHideProc* = proc(host: ptr ClapHost): bool {.cdecl, gcsafe, raises: [].}
+  ClapHostGuiClosedProc* = proc(host: ptr ClapHost; wasDestroyed: bool) {.cdecl, gcsafe, raises: [].}
+  ClapHostGui* {.bycopy.} = object
+    resizeHintsChanged*: ClapHostGuiResizeHintsChangedProc
+    requestResize*: ClapHostGuiRequestResizeProc
+    requestShow*: ClapHostGuiRequestShowProc
+    requestHide*: ClapHostGuiRequestHideProc
+    closed*: ClapHostGuiClosedProc
+
   ClapHostStateMarkDirtyProc* = proc(host: ptr ClapHost) {.cdecl, gcsafe, raises: [].}
   ClapHostState* {.bycopy.} = object
     markDirty*: ClapHostStateMarkDirtyProc
@@ -405,6 +419,52 @@ type
     process*: ClapPluginProcessProc
     getExtension*: ClapPluginGetExtensionProc
     onMainThread*: ClapPluginOnMainThreadProc
+
+  ClapGuiResizeHints* {.bycopy.} = object
+    canResizeHorizontally*: bool
+    canResizeVertically*: bool
+    preserveAspectRatio*: bool
+    aspectRatioWidth*: uint32
+    aspectRatioHeight*: uint32
+
+  ClapWindow* {.bycopy.} = object
+    api*: cstring
+    x11*: culong
+
+  ClapPluginGuiIsApiSupportedProc* = proc(plugin: ptr ClapPlugin; api: cstring;
+      isFloating: bool): bool {.cdecl, gcsafe, raises: [].}
+  ClapPluginGuiGetPreferredApiProc* = proc(plugin: ptr ClapPlugin;
+      api: ptr cstring; isFloating: ptr bool): bool {.cdecl, gcsafe, raises: [].}
+  ClapPluginGuiCreateProc* = proc(plugin: ptr ClapPlugin; api: cstring;
+      isFloating: bool): bool {.cdecl, gcsafe, raises: [].}
+  ClapPluginGuiDestroyProc* = proc(plugin: ptr ClapPlugin) {.cdecl, gcsafe, raises: [].}
+  ClapPluginGuiSetScaleProc* = proc(plugin: ptr ClapPlugin; scale: cdouble): bool {.cdecl, gcsafe, raises: [].}
+  ClapPluginGuiGetSizeProc* = proc(plugin: ptr ClapPlugin; width, height: ptr uint32): bool {.cdecl, gcsafe, raises: [].}
+  ClapPluginGuiCanResizeProc* = proc(plugin: ptr ClapPlugin): bool {.cdecl, gcsafe, raises: [].}
+  ClapPluginGuiGetResizeHintsProc* = proc(plugin: ptr ClapPlugin; hints: ptr ClapGuiResizeHints): bool {.cdecl, gcsafe, raises: [].}
+  ClapPluginGuiAdjustSizeProc* = proc(plugin: ptr ClapPlugin; width, height: ptr uint32): bool {.cdecl, gcsafe, raises: [].}
+  ClapPluginGuiSetSizeProc* = proc(plugin: ptr ClapPlugin; width, height: uint32): bool {.cdecl, gcsafe, raises: [].}
+  ClapPluginGuiSetParentProc* = proc(plugin: ptr ClapPlugin; window: ptr ClapWindow): bool {.cdecl, gcsafe, raises: [].}
+  ClapPluginGuiSetTransientProc* = proc(plugin: ptr ClapPlugin; window: ptr ClapWindow): bool {.cdecl, gcsafe, raises: [].}
+  ClapPluginGuiSuggestTitleProc* = proc(plugin: ptr ClapPlugin; title: cstring) {.cdecl, gcsafe, raises: [].}
+  ClapPluginGuiShowProc* = proc(plugin: ptr ClapPlugin): bool {.cdecl, gcsafe, raises: [].}
+  ClapPluginGuiHideProc* = proc(plugin: ptr ClapPlugin): bool {.cdecl, gcsafe, raises: [].}
+  ClapPluginGui* {.bycopy.} = object
+    isApiSupported*: ClapPluginGuiIsApiSupportedProc
+    getPreferredApi*: ClapPluginGuiGetPreferredApiProc
+    create*: ClapPluginGuiCreateProc
+    destroy*: ClapPluginGuiDestroyProc
+    setScale*: ClapPluginGuiSetScaleProc
+    getSize*: ClapPluginGuiGetSizeProc
+    canResize*: ClapPluginGuiCanResizeProc
+    getResizeHints*: ClapPluginGuiGetResizeHintsProc
+    adjustSize*: ClapPluginGuiAdjustSizeProc
+    setSize*: ClapPluginGuiSetSizeProc
+    setParent*: ClapPluginGuiSetParentProc
+    setTransient*: ClapPluginGuiSetTransientProc
+    suggestTitle*: ClapPluginGuiSuggestTitleProc
+    show*: ClapPluginGuiShowProc
+    hide*: ClapPluginGuiHideProc
 
   ClapPluginEntryInitProc* = proc(pluginPath: cstring): bool {.
     cdecl, gcsafe, raises: [].}

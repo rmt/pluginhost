@@ -36,6 +36,9 @@ proc cU32FetchSubRelease(value: ptr RtAtomicU32; amount: uint32): uint32 {.
 proc cU32FetchOrRelaxed(value: ptr RtAtomicU32; bits: uint32): uint32 {.
   importc: "pluginhost_rt_atomic_u32_fetch_or_relaxed", header: "rt_atomic.h",
   gcsafe, raises: [].}
+proc cU32FetchOrRelease(value: ptr RtAtomicU32; bits: uint32): uint32 {.
+  importc: "pluginhost_rt_atomic_u32_fetch_or_release", header: "rt_atomic.h",
+  gcsafe, raises: [].}
 proc cU32ExchangeAcquire(value: ptr RtAtomicU32; desired: uint32): uint32 {.
   importc: "pluginhost_rt_atomic_u32_exchange_acquire", header: "rt_atomic.h",
   gcsafe, raises: [].}
@@ -101,6 +104,8 @@ template fetchSubRelease*(value: var RtAtomicU32; amount: uint32): uint32 =
   cU32FetchSubRelease(addr value, amount)
 template fetchOrRelaxed*(value: var RtAtomicU32; bits: uint32): uint32 =
   cU32FetchOrRelaxed(addr value, bits)
+template fetchOrRelease*(value: var RtAtomicU32; bits: uint32): uint32 =
+  cU32FetchOrRelease(addr value, bits)
 template exchangeAcquire*(value: var RtAtomicU32; desired: uint32): uint32 =
   cU32ExchangeAcquire(addr value, desired)
 template compareExchangeRelaxed*(value: var RtAtomicU32;

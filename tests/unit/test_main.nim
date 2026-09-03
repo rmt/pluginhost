@@ -49,7 +49,7 @@ suite "main process":
     check process.errorOutput.contains("could not resolve CLAP plugin path")
     check process.errorOutput.contains("fixture.clap")
 
-  test "deferred required GUI fails explicitly":
+  test "GUI options do not bypass CLAP startup errors":
     let gui = runHost(@["--require-gui", "fixture.clap"])
-    check gui.exitCode == 5
-    check gui.errorOutput.contains("GUI hosting is not implemented")
+    check gui.exitCode == 3
+    check gui.errorOutput.contains("could not resolve CLAP plugin path")

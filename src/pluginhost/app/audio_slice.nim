@@ -4,9 +4,10 @@
 ## process view, and one configured JACK backend. HostSession moves exactly one
 ## instance of this owner into the public runtime.
 
-import ../clap/[audio_process, event_bridge, ffi, host_bridge, instance, loader,
+import ../clap/[audio_process, event_bridge, ffi, gui_client, host_bridge, instance, loader,
                 main_thread_services, parameter_transport]
 import ../domain/[errors, plugin_catalog, result]
+import ../gui/plugin_client
 import ../jack/backend
 
 type
@@ -141,6 +142,9 @@ proc controlRequests*(slice: var InternalAudioSlice): InternalControlRequests =
     flush: (requests and ClapRequestFlush) != 0'u32,
   )
 
+proc takeGuiRequests*(slice: var InternalAudioSlice): ClapGuiRequests =
+  slice.instance.hostBridge.takeGuiRequests()
+
 proc takeRescanRequests*(slice: var InternalAudioSlice): InternalRescanRequests =
   InternalRescanRequests(
     parameters: slice.instance.takeParamsRescan(),
@@ -229,15 +233,22 @@ proc pluginPath*(slice: InternalAudioSlice): string =
 proc pluginId*(slice: InternalAudioSlice): string =
   slice.instance.selectedDescriptor.id
 
+proc pluginName*(slice: InternalAudioSlice): string =
+  slice.instance.selectedDescriptor.name
+
+proc guiClient*(slice: var InternalAudioSlice): GuiPluginClient =
+  newClapGuiClient(addr slice.instance)
+
 proc openInternalAudioSlice*(module: sink ClapModule;
                              descriptor: sink PluginDescriptor;
                              backendConfig: JackBackendOpenConfig;
                              mainServices: ptr ClapMainThreadServices = nil;
-                             loadStatePath = ""):
+                             loadStatePath = "";
+                             guiEnabled = false):
     Result[InternalAudioSlice] =
   var slice = InternalAudioSlice(stateValue: iassEmpty)
   var created = createClapInstance(
-    move(module), move(descriptor), mainServices)
+    move(module), move(descriptor), mainServices, guiEnabled)
   if not created.isOk:
     return failure[InternalAudioSlice](move(created.error))
   slice.instance = move(created.value)

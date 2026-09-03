@@ -212,6 +212,12 @@ proc compileEventFixtureVariant(name: string; mode: int) =
        "tests/fixtures/clap/event_fixture.c " &
        "-o build/fixtures/clap/" & name & ".clap"
 
+proc compileGuiFixture() =
+  exec "cc -std=gnu11 -fPIC -shared -fvisibility=hidden " &
+       "-Wall -Wextra -Werror -Wl,-z,defs -Ivendor/clap/include " &
+       "tests/fixtures/clap/gui_fixture.c " &
+       "-o build/fixtures/clap/gui.clap"
+
 proc compileClapFixtures() =
   exec "mkdir -p build/fixtures/clap"
   compileClapFixtureVariant("valid", 0)
@@ -288,6 +294,7 @@ proc compileClapFixtures() =
   compileEventFixtureVariant("events_clap", 1)
   compileEventFixtureVariant("events_midi2_only", 2)
   compileEventFixtureVariant("events_malformed_output", 3)
+  compileGuiFixture()
   exec "cc -std=gnu11 -fPIC -shared -fvisibility=hidden " &
        "-Wall -Wextra -Werror -Wl,-z,defs " &
        "tests/fixtures/clap/no_entry_fixture.c " &
@@ -376,7 +383,8 @@ proc runClapFixtureTests() =
        "--out:build/test/all_fixture_tests tests/fixtures/all_fixture_tests.nim"
 
 proc runGuiTests() =
-  exec "mkdir -p build/test build/integration build/nimcache/integration"
+  exec "mkdir -p build/test build/integration build/nimcache/integration build/fixtures/clap"
+  compileGuiFixture()
   exec "cc -std=gnu11 -Wall -Wextra -Werror $(pkg-config --cflags x11) " &
        "tests/integration/x11_send_wm_delete.c $(pkg-config --libs x11) " &
        "-o build/integration/x11_send_wm_delete"
@@ -389,6 +397,7 @@ proc runGuiTests() =
        "if printf '%s\\n' \"$dependencies\" | grep -Fq 'libX11.so'; then " &
        "echo 'unexpected eager libX11 dependency in X11 test host' >&2; exit 1; fi"
   exec "PLUGINHOST_X11_SEND_DELETE=$PWD/build/integration/x11_send_wm_delete " &
+       "PLUGINHOST_CLAP_FIXTURE_DIR=$PWD/build/fixtures/clap " &
        "xvfb-run -a -s '-screen 0 1024x768x24 -extension GLX -nolisten tcp' " &
        "build/test/x11_window_host"
 

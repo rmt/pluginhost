@@ -1,8 +1,9 @@
-import std/math
+import std/[math, strutils]
 
 import ./[audio_process, ffi, host_bridge, loader, main_thread_services,
           parameter_transport, port_inspector, state_codec]
 import ../domain/[errors, plugin_catalog, port_plan, result]
+import ../gui/window_host
 import ../rt/role_guard
 
 const
@@ -19,6 +20,7 @@ type
 
   ClapPluginExtensions* = object
     audioPorts*: ptr ClapPluginAudioPorts
+    gui*: ptr ClapPluginGui
     notePorts*: ptr ClapPluginNotePorts
     render*: ptr ClapPluginRender
     latency*: ptr ClapPluginLatency
@@ -191,10 +193,11 @@ proc scanParameterSnapshots(plugin: ptr ClapPlugin;
 
 proc createClapInstance*(module: sink ClapModule;
                          descriptor: sink PluginDescriptor;
-                         mainServices: ptr ClapMainThreadServices = nil):
+                         mainServices: ptr ClapMainThreadServices = nil;
+                         guiEnabled = false):
                          Result[ClapInstance] =
   var ownedModule = move(module)
-  let bridge = newClapHostBridge(mainServices)
+  let bridge = newClapHostBridge(mainServices, guiEnabled)
   let created = ownedModule.createPlugin(
     bridge.hostPointer, descriptor.id)
   if not created.isOk:
@@ -237,6 +240,8 @@ proc createClapInstance*(module: sink ClapModule;
   let extensions = ClapPluginExtensions(
     audioPorts: cast[ptr ClapPluginAudioPorts](
       plugin.getExtension(plugin, ClapExtAudioPorts.cstring)),
+    gui: cast[ptr ClapPluginGui](
+      plugin.getExtension(plugin, ClapExtGui.cstring)),
     notePorts: cast[ptr ClapPluginNotePorts](
       plugin.getExtension(plugin, ClapExtNotePorts.cstring)),
     render: cast[ptr ClapPluginRender](
@@ -293,6 +298,208 @@ proc selectedDescriptor*(instance: ClapInstance): PluginDescriptor =
 
 proc pluginExtensions*(instance: ClapInstance): ClapPluginExtensions =
   instance.extensions
+
+proc requireGui(instance: ClapInstance; operation: string):
+    Result[ptr ClapPluginGui] =
+  if instance.state notin {cisInitialized, cisActivated, cisProcessing} or
+      instance.plugin == nil or not instance.bridge.isMainThread:
+    return failure[ptr ClapPluginGui](instanceError(
+      hekClapPlugin, "CLAP GUI operation requires the live plugin on the main thread",
+      instance.module.modulePath, "id=" & instance.descriptor.id &
+        "; operation=" & operation & "; state=" & $instance.state))
+  if instance.extensions.gui == nil:
+    return failure[ptr ClapPluginGui](instanceError(
+      hekClapPlugin, "CLAP plugin does not provide the GUI extension",
+      instance.module.modulePath, "id=" & instance.descriptor.id))
+  success(instance.extensions.gui)
+
+proc guiAvailable*(instance: ClapInstance): bool {.inline.} =
+  instance.extensions.gui != nil
+
+proc guiIsApiSupported*(instance: ClapInstance; api: string;
+                        floating: bool): Result[bool] =
+  var gui = instance.requireGui("is_api_supported")
+  if not gui.isOk:
+    return failure[bool](move(gui.error))
+  if gui.value.isApiSupported == nil:
+    return failure[bool](instanceError(hekClapPlugin,
+      "CLAP GUI extension has no is_api_supported callback",
+      instance.module.modulePath, "id=" & instance.descriptor.id))
+  success(gui.value.isApiSupported(instance.plugin, api.cstring, floating))
+
+proc guiCreate*(instance: var ClapInstance; api: string;
+                 floating: bool): Result[bool] =
+  var gui = instance.requireGui("create")
+  if not gui.isOk:
+    return failure[bool](move(gui.error))
+  if gui.value.create == nil:
+    return failure[bool](instanceError(hekClapPlugin,
+      "CLAP GUI extension has no create callback",
+      instance.module.modulePath, "id=" & instance.descriptor.id))
+  success(gui.value.create(instance.plugin, api.cstring, floating))
+
+proc guiDestroy*(instance: var ClapInstance): Result[Unit] =
+  var gui = instance.requireGui("destroy")
+  if not gui.isOk:
+    return failure[Unit](move(gui.error))
+  if gui.value.destroy == nil:
+    return failure[Unit](instanceError(hekClapPlugin,
+      "CLAP GUI extension has no destroy callback",
+      instance.module.modulePath, "id=" & instance.descriptor.id))
+  gui.value.destroy(instance.plugin)
+  success()
+
+proc guiSetScale*(instance: var ClapInstance; scale: float64): Result[bool] =
+  var gui = instance.requireGui("set_scale")
+  if not gui.isOk:
+    return failure[bool](move(gui.error))
+  if gui.value.setScale == nil:
+    return failure[bool](instanceError(hekClapPlugin,
+      "CLAP GUI extension has no set_scale callback",
+      instance.module.modulePath, "id=" & instance.descriptor.id))
+  success(gui.value.setScale(instance.plugin, cdouble(scale)))
+
+proc guiGetSize*(instance: var ClapInstance): Result[GuiSize] =
+  var gui = instance.requireGui("get_size")
+  if not gui.isOk:
+    return failure[GuiSize](move(gui.error))
+  if gui.value.getSize == nil:
+    return failure[GuiSize](instanceError(hekClapPlugin,
+      "CLAP GUI extension has no get_size callback",
+      instance.module.modulePath, "id=" & instance.descriptor.id))
+  var width, height: uint32
+  if not gui.value.getSize(instance.plugin, addr width, addr height):
+    return failure[GuiSize](instanceError(hekClapPlugin,
+      "CLAP plugin could not report its GUI size",
+      instance.module.modulePath, "id=" & instance.descriptor.id))
+  if width == 0'u32 or height == 0'u32 or width > uint32(high(int32)) or
+      height > uint32(high(int32)):
+    return failure[GuiSize](instanceError(hekClapPlugin,
+      "CLAP plugin reported an invalid GUI size",
+      instance.module.modulePath, "id=" & instance.descriptor.id &
+        "; width=" & $width & "; height=" & $height))
+  success(GuiSize(width: width, height: height))
+
+proc guiCanResize*(instance: var ClapInstance): Result[bool] =
+  var gui = instance.requireGui("can_resize")
+  if not gui.isOk:
+    return failure[bool](move(gui.error))
+  if gui.value.canResize == nil:
+    return failure[bool](instanceError(hekClapPlugin,
+      "CLAP GUI extension has no can_resize callback",
+      instance.module.modulePath, "id=" & instance.descriptor.id))
+  success(gui.value.canResize(instance.plugin))
+
+proc guiGetResizeHints*(instance: var ClapInstance;
+                         hints: var GuiResizeHints): Result[bool] =
+  var gui = instance.requireGui("get_resize_hints")
+  if not gui.isOk:
+    return failure[bool](move(gui.error))
+  if gui.value.getResizeHints == nil:
+    return failure[bool](instanceError(hekClapPlugin,
+      "CLAP GUI extension has no get_resize_hints callback",
+      instance.module.modulePath, "id=" & instance.descriptor.id))
+  var raw: ClapGuiResizeHints
+  let available = gui.value.getResizeHints(instance.plugin, addr raw)
+  if available:
+    if raw.preserveAspectRatio and (raw.aspectRatioWidth == 0'u32 or
+        raw.aspectRatioHeight == 0'u32):
+      return failure[bool](instanceError(hekClapPlugin,
+        "CLAP plugin reported invalid GUI resize hints",
+        instance.module.modulePath, "id=" & instance.descriptor.id))
+    hints = GuiResizeHints(
+      canResizeHorizontally: raw.canResizeHorizontally,
+      canResizeVertically: raw.canResizeVertically,
+      preserveAspectRatio: raw.preserveAspectRatio,
+      aspectRatioWidth: raw.aspectRatioWidth,
+      aspectRatioHeight: raw.aspectRatioHeight)
+  success(available)
+
+proc guiAdjustSize*(instance: var ClapInstance; size: var GuiSize): Result[bool] =
+  var gui = instance.requireGui("adjust_size")
+  if not gui.isOk:
+    return failure[bool](move(gui.error))
+  if gui.value.adjustSize == nil:
+    return failure[bool](instanceError(hekClapPlugin,
+      "CLAP GUI extension has no adjust_size callback",
+      instance.module.modulePath, "id=" & instance.descriptor.id))
+  var width = size.width
+  var height = size.height
+  let adjusted = gui.value.adjustSize(instance.plugin, addr width, addr height)
+  if adjusted and (width == 0'u32 or height == 0'u32 or
+      width > uint32(high(int32)) or height > uint32(high(int32))):
+    return failure[bool](instanceError(hekClapPlugin,
+      "CLAP plugin reported an invalid adjusted GUI size",
+      instance.module.modulePath, "id=" & instance.descriptor.id))
+  if adjusted:
+    size = GuiSize(width: width, height: height)
+  success(adjusted)
+
+proc guiSetSize*(instance: var ClapInstance; size: GuiSize): Result[bool] =
+  var gui = instance.requireGui("set_size")
+  if not gui.isOk:
+    return failure[bool](move(gui.error))
+  if gui.value.setSize == nil:
+    return failure[bool](instanceError(hekClapPlugin,
+      "CLAP GUI extension has no set_size callback",
+      instance.module.modulePath, "id=" & instance.descriptor.id))
+  success(gui.value.setSize(instance.plugin, size.width, size.height))
+
+proc validGuiHandle(handle: GuiWindowHandle): bool {.inline.} =
+  handle.api == gwaX11 and handle.id != 0'u64 and handle.id <= uint64(high(culong))
+
+proc guiSetParent*(instance: var ClapInstance; handle: GuiWindowHandle): Result[bool] =
+  var gui = instance.requireGui("set_parent")
+  if not gui.isOk:
+    return failure[bool](move(gui.error))
+  if gui.value.setParent == nil or not validGuiHandle(handle):
+    return failure[bool](instanceError(hekClapPlugin,
+      "CLAP GUI parent handle is invalid or unsupported",
+      instance.module.modulePath, "id=" & instance.descriptor.id))
+  var window = ClapWindow(api: ClapWindowApiX11.cstring, x11: culong(handle.id))
+  success(gui.value.setParent(instance.plugin, addr window))
+
+proc guiSetTransient*(instance: var ClapInstance; handle: GuiWindowHandle): Result[bool] =
+  var gui = instance.requireGui("set_transient")
+  if not gui.isOk:
+    return failure[bool](move(gui.error))
+  if gui.value.setTransient == nil or not validGuiHandle(handle):
+    return failure[bool](instanceError(hekClapPlugin,
+      "CLAP GUI transient handle is invalid or unsupported",
+      instance.module.modulePath, "id=" & instance.descriptor.id))
+  var window = ClapWindow(api: ClapWindowApiX11.cstring, x11: culong(handle.id))
+  success(gui.value.setTransient(instance.plugin, addr window))
+
+proc guiSuggestTitle*(instance: var ClapInstance; title: string): Result[Unit] =
+  var gui = instance.requireGui("suggest_title")
+  if not gui.isOk:
+    return failure[Unit](move(gui.error))
+  if gui.value.suggestTitle == nil or title.find('\0') >= 0:
+    return failure[Unit](instanceError(hekClapPlugin,
+      "CLAP GUI title is invalid or unsupported",
+      instance.module.modulePath, "id=" & instance.descriptor.id))
+  gui.value.suggestTitle(instance.plugin, title.cstring)
+  success()
+
+proc guiShow*(instance: var ClapInstance): Result[bool] =
+  var gui = instance.requireGui("show")
+  if not gui.isOk:
+    return failure[bool](move(gui.error))
+  if gui.value.show == nil:
+    return failure[bool](instanceError(hekClapPlugin,
+      "CLAP GUI extension has no show callback",
+      instance.module.modulePath, "id=" & instance.descriptor.id))
+  success(gui.value.show(instance.plugin))
+
+proc guiHide*(instance: var ClapInstance): Result[bool] =
+  var gui = instance.requireGui("hide")
+  if not gui.isOk:
+    return failure[bool](move(gui.error))
+  if gui.value.hide == nil:
+    return failure[bool](instanceError(hekClapPlugin,
+      "CLAP GUI extension has no hide callback",
+      instance.module.modulePath, "id=" & instance.descriptor.id))
+  success(gui.value.hide(instance.plugin))
 
 type
   ClapParameterDrain* = object

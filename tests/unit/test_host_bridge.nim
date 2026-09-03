@@ -72,6 +72,20 @@ suite "CLAP host bridge":
     check host.requestProcess != nil
     check host.requestCallback != nil
 
+    let headless = newClapHostBridge(guiEnabled = false)
+    check headless.hostPointer.getExtension(
+      headless.hostPointer, ClapExtGui.cstring) == nil
+    let guiBridge = newClapHostBridge(guiEnabled = true)
+    let guiHost = guiBridge.hostPointer
+    let gui = cast[ptr ClapHostGui](
+      guiHost.getExtension(guiHost, ClapExtGui.cstring))
+    check gui != nil
+    check gui.resizeHintsChanged != nil
+    check gui.requestResize != nil
+    check gui.requestShow != nil
+    check gui.requestHide != nil
+    check gui.closed != nil
+
   test "requests are coalesced and drained atomically":
     let bridge = newClapHostBridge()
     let host = bridge.hostPointer
@@ -88,6 +102,31 @@ suite "CLAP host bridge":
     check (requests and ClapRequestProcess) != 0
     check (requests and ClapRequestCallback) != 0
     check bridge.takeRequests() == 0
+
+  test "GUI requests are bounded, packed, and coalesced":
+    let bridge = newClapHostBridge(guiEnabled = true)
+    let host = bridge.hostPointer
+    let gui = cast[ptr ClapHostGui](
+      host.getExtension(host, ClapExtGui.cstring))
+    check gui.requestResize(host, 640, 480)
+    check gui.requestShow(host)
+    gui.resizeHintsChanged(host)
+    gui.closed(host, true)
+    gui.closed(host, false)
+    var requests = bridge.takeGuiRequests()
+    check requests.show
+    check requests.resize
+    check requests.resizeHints
+    check requests.closed
+    check requests.wasDestroyed
+    check requests.width == 640'u32
+    check requests.height == 480'u32
+    check not bridge.takeGuiRequests().closed
+    gui.closed(host, false)
+    requests = bridge.takeGuiRequests()
+    check requests.closed
+    check not requests.wasDestroyed
+    check not gui.requestResize(host, 0, 480)
 
   test "logs are bounded, copied, and recover after overflow":
     let bridge = newClapHostBridge()

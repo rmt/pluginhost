@@ -53,9 +53,9 @@ suite "public reactor and signal-controlled run":
 
     check exitCode == 0
     check output.len == 0
-    check diagnostic.contains("SIGUSR request to show the GUI is unavailable")
-    check diagnostic.contains("SIGUSR request to hide the GUI is unavailable")
-    check diagnostic.count("SIGUSR request to show the GUI is unavailable") == 1
+    check diagnostic.contains("SIGUSR request to show the GUI is unavailable while GUI hosting is disabled")
+    check diagnostic.contains("SIGUSR request to hide the GUI is unavailable while GUI hosting is disabled")
+    check diagnostic.count("SIGUSR request to show the GUI is unavailable while GUI hosting is disabled") == 1
     check not fileExists(pidPath)
 
   test "SIGINT requests the same clean shutdown path":
