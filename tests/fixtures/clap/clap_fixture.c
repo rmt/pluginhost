@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <stdint.h>
+#include <math.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
@@ -10,6 +11,7 @@
 #include <clap/ext/audio-ports.h>
 #include <clap/ext/log.h>
 #include <clap/ext/note-ports.h>
+#include <clap/ext/params.h>
 #include <clap/ext/thread-check.h>
 #include <clap/factory/plugin-factory.h>
 #include <clap/plugin-features.h>
@@ -51,6 +53,9 @@
 #define MODE_MISSING_PLUGIN_DESTROY 22
 #define MODE_PLUGIN_WRONG_ID 23
 #define MODE_PLUGIN_INCOMPATIBLE_DESCRIPTOR 24
+#define MODE_PARAMETER_OUT_OF_RANGE 25
+#define MODE_PARAMETER_GET_VALUE_FAIL 26
+#define MODE_PARAMETER_VALUE_NAN 27
 
 #define MAX_TEXT_BYTES (64U * 1024U)
 #define OVERSIZED_TEXT_BYTES (MAX_TEXT_BYTES + 1U)
@@ -302,6 +307,83 @@ static const clap_plugin_note_ports_t fixture_note_ports = {
    .get = fixture_note_get,
 };
 
+#define FIXTURE_PARAMETER_ID 424242U
+
+static bool fixture_has_parameter_extension(void) {
+   return PLUGINHOST_CLAP_FIXTURE_MODE == MODE_PARAMETER_OUT_OF_RANGE ||
+      PLUGINHOST_CLAP_FIXTURE_MODE == MODE_PARAMETER_GET_VALUE_FAIL ||
+      PLUGINHOST_CLAP_FIXTURE_MODE == MODE_PARAMETER_VALUE_NAN;
+}
+
+static bool fixture_thread_is_main(void) {
+   const clap_host_thread_check_t *thread_check;
+   if (fixture_host == NULL || fixture_host->get_extension == NULL)
+      return false;
+   thread_check = (const clap_host_thread_check_t *)fixture_host->get_extension(
+      fixture_host, CLAP_EXT_THREAD_CHECK);
+   return thread_check != NULL && thread_check->is_main_thread(fixture_host);
+}
+
+static bool fixture_thread_is_audio(void) {
+   const clap_host_thread_check_t *thread_check;
+   if (fixture_host == NULL || fixture_host->get_extension == NULL)
+      return false;
+   thread_check = (const clap_host_thread_check_t *)fixture_host->get_extension(
+      fixture_host, CLAP_EXT_THREAD_CHECK);
+   return thread_check != NULL && thread_check->is_audio_thread(fixture_host);
+}
+
+static void fixture_require_main_not_audio(void) {
+   if (!fixture_thread_is_main() || fixture_thread_is_audio())
+      atomic_fetch_add(&host_contract_failures, 1U);
+}
+
+static uint32_t fixture_parameter_count(const clap_plugin_t *plugin) {
+   (void)plugin;
+   fixture_require_main_not_audio();
+   return 1U;
+}
+
+static bool fixture_parameter_get_info(const clap_plugin_t *plugin,
+                                       uint32_t index,
+                                       clap_param_info_t *info) {
+   (void)plugin;
+   fixture_require_main_not_audio();
+   if (index != 0U || info == NULL)
+      return false;
+   memset(info, 0, sizeof(*info));
+   info->id = FIXTURE_PARAMETER_ID;
+   info->min_value = 0.0;
+   info->max_value = 1.0;
+   info->default_value = 0.5;
+   (void)snprintf(info->name, sizeof(info->name), "Out Of Range Current");
+   return true;
+}
+
+static bool fixture_parameter_get_value(const clap_plugin_t *plugin,
+                                        clap_id param_id, double *value) {
+   (void)plugin;
+   fixture_require_main_not_audio();
+   if (param_id != FIXTURE_PARAMETER_ID || value == NULL)
+      return false;
+   if (PLUGINHOST_CLAP_FIXTURE_MODE == MODE_PARAMETER_GET_VALUE_FAIL)
+      return false;
+   if (PLUGINHOST_CLAP_FIXTURE_MODE == MODE_PARAMETER_VALUE_NAN)
+      *value = NAN;
+   else
+      *value = 1.25;
+   return true;
+}
+
+static const clap_plugin_params_t fixture_params = {
+   .count = fixture_parameter_count,
+   .get_info = fixture_parameter_get_info,
+   .get_value = fixture_parameter_get_value,
+   .value_to_text = NULL,
+   .text_to_value = NULL,
+   .flush = NULL,
+};
+
 static void *fixture_host_thread(void *opaque) {
    const clap_host_t *host = (const clap_host_t *)opaque;
    const clap_host_thread_check_t *thread_check =
@@ -435,6 +517,9 @@ static const void *fixture_plugin_get_extension(const clap_plugin_t *plugin,
       return &fixture_audio_ports;
    if (strcmp(extension_id, CLAP_EXT_NOTE_PORTS) == 0)
       return &fixture_note_ports;
+   if (fixture_has_parameter_extension() &&
+       strcmp(extension_id, CLAP_EXT_PARAMS) == 0)
+      return &fixture_params;
    return NULL;
 }
 

@@ -1,6 +1,6 @@
-import std/[os, unittest]
+import std/[os, strutils, unittest]
 
-import pluginhost/clap/[host_bridge, instance]
+import pluginhost/clap/[ffi, host_bridge, instance]
 import pluginhost/clap/loader
 import pluginhost/domain/[errors, plugin_catalog]
 import pluginhost/platform/linux/dynlib
@@ -47,6 +47,36 @@ proc openSelectedInstance(path: string):
   var created = createClapInstance(move(module), move(selected.value))
   require created.isOk
   (move(created.value), api, move(observer))
+
+proc expectSelectedInstanceFailure(variant: string): HostError =
+  let path = clapFixturePath(variant)
+  var observerResult = openDynamicLibrary(path)
+  require observerResult.isOk
+  var observer = move(observerResult.value)
+  let api = fixtureApi(observer)
+  api.reset()
+  defer:
+    doAssert observer.close().isOk
+
+  var moduleResult = openClapModule(path)
+  require moduleResult.isOk
+  var module = move(moduleResult.value)
+  let catalog = module.readCatalog()
+  require catalog.isOk
+  var selected = catalog.value.selectDescriptor(PluginSelector(
+    kind: pskId,
+    pluginId: "org.pluginhost.fixture.synth",
+  ))
+  require selected.isOk
+
+  let created = createClapInstance(move(module), move(selected.value))
+  require not created.isOk
+  check api.createCalls() == 1
+  check api.pluginInitCalls() == 1
+  check api.pluginDestroyCalls() == 1
+  check api.deinitCalls() == 1
+  check api.hostContractFailures() == 0
+  created.error
 
 proc retainBridgesAfterMove(path: string):
     tuple[replaced, moved: ClapHostBridge] =
@@ -126,6 +156,49 @@ suite "CLAP instance lifecycle":
 
     check instance.tryPopLog(record)
     check record.logMessage == "fixture destroy"
+
+  test "finite out-of-range parameter current values are retained and rescannable":
+    var opened = openSelectedInstance(clapFixturePath("parameter_out_of_range"))
+    var instance = move(opened.instance)
+    var observer = move(opened.observer)
+    let api = opened.api
+    defer:
+      doAssert instance.close().isOk
+      doAssert observer.close().isOk
+
+    check instance.parameterCount == 1
+    check instance.parameterCatalogGeneration == 1
+    var snapshot = instance.parameterSnapshot(0)
+    require snapshot.isOk
+    check snapshot.value.value == 1.25
+    check snapshot.value.minValue == 0.0
+    check snapshot.value.maxValue == 1.0
+    check snapshot.value.valueOutOfRange
+
+    require instance.rescanParameters(ClapParamRescanValues).isOk
+    check instance.parameterCatalogGeneration == 2
+    snapshot = instance.parameterSnapshot(0)
+    require snapshot.isOk
+    check snapshot.value.value == 1.25
+    check snapshot.value.valueOutOfRange
+    check api.hostContractFailures() == 0
+
+  test "parameter get_value failures remain fatal and include parameter context":
+    let callbackFailure = expectSelectedInstanceFailure("parameter_get_value_fail")
+    check callbackFailure.kind == hekClapPlugin
+    check callbackFailure.message == "CLAP parameter get_value callback failed"
+    check callbackFailure.context.contains("id=org.pluginhost.fixture.synth")
+    check callbackFailure.context.contains("index=0")
+    check callbackFailure.context.contains("param-id=424242")
+
+    let nonFiniteFailure = expectSelectedInstanceFailure("parameter_value_nan")
+    check nonFiniteFailure.kind == hekClapPlugin
+    check nonFiniteFailure.message ==
+      "CLAP parameter get_value callback returned a non-finite current value"
+    check nonFiniteFailure.context.contains("id=org.pluginhost.fixture.synth")
+    check nonFiniteFailure.context.contains("index=0")
+    check nonFiniteFailure.context.contains("param-id=424242")
+    check nonFiniteFailure.context.contains("value=")
 
   test "move assignment and destruction release the retained host bridge":
     let bridges = retainBridgesAfterMove(clapFixturePath("valid"))

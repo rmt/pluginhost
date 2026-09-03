@@ -36,6 +36,7 @@ type
     maxValue*: cdouble
     defaultValue*: cdouble
     value*: cdouble
+    valueOutOfRange*: bool
 
   ClapInstance* = object
     module: ClapModule
@@ -144,15 +145,31 @@ proc invalidCreatedDescriptor(plugin: ptr ClapPlugin;
 proc isFiniteParameter(value: cdouble): bool =
   classify(value) notin {fcNan, fcInf, fcNegInf}
 
+proc parameterContext(pluginId: string; index: uint32; paramId: ClapId): string =
+  "id=" & pluginId & "; index=" & $index & "; param-id=" & $paramId
+
+proc parameterMetadataContext(pluginId: string; index: uint32;
+                              info: ClapParamInfo): string =
+  parameterContext(pluginId, index, info.id) &
+    "; min=" & $info.minValue & "; max=" & $info.maxValue &
+    "; default=" & $info.defaultValue
+
 proc scanParameterSnapshots(plugin: ptr ClapPlugin;
                             params: ptr ClapPluginParams;
                             path, pluginId: string): Result[seq[ClapParameterSnapshot]] =
   if params == nil:
     return success(newSeq[ClapParameterSnapshot]())
-  if params.count == nil or params.getInfo == nil or params.getValue == nil:
+  var missing = ""
+  if params.count == nil:
+    missing = "count"
+  elif params.getInfo == nil:
+    missing = "get_info"
+  elif params.getValue == nil:
+    missing = "get_value"
+  if missing.len > 0:
     return failure[seq[ClapParameterSnapshot]](instanceError(
       hekClapPlugin, "CLAP parameter extension has a missing required callback",
-      path, "id=" & pluginId))
+      path, "id=" & pluginId & "; callback=" & missing))
   let count = params.count(plugin)
   if count > MaxClapParameters:
     return failure[seq[ClapParameterSnapshot]](instanceError(
@@ -164,30 +181,35 @@ proc scanParameterSnapshots(plugin: ptr ClapPlugin;
     var info: ClapParamInfo
     if not params.getInfo(plugin, index, addr info):
       return failure[seq[ClapParameterSnapshot]](instanceError(
-        hekClapPlugin, "CLAP parameter information query failed", path,
+        hekClapPlugin, "CLAP parameter get_info callback failed", path,
         "id=" & pluginId & "; index=" & $index))
     if info.id == ClapInvalidId or not info.minValue.isFiniteParameter or
         not info.maxValue.isFiniteParameter or
         not info.defaultValue.isFiniteParameter or info.minValue > info.maxValue or
         info.defaultValue < info.minValue or info.defaultValue > info.maxValue:
       return failure[seq[ClapParameterSnapshot]](instanceError(
-        hekClapPlugin, "CLAP parameter information is invalid", path,
-        "id=" & pluginId & "; index=" & $index))
+        hekClapPlugin, "CLAP parameter get_info callback returned invalid metadata", path,
+        parameterMetadataContext(pluginId, index, info)))
     for previous in snapshots:
       if previous.id == info.id:
         return failure[seq[ClapParameterSnapshot]](instanceError(
           hekClapPlugin, "CLAP parameter identifiers must be unique", path,
-          "id=" & pluginId & "; param-id=" & $info.id))
+          parameterContext(pluginId, index, info.id)))
     var value: cdouble
-    if not params.getValue(plugin, info.id, addr value) or
-        not value.isFiniteParameter or value < info.minValue or value > info.maxValue:
+    if not params.getValue(plugin, info.id, addr value):
       return failure[seq[ClapParameterSnapshot]](instanceError(
-        hekClapPlugin, "CLAP parameter value query returned an invalid value", path,
-        "id=" & pluginId & "; param-id=" & $info.id))
+        hekClapPlugin, "CLAP parameter get_value callback failed", path,
+        parameterContext(pluginId, index, info.id)))
+    if not value.isFiniteParameter:
+      return failure[seq[ClapParameterSnapshot]](instanceError(
+        hekClapPlugin,
+        "CLAP parameter get_value callback returned a non-finite current value",
+        path, parameterContext(pluginId, index, info.id) & "; value=" & $value))
     snapshots.add(ClapParameterSnapshot(
       id: info.id, flags: info.flags,
       minValue: info.minValue, maxValue: info.maxValue,
-      defaultValue: info.defaultValue, value: value))
+      defaultValue: info.defaultValue, value: value,
+      valueOutOfRange: value < info.minValue or value > info.maxValue))
     inc index
   success(move(snapshots))
 
@@ -512,6 +534,14 @@ proc parameterCount*(instance: ClapInstance): int {.inline.} =
 proc parameterCatalogGeneration*(instance: ClapInstance): uint64 {.inline.} =
   instance.parameterCatalogGeneration
 
+proc parameterSnapshot*(instance: ClapInstance; index: int): Result[ClapParameterSnapshot] =
+  if index < 0 or index >= instance.parameterSnapshots.len:
+    return failure[ClapParameterSnapshot](instanceError(
+      hekClapPlugin, "CLAP parameter snapshot index is out of range",
+      instance.module.modulePath, "id=" & instance.descriptor.id &
+        "; index=" & $index & "; count=" & $instance.parameterSnapshots.len))
+  success(instance.parameterSnapshots[index])
+
 proc rescanParameters*(instance: var ClapInstance; flags: uint32): Result[Unit] =
   if flags == 0'u32 or (flags and not ClapParamRescanKnown) != 0'u32:
     return failure[Unit](instanceError(
@@ -552,6 +582,8 @@ proc drainParameterEvents*(instance: var ClapInstance;
       for snapshot in instance.parameterSnapshots.mitems:
         if snapshot.id == event.paramId:
           snapshot.value = event.value
+          snapshot.valueOutOfRange = event.value < snapshot.minValue or
+            event.value > snapshot.maxValue
           break
       inc result.valueChanges
 
