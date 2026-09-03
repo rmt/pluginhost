@@ -2,7 +2,7 @@
 
 `pluginhost` is an in-progress standalone Linux JACK host for native CLAP plugins, implemented in Nim. Its intended role is similar to `carla-single`, with one plugin instance and one JACK client per process.
 
-The current development version is **0.0.9-dev**. The implementation includes checked CLAP ownership/catalog/lifecycle, human/JSON `list` and recursive `scan`, grouped zero-copy JACK audio, and a fixed-capacity sample-accurate JACK MIDI/CLAP event bridge. The canonical public command runs one plugin headlessly under an `epoll`/`signalfd` main reactor, handles orderly signals and JACK/process failures, services CLAP main-thread callbacks plus generation-safe plugin timers and POSIX FDs, reflects plugin latency through JACK, tracks dirty-state notification, handles bounded CLAP parameter output/rescans, sleep/wake requests, and safe restart/port rebuild requests, and owns an optional atomic PID file. It loads requested CLAP state before audio configuration and atomically saves requested state on clean signal shutdown. GUI and later host extensions remain unavailable.
+The current development version is **0.0.10-dev**. The implementation includes checked CLAP ownership/catalog/lifecycle, human/JSON `list` and recursive `scan`, grouped zero-copy JACK audio, and a fixed-capacity sample-accurate JACK MIDI/CLAP event bridge. The canonical public command runs one plugin headlessly under an `epoll`/`signalfd` main reactor, handles orderly signals and JACK/process failures, services CLAP main-thread callbacks plus generation-safe plugin timers and POSIX FDs, reflects plugin latency through JACK, tracks dirty-state notification, handles bounded CLAP parameter output/rescans, sleep/wake requests, and safe restart/port rebuild requests, and owns an optional atomic PID file. It loads requested CLAP state before audio configuration and atomically saves requested state on clean signal shutdown. Increment 10A now provides an independently tested, dynamically loaded Xlib window-host spike; CLAP GUI negotiation and plugin parenting remain unavailable.
 
 ## Build
 
@@ -15,6 +15,7 @@ Requirements:
 - JACK development headers and `libjack.so.0` for ABI tests
 - Python 3 for generated-code auditing and the disposable integration harness
 - PipeWire, PipeWire's JACK implementation, `pw-jack`, `pw-cli`, and `pw-dump` for `testIntegration` and the strict `all` gate
+- Xlib, `Xvfb`, and `xvfb-run` for `testGui` and the strict `all` gate
 
 ```sh
 nimble check
@@ -28,6 +29,7 @@ nimble test
 nimble testAbi
 nimble testFixtures
 nimble testRt
+nimble testGui
 # These strict gates require an independently installed headless CLAP plugin:
 PLUGINHOST_CLAP_SMOKE_PLUGIN=/absolute/path/to/headless.clap nimble testIntegration
 PLUGINHOST_CLAP_SMOKE_PLUGIN=/absolute/path/to/headless.clap nimble all
@@ -43,9 +45,12 @@ has no transitive package dependencies, and is used only in the non-real-time
 control plane.
 
 `nimble testAbi` verifies the handwritten raw bindings against the vendored
-official CLAP 1.2.10 headers and the installed JACK development headers. It also
-checks missing-library/symbol rollback and runtime calls through the owned JACK
-procedure table. The complete CLAP header tree is preserved under `vendor/clap/`
+official CLAP 1.2.10 headers, the installed JACK development headers, and the
+installed Xlib event layouts. It also checks missing-library/symbol rollback and
+runtime calls through the owned JACK procedure table. `nimble testGui` compiles
+the independent X11 window-host/reactor test and runs it under a disposable
+Xvfb server; it does not instantiate a CLAP GUI. The complete CLAP header tree is
+preserved under `vendor/clap/`
 with its MIT license and exact upstream provenance. Draft headers are vendored
 unchanged but are not part of pluginhost's bound or supported ABI surface.
 
@@ -76,9 +81,10 @@ prohibited-I/O operations in host callback scope. Set
 prerequisites fail rather than skip. `nimble all` includes all four isolated live runs.
 
 The checked Linux loader uses `dlopen`/`dlsym`/`dlclose` without another Nim package.
-Both its generic owner and `JackApi` are move-only and require explicit, checked,
-idempotent close. Importing JACK declarations does not load `libjack.so.0`; information
-commands remain independent of JACK, and the internal backend loads it explicitly.
+Its generic owner, `JackApi`, and `X11Api` are move-only and require explicit, checked,
+idempotent close. Importing JACK or X11 declarations does not load `libjack.so.0` or
+`libX11.so.6`; information and headless commands remain independent of both, and the
+concrete backends load them explicitly.
 
 ## Security
 
@@ -108,10 +114,12 @@ past per-root and per-candidate failures, reports successful descriptors, and us
 exit status 3 when any issue occurred. Relative explicit/`CLAP_PATH` roots resolve
 from the current working directory; environment values do not expand `~`.
 The canonical path-only command runs headlessly. `SIGINT` and `SIGTERM` request clean
-shutdown; `SIGUSR1` and `SIGUSR2` are safely consumed but only warn until GUI hosting
-lands. `--pid-file` atomically publishes the running PID and removes only the entry the
-process owns. Default/show/hidden GUI policies warn and fall back to headless operation;
-`--require-gui` and `--gui-scale` fail explicitly until GUI hosting lands. `--load-state`
+shutdown; `SIGUSR1` and `SIGUSR2` are safely consumed but only warn until CLAP GUI
+hosting lands. `--pid-file` atomically publishes the running PID and removes only the
+entry the process owns. Default/show/hidden GUI policies warn and fall back to headless
+operation; `--require-gui` and `--gui-scale` fail explicitly until CLAP GUI hosting lands.
+The 10A X11 window host is an internal spike exercised by `testGui`, not a CLI GUI
+feature. `--load-state`
 loads state before audio configuration. `--save-state` saves after JACK/CLAP processing is
 quiesced during clean `SIGINT`/`SIGTERM` shutdown; it writes a mode-0600 same-directory
 temporary, synchronizes it, and atomically renames it over the destination. Each CLAP

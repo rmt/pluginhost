@@ -306,7 +306,7 @@ proc runUnitTests() =
 proc runAbiTests() =
   exec "mkdir -p build/abi build/nimcache/abi build/test"
   exec "cc -std=gnu11 -Wall -Wextra -Werror -Ic -Ivendor/clap/include " &
-       "$(pkg-config --cflags jack) -c c/abi_probe.c " &
+       "$(pkg-config --cflags jack x11) -c c/abi_probe.c " &
        "-o build/abi/abi_probe.o"
   compileFfiFixture()
   compilePartialJackFixture()
@@ -375,6 +375,23 @@ proc runClapFixtureTests() =
        dependencyPathsClause() & " --nimcache:build/nimcache/fixtures " &
        "--out:build/test/all_fixture_tests tests/fixtures/all_fixture_tests.nim"
 
+proc runGuiTests() =
+  exec "mkdir -p build/test build/integration build/nimcache/integration"
+  exec "cc -std=gnu11 -Wall -Wextra -Werror $(pkg-config --cflags x11) " &
+       "tests/integration/x11_send_wm_delete.c $(pkg-config --libs x11) " &
+       "-o build/integration/x11_send_wm_delete"
+  exec "command -v Xvfb >/dev/null 2>&1 || { echo 'Xvfb is required for GUI tests' >&2; exit 1; }"
+  exec "command -v xvfb-run >/dev/null 2>&1 || { echo 'xvfb-run is required for GUI tests' >&2; exit 1; }"
+  compileControlIntegrationTest(
+    "tests/integration/test_x11_window_host.nim", "x11_window_host")
+  exec "command -v readelf >/dev/null 2>&1 || { echo 'readelf is required for GUI tests' >&2; exit 1; }"
+  exec "dependencies=$(readelf -d build/test/x11_window_host) || exit 1; " &
+       "if printf '%s\\n' \"$dependencies\" | grep -Fq 'libX11.so'; then " &
+       "echo 'unexpected eager libX11 dependency in X11 test host' >&2; exit 1; fi"
+  exec "PLUGINHOST_X11_SEND_DELETE=$PWD/build/integration/x11_send_wm_delete " &
+       "xvfb-run -a -s '-screen 0 1024x768x24 -extension GLX -nolisten tcp' " &
+       "build/test/x11_window_host"
+
 task test, "Build the executable and run the fast unit test suite":
   compileTestBinary()
   runUnitTests()
@@ -393,6 +410,9 @@ task testIntegration, "Run isolated live PipeWire-JACK integration tests":
   compileTestBinary()
   runIntegrationTests()
 
+task testGui, "Run the X11 window-host spike under Xvfb":
+  runGuiTests()
+
 task all, "Run compile checks, build the executable, and run tests":
   checkIntegrationPrerequisites()
   checkClapSmokePrerequisite()
@@ -405,3 +425,4 @@ task all, "Run compile checks, build the executable, and run tests":
   runRtTests()
   runClapFixtureTests()
   runIntegrationTests(false)
+  runGuiTests()

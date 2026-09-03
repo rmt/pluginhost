@@ -21,6 +21,8 @@
 #include <clap/version.h>
 
 #include <jack/jack.h>
+#include <X11/Xlib.h>
+
 #include <jack/midiport.h>
 #include "rt_atomic.h"
 #include <signal.h>
@@ -308,6 +310,9 @@ uint64_t pluginhost_abi_size(int32_t type_id) {
       ABI_TYPE_CASE(203, pluginhost_rt_atomic_u64);
       ABI_TYPE_CASE(301, struct epoll_event);
       ABI_TYPE_CASE(302, struct signalfd_siginfo);
+      ABI_TYPE_CASE(303, XEvent);
+      ABI_TYPE_CASE(304, XConfigureEvent);
+      ABI_TYPE_CASE(305, XClientMessageEvent);
       default: return UINT64_MAX;
    }
 }
@@ -379,6 +384,9 @@ uint64_t pluginhost_abi_align(int32_t type_id) {
       ABI_ALIGN_CASE(203, pluginhost_rt_atomic_u64);
       ABI_ALIGN_CASE(301, struct epoll_event);
       ABI_ALIGN_CASE(302, struct signalfd_siginfo);
+      ABI_ALIGN_CASE(303, XEvent);
+      ABI_ALIGN_CASE(304, XConfigureEvent);
+      ABI_ALIGN_CASE(305, XClientMessageEvent);
       default: return UINT64_MAX;
    }
 }
@@ -570,6 +578,13 @@ uint64_t pluginhost_abi_offset(int32_t field_id) {
       ABI_FIELD_CASE(301, 1, struct epoll_event, events);
       ABI_FIELD_CASE(301, 2, struct epoll_event, data);
       ABI_FIELD_CASE(302, 1, struct signalfd_siginfo, ssi_signo);
+      ABI_FIELD_CASE(304, 1, XConfigureEvent, window);
+      ABI_FIELD_CASE(304, 2, XConfigureEvent, width);
+      ABI_FIELD_CASE(304, 3, XConfigureEvent, height);
+      ABI_FIELD_CASE(305, 1, XClientMessageEvent, window);
+      ABI_FIELD_CASE(305, 2, XClientMessageEvent, message_type);
+      ABI_FIELD_CASE(305, 3, XClientMessageEvent, format);
+      ABI_FIELD_CASE(305, 4, XClientMessageEvent, data);
       default: return UINT64_MAX;
    }
 }

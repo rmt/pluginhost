@@ -239,6 +239,12 @@ Initial concrete window adapters:
 - `X11WindowHost` for XEmbed and floating-X11 parent/transient support.
 - `PluginFloatingWindowHost` for a plugin-owned floating GUI that requires no embedded host surface.
 
+Increment 10A implements only the X11 window-host spike. `platform/x11/ffi.nim` is a
+declaration-only event/API boundary, `api.nim` owns the dynamically loaded Xlib
+procedure table, and `window_host.nim` owns the display, top-level parent surface, WM
+atoms, connection FD, and window lifecycle. It is not yet a `GuiController`: no CLAP
+GUI extension is advertised and no plugin window is parented.
+
 A future native Wayland host can be added as another adapter without changing session or CLAP lifecycle code. Native Wayland embedding remains impossible under the current stable CLAP contract.
 
 ### 5.7 `MainReactor`
@@ -746,6 +752,10 @@ src/
       controller.nim
       window_host.nim
       x11_host.nim
+    platform/x11/
+      ffi.nim
+      api.nim
+      window_host.nim
     platform/linux/
       reactor.nim
       signals.nim

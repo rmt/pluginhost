@@ -50,7 +50,7 @@ As of the latest reviewed state:
 
 - Default/current branch: `main`; inspect `git status` and `git log` before editing.
 - Version: `0.0.10-dev` (`pluginhost.nimble` uses numeric `0.0.10` because of Nimble metadata syntax).
-- Increments 0 through 9 are approved; Increment 10 has not started.
+- Increments 0 through 9 are approved; Increment 10A is implemented in the current review worktree and Increment 10B has not started.
 - The CLI uses exactly pinned `argparse` 4.0.2.
 - `list` and `scan` report copied CLAP descriptors without creating a plugin
   instance; canonical `run` now provides a headless signal-controlled JACK runtime.
@@ -58,8 +58,8 @@ As of the latest reviewed state:
 - CLAP/JACK declarations, Linux DSO ownership, C/Nim callbacks, and the ARC RT
   spike retain their ABI, foreign-thread, allocator, and generated-C checks.
 - The shared build profile is ARC, threads on, panics on, and Nim signal handlers disabled.
-- The current suite contains 106 unit, 26 ABI, 61 fixture, 9 RT, and 6 live integration tests (208 total), plus required generated-C negative-canary rejection.
-- The public headless runtime composes the bounded CLAP/JACK audio/event slice with an `epoll`/`signalfd` reactor, CLAP timer/FD services, state-dirty notification, plugin/JACK latency propagation, bounded parameter transport/rescans, sleep/wake, coalesced quiescent restart/port rebuild with compatible reconnection reporting, transactional CLAP state load/save, main-thread callbacks, orderly shutdown, and atomic PID-file ownership. GUI and later host extensions remain unimplemented.
+- The current suite contains 110 unit, 28 ABI, 61 fixture, 9 RT, 6 live integration, and 1 Xvfb GUI test (215 total), plus required generated-C negative-canary rejection.
+- The public headless runtime composes the bounded CLAP/JACK audio/event slice with an `epoll`/`signalfd` reactor, CLAP timer/FD services, state-dirty notification, plugin/JACK latency propagation, bounded parameter transport/rescans, sleep/wake, coalesced quiescent restart/port rebuild with compatible reconnection reporting, transactional CLAP state load/save, main-thread callbacks, orderly shutdown, and atomic PID-file ownership. Increment 10A adds an internal dynamically loaded Xlib/Xvfb-tested window-host spike; CLAP GUI negotiation and later host extensions remain unimplemented.
 - Remote `origin` is configured; no project license is currently configured.
 
 Current source responsibilities:
@@ -78,6 +78,8 @@ Current source responsibilities:
 - `src/pluginhost/jack/backend.nim`, `callbacks.nim`, and `ports.nim` — internal move-only client state machine, stable audio/MIDI adapters, transactional realization, fixed RT port maps, and control-plane connection snapshot/rebuild/reconnection.
 - `src/pluginhost/rt/atomic_pod.nim`, `engine.nim`, `midi_io.nim`, and `role_guard.nim` — audited trace-free atomics, backend-neutral fixed-layout endpoints, and exclusive symbolic audio role.
 - `src/pluginhost/platform/linux/` — checked move-only DSO, epoll, signalfd/signal-mask, and atomic PID-file ownership.
+- `src/pluginhost/platform/x11/` — declaration-only Xlib ABI, checked move-only X11 loader, and main-thread window lifecycle/event ownership.
+- `src/pluginhost/gui/window_host.nim` — backend-neutral window states and event values.
 - `src/pluginhost/support/` — user diagnostics, UTF-8 handling, and deterministic default JACK naming.
 - `src/pluginhost/version.nim` — embedded product/SDK/ABI version information.
 - `c/abi_probe.c`, `c/rt_atomic.h`, and `tests/abi/` — C-header, lock-free atomic, loader, and callback conformance tests.
@@ -91,6 +93,7 @@ Current source responsibilities:
 - `REVIEW_ISSUES.md` — preserved findings plus owner-approved dispositions and named targets.
 - `config.nims` — shared ARC/thread/panic/signal profile plus optional local Nimble paths.
 - `docs/adr/0003-*.md` through `0006-*.md` — callback profile, checked JACK loading, audited atomics, and direct Linux reactor decisions.
+- `docs/adr/0007-*.md` — dynamically loaded Xlib window-host spike decision.
 - `vendor/clap/` — unmodified upstream headers, license, and provenance.
 
 Only add modules when they gain a real responsibility; do not create the entire future layout as empty scaffolding.
@@ -107,6 +110,7 @@ nimble testAbi
 nimble testFixtures
 nimble testRt
 nimble testIntegration
+nimble testGui
 nimble all
 ```
 
@@ -115,9 +119,9 @@ nimble all
 `nimble testFixtures` builds independent synthetic CLAP DSOs and checks module, catalog, lifecycle, port planning, audio processing, fixed-capacity event translation, cleanup, `list`, and `scan` behavior.
 `nimble testRt` runs allocator/foreign-thread checks through audio and event paths, complete product-profile generated-C/call-path audits, and required negative-canary rejection.
 `nimble testIntegration` fails when prerequisites are missing, then runs four private PipeWire-JACK scenarios covering public signals/PID cleanup, independent CLAP smoke, live audio/MIDI capture, quiescence/stress, and callback instrumentation.
-`nimble all` performs source compile, unit, ABI, fixture, RT, and live integration checks; its integration preflight fails rather than reporting a false complete pass.
+`nimble testGui` compiles the independent X11 window-host test, verifies no eager `libX11.so` dependency, and runs it under Xvfb. `nimble all` performs source compile, unit, ABI, fixture, RT, live integration, and GUI checks; its integration/GUI preflight fails rather than reporting a false complete pass.
 
-For user-visible CLI changes, also exercise the compiled process directly and verify stdout, stderr, signals, PID cleanup, and exit codes. Deferred GUI capabilities remain explicit failures.
+For user-visible CLI changes, also exercise the compiled process directly and verify stdout, stderr, signals, PID cleanup, and exit codes. Increment 10A is an internal window-host spike; deferred CLAP GUI capabilities remain explicit failures.
 
 ## Next planned work: Increment 10A — X11/XEmbed window-host spike
 
@@ -125,11 +129,10 @@ Increment 9 is approved. It adds bounded 64 KiB/64 MiB CLAP state streams,
 pre-configuration load, and clean-signal transactional save after JACK/CLAP quiescence.
 The strict reviewed gate passed 208 tests.
 
-Before editing Increment 10A, inspect the current approved state, run the existing
-verification matrix, and present a fresh pre-code package choosing Xlib or XCB, defining
-the narrow window-host capability and resource ownership, XEmbed/window lifecycle,
-reactor integration, Xvfb fixtures/tests, dependencies/ADR, RT isolation, risks, and
-non-goals. Stop for explicit owner approval before implementation.
+Increment 10A is now implemented in the current review worktree using Xlib; review
+`docs/adr/0007-xlib-window-host-spike.md` and the focused `testGui`/ABI/unit evidence
+before accepting the review unit. Increment 10B remains blocked until explicit owner
+approval.
 
 ## Non-negotiable engineering rules
 

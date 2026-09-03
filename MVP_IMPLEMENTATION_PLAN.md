@@ -3,7 +3,7 @@
 **Plan version:** 1.0.0  
 **Target product release:** `pluginhost` 0.1.0  
 **Initial development version:** 0.0.1-dev  
-**Status:** Approved through Increment 9; Increment 10 not started
+**Status:** Increments 0–9 approved; Increment 10A implementation complete in the current review worktree; 10B not started
 **Companion documents:** [`REQUIREMENTS.md`](REQUIREMENTS.md), [`DESIGN.md`](DESIGN.md)
 
 ## 1. Purpose
@@ -664,12 +664,14 @@ Add the required plugin-native GUI path with runtime show/hide while preserving 
 
 ### Review unit 10A — Window-host spike
 
-Before full integration:
+**Current review unit status:** Implemented with Xlib; pending human review gate 10A.
 
-- Decide Xlib versus XCB and record an ADR.
-- Build `WindowHost` capability and concrete minimal X11 window.
-- Verify XEmbed parent window, event processing, WM close, sizing, and resource cleanup under Xvfb.
-- Keep this spike independent of third-party plugin GUI code.
+The 10A review unit implements:
+
+- Xlib selection and the ownership/error decision in ADR 0007.
+- The backend-neutral `WindowHost` values and a concrete dynamically loaded X11 window.
+- XEmbed-ready parent-surface ownership, event processing, WM close classification, sizing, and cleanup under Xvfb.
+- An independent spike with no third-party plugin GUI code.
 
 Human review is required before unit 10B.
 
@@ -782,7 +784,7 @@ This table is updated only when work is reviewed.
 | 7 — Reactor/signals | Approved | Increment 7 review | Public headless run, epoll/signalfd reactor, orderly shutdown, main-thread callbacks, and atomic PID files accepted |
 | 8 — Host extensions/restart | Approved | Review units 8A and 8B | Main-thread timer/FD services, dirty notification, JACK latency, bounded parameter transport, restart/rescan, sleep/wake, and compatible reconnection/loss evidence accepted |
 | 9 — State | Approved | Increment 9 review | Bounded 64 KiB/64 MiB CLAP streams, pre-configuration load, clean-signal transactional save, rollback, and live evidence accepted |
-| 10 — GUI | Not started | — | Split into 10A/10B reviews; pre-code package required |
+| 10 — GUI | In progress | Review unit 10A pending | Xlib window-host spike, dynamic loading, reactor FD integration, Xvfb lifecycle/ABI tests; 10B CLAP GUI integration not started |
 | 11 — Release candidate | Not started | — | — |
 | 12 — MVP release | Not started | — | Target 0.1.0 |
 
@@ -828,4 +830,4 @@ Each candidate requires requirements/design updates and, where architectural, an
 
 ## 23. First action after each review gate
 
-After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 9 is approved; its final `nimble --offline all -y` evidence covered 208 tests (106 unit, 26 ABI, 61 fixture, 9 RT, and 6 live integration). Before Increment 10 implementation, present the 10A window-host pre-code package and obtain explicit owner approval.
+After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 9 is approved; its final `nimble --offline all -y` evidence covered 208 tests (106 unit, 26 ABI, 61 fixture, 9 RT, and 6 live integration). Increment 10A is implemented in the current review worktree and awaits review of the Xlib ownership, ABI, reactor, and Xvfb evidence; do not begin 10B without explicit owner approval.
