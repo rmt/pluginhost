@@ -35,8 +35,11 @@ type
 
   ClapEventMetrics* {.bycopy.} = object
     acceptedInput*: uint64
+    # droppedInput/droppedOutput are aggregate compatibility counters. The
+    # category counters below are disjoint and are used for diagnostics.
     droppedInput*: uint64
     malformedInput*: uint64
+    invalidInput*: uint64
     inputCapacityDrops*: uint64
     jackLostInput*: uint64
     acceptedOutput*: uint64
@@ -66,6 +69,7 @@ type
     acceptedInput: RtAtomicU64
     droppedInput: RtAtomicU64
     malformedInput: RtAtomicU64
+    invalidInput: RtAtomicU64
     inputCapacityDrops: RtAtomicU64
     jackLostInput: RtAtomicU64
     acceptedOutput: RtAtomicU64
@@ -287,6 +291,7 @@ proc nextCursor(bridge: ptr ClapEventBridge; engine: ptr RtEngine;
     bridge.inputLastTime[int(port)] = source.time
     var translated: ClapEventSlot
     if not bridge.translateInput(port, source, translated):
+      discard bridge.invalidInput.fetchAddRelaxed(1'u64)
       discard bridge.droppedInput.fetchAddRelaxed(1'u64)
       index += 1'u32
       continue
@@ -334,9 +339,17 @@ proc outputPort(event: ptr ClapEventHeader): int32 {.inline, gcsafe, raises: [].
   else:
     -1
 
+proc noteEndValid(event: ptr ClapEventHeader): bool {.inline, gcsafe, raises: [].} =
+  if event == nil or event.size < uint32(sizeof(ClapEventNote)):
+    return false
+  let note = cast[ptr ClapEventNote](event)
+  note.noteId >= -1 and note.portIndex >= -1 and note.channel >= -1 and
+    note.channel <= 15 and note.key >= -1 and note.key <= 127
+
 proc reserveAndCopy(bridge: ptr ClapEventBridge; engine: ptr RtEngine;
                     port, time, size: uint32;
-                    source: ptr UncheckedArray[uint8]): bool {.
+                    source: ptr UncheckedArray[uint8];
+                    capacityDropped: var bool): bool {.
     gcsafe, raises: [].} =
   if source == nil or size == 0'u32:
     return false
@@ -346,6 +359,7 @@ proc reserveAndCopy(bridge: ptr ClapEventBridge; engine: ptr RtEngine;
   let destination = engine.midiIo.reserve(
     engine.midiIo.context, buffer, time, size)
   if destination == nil:
+    capacityDropped = true
     discard bridge.outputCapacityDrops.fetchAddRelaxed(1'u64)
     return false
   var index = 0'u32
@@ -368,7 +382,22 @@ proc outputTryPush(list: ptr ClapOutputEvents;
     discard bridge.droppedOutput.fetchAddRelaxed(1'u64)
     return false
   let engine = cast[ptr RtEngine](engineAddress)
-  if event.spaceId != ClapCoreEventSpaceId or event.time >= bridge.currentFrames or
+  if event.spaceId != ClapCoreEventSpaceId:
+    discard bridge.invalidOutput.fetchAddRelaxed(1'u64)
+    discard bridge.droppedOutput.fetchAddRelaxed(1'u64)
+    return false
+  if event.`type` == ClapEventTypeNoteEnd:
+    # NOTE_END is a valid plugin-to-host voice-lifetime notification. This
+    # host has no CLAP voice allocator and JACK MIDI has no equivalent, so
+    # consume it without turning it into a duplicate MIDI NoteOff. Its time
+    # field is explicitly ignored by CLAP.
+    if not noteEndValid(event):
+      discard bridge.invalidOutput.fetchAddRelaxed(1'u64)
+      discard bridge.droppedOutput.fetchAddRelaxed(1'u64)
+      return false
+    discard bridge.acceptedOutput.fetchAddRelaxed(1'u64)
+    return true
+  if event.time >= bridge.currentFrames or
       (bridge.hasOutputTime and event.time < bridge.lastOutputTime):
     discard bridge.invalidOutput.fetchAddRelaxed(1'u64)
     discard bridge.droppedOutput.fetchAddRelaxed(1'u64)
@@ -386,7 +415,7 @@ proc outputTryPush(list: ptr ClapOutputEvents;
     discard bridge.droppedOutput.fetchAddRelaxed(1'u64)
     return false
   let port = uint32(rawPort)
-  let capacityFailuresBefore = bridge.outputCapacityDrops.loadRelaxed()
+  var capacityDropped = false
   var accepted = false
   case event.`type`
   of ClapEventTypeMidi:
@@ -398,14 +427,14 @@ proc outputTryPush(list: ptr ClapOutputEvents;
           cast[ptr UncheckedArray[uint8]](addr midi.data[0]), size):
         accepted = bridge.reserveAndCopy(
           engine, port, event.time, size,
-          cast[ptr UncheckedArray[uint8]](addr midi.data[0]))
+          cast[ptr UncheckedArray[uint8]](addr midi.data[0]), capacityDropped)
   of ClapEventTypeMidiSysex:
     if event.size >= uint32(sizeof(ClapEventMidiSysex)) and
         (bridge.outputCapabilities[int(port)] and 1'u8) != 0'u8:
       let sysex = cast[ptr ClapEventMidiSysex](event)
       accepted = bridge.reserveAndCopy(
         engine, port, event.time, sysex.size,
-        cast[ptr UncheckedArray[uint8]](sysex.buffer))
+        cast[ptr UncheckedArray[uint8]](sysex.buffer), capacityDropped)
   of ClapEventTypeNoteOn, ClapEventTypeNoteOff:
     if event.size >= uint32(sizeof(ClapEventNote)) and
         (bridge.outputCapabilities[int(port)] and 2'u8) != 0'u8:
@@ -419,13 +448,13 @@ proc outputTryPush(list: ptr ClapOutputEvents;
         bytes[2] = uint8(int(note.velocity * 127.0 + 0.5))
         accepted = bridge.reserveAndCopy(
           engine, port, event.time, 3'u32,
-          cast[ptr UncheckedArray[uint8]](addr bytes[0]))
+          cast[ptr UncheckedArray[uint8]](addr bytes[0]), capacityDropped)
   else:
     discard
 
   if not accepted:
     discard bridge.droppedOutput.fetchAddRelaxed(1'u64)
-    if bridge.outputCapacityDrops.loadRelaxed() == capacityFailuresBefore:
+    if not capacityDropped:
       discard bridge.invalidOutput.fetchAddRelaxed(1'u64)
     return false
   bridge.lastOutputTime = event.time
@@ -540,6 +569,7 @@ proc initClapEventBridge*(bridge: ptr ClapEventBridge; plan: PortPlan;
   bridge.acceptedInput.storeRelaxed(0'u64)
   bridge.droppedInput.storeRelaxed(0'u64)
   bridge.malformedInput.storeRelaxed(0'u64)
+  bridge.invalidInput.storeRelaxed(0'u64)
   bridge.inputCapacityDrops.storeRelaxed(0'u64)
   bridge.jackLostInput.storeRelaxed(0'u64)
   bridge.acceptedOutput.storeRelaxed(0'u64)
@@ -558,6 +588,7 @@ proc takeEventMetrics*(bridge: ptr ClapEventBridge): ClapEventMetrics =
   result.acceptedInput = bridge.acceptedInput.exchangeAcquire(0'u64)
   result.droppedInput = bridge.droppedInput.exchangeAcquire(0'u64)
   result.malformedInput = bridge.malformedInput.exchangeAcquire(0'u64)
+  result.invalidInput = bridge.invalidInput.exchangeAcquire(0'u64)
   result.inputCapacityDrops = bridge.inputCapacityDrops.exchangeAcquire(0'u64)
   result.jackLostInput = bridge.jackLostInput.exchangeAcquire(0'u64)
   result.acceptedOutput = bridge.acceptedOutput.exchangeAcquire(0'u64)

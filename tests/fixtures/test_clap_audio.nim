@@ -260,6 +260,32 @@ suite "internal CLAP float32 audio endpoint":
     check serviced.error.kind == hekClapProcess
     check controls.audioSample(0, 0) == 0.0
 
+  test "control service reports output event rejection categories without double count":
+    var controls = openControls()
+    var opened = openOwnedSlice("audio_tone")
+    var slice = move(opened.slice)
+    var observer = move(opened.observer)
+    var session = initHostSession()
+    defer:
+      doAssert session.close().isOk
+      doAssert observer.close().isOk
+      doAssert controls.close().isOk
+    require session.attachInternalAudioSlice(slice).isOk
+    require session.startInternalAudio().isOk
+    check controls.invokeProcess(4) == 0
+    check controls.invokeProcess(4) == 0
+    var config = defaultRunConfig()
+    config.guiPolicy = gpDisabled
+    let diagnosticPath = getTempDir() / "pluginhost-event-warning.log"
+    var diagnostic = open(diagnosticPath, fmWrite)
+    require session.serviceInternalControlOnce(config, diagnostic).isOk
+    diagnostic.close()
+    let text = readFile(diagnosticPath)
+    removeFile(diagnosticPath)
+    check text.contains(
+      "audio event bridge dropped or rejected 2 events (output-invalid=2)")
+    check not text.contains("audio event bridge dropped or rejected 4 events")
+
   test "rejected session attachment retains caller ownership":
     var controls = openControls()
     var opened = openOwnedSlice("audio_tone")
@@ -509,6 +535,7 @@ suite "internal CLAP float32 audio endpoint":
     require session.startInternalAudio().isOk
     check controls.invokeProcess(16) == 0
     var config = defaultRunConfig()
+    config.verbosity = vbQuiet
     require session.serviceInternalControlOnce(config, stderr).isOk
     check session.hasDirtyState
     check session.state == ssRunning

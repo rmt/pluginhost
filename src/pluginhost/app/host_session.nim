@@ -1,7 +1,7 @@
 import std/options
 
 import ./[audio_slice, main_reactor, plugin_services, run_config]
-import ../clap/[ffi, loader, main_thread_services]
+import ../clap/[event_bridge, ffi, loader, main_thread_services]
 import ../gui/controller
 import ../platform/x11/gui_adapter
 import ../domain/[errors, lifecycle, plugin_catalog, reactor, result]
@@ -16,6 +16,10 @@ const
 
 
 type
+  SignalTurn = object
+    intents: seq[SignalIntent]
+    shutdown: bool
+
   HostSession* = object
     state*: SessionState
     audioSlice: InternalAudioSlice
@@ -141,6 +145,41 @@ proc openRunSlice(config: RunConfig;
 proc warning(errorOutput: File; message: string) =
   errorOutput.write("pluginhost: warning: " & message & "\n")
 
+proc saturatingAdd(left, right: uint64): uint64 =
+  if high(uint64) - left < right:
+    high(uint64)
+  else:
+    left + right
+
+proc addEventMetricDetail(details: var string; label: string; count: uint64) =
+  if count == 0'u64:
+    return
+  if details.len > 0:
+    details.add(", ")
+  details.add(label & "=" & $count)
+
+proc eventMetricsWarningMessage*(metrics: ClapEventMetrics): string =
+  var total = 0'u64
+  total = total.saturatingAdd(metrics.inputCapacityDrops)
+  total = total.saturatingAdd(metrics.invalidInput)
+  total = total.saturatingAdd(metrics.malformedInput)
+  total = total.saturatingAdd(metrics.outputCapacityDrops)
+  total = total.saturatingAdd(metrics.invalidOutput)
+  total = total.saturatingAdd(metrics.jackLostInput)
+  if total == 0'u64:
+    return ""
+
+  var details = ""
+  details.addEventMetricDetail("input-overflow", metrics.inputCapacityDrops)
+  details.addEventMetricDetail("input-invalid", metrics.invalidInput)
+  details.addEventMetricDetail("input-malformed", metrics.malformedInput)
+  details.addEventMetricDetail("output-overflow", metrics.outputCapacityDrops)
+  details.addEventMetricDetail("output-invalid", metrics.invalidOutput)
+  details.addEventMetricDetail("jack-input-lost", metrics.jackLostInput)
+  result = "audio event bridge dropped or rejected " & $total & " events"
+  if details.len > 0:
+    result.add(" (" & details & ")")
+
 proc pluginLogSeverity(severity: PluginLogSeverity): string =
   case severity
   of plsDebug: "debug"
@@ -167,26 +206,37 @@ proc drainPluginLogs(session: var HostSession; config: RunConfig;
   if dropped > 0'u64 and config.verbosity != vbQuiet:
     warning(errorOutput, "CLAP log queue dropped " & $dropped & " messages")
 
-proc serviceSignals(session: var HostSession; config: RunConfig;
-                     events: seq[ReactorEvent]; errorOutput: File): Result[bool] =
+proc drainSignals(session: var HostSession; events: seq[ReactorEvent]):
+    Result[SignalTurn] =
   var signalReady = false
   for event in events:
     if event.kind == rekFd and event.token == session.signalToken:
       if riError in event.interests or riHangup in event.interests:
-        return failure[bool](hostError(
+        return failure[SignalTurn](hostError(
           hsPlatform, hekSignal, "Linux signal descriptor failed"))
       signalReady = true
   if not signalReady:
-    return success(false)
+    return success(SignalTurn())
 
   var drained = session.signalSource.drain()
   if not drained.isOk:
-    return failure[bool](move(drained.error))
-  var shutdown = false
-  for intent in drained.value:
+    return failure[SignalTurn](move(drained.error))
+  var turn = SignalTurn(intents: move(drained.value))
+  for intent in turn.intents:
     case intent
     of siInterrupt, siTerminate:
-      shutdown = true
+      turn.shutdown = true
+    else:
+      discard
+  success(move(turn))
+
+proc serviceGuiSignalActions(session: var HostSession; config: RunConfig;
+                             intents: openArray[SignalIntent];
+                             errorOutput: File): Result[Unit] =
+  for intent in intents:
+    case intent
+    of siInterrupt, siTerminate:
+      discard
     of siShowGui, siHideGui:
       let operation = if intent == siShowGui: "show" else: "hide"
       if session.gui == nil:
@@ -199,12 +249,12 @@ proc serviceSignals(session: var HostSession; config: RunConfig;
                      else: session.gui.hide()
         if not action.isOk:
           if config.requireGui:
-            return failure[bool](move(action.error))
+            return failure[Unit](move(action.error))
           if intent notin session.guiSignalWarnings:
             session.guiSignalWarnings.incl(intent)
             warning(errorOutput, "could not " & operation &
               " the plugin GUI; continuing headless: " & action.error.message)
-  success(shutdown)
+  success()
 
 proc servicePluginEvents(session: var HostSession; events: seq[ReactorEvent]):
     Result[Unit] =
@@ -298,12 +348,9 @@ proc serviceAudioControl(session: var HostSession; config: RunConfig;
   session.lastFreewheelChanges = snapshot.freewheelCount
 
   let eventMetrics = session.audioSlice.takeEventMetrics()
-  let droppedEvents = eventMetrics.droppedInput + eventMetrics.droppedOutput +
-    eventMetrics.malformedInput + eventMetrics.invalidOutput +
-    eventMetrics.jackLostInput
-  if droppedEvents > 0'u64 and config.verbosity != vbQuiet:
-    warning(errorOutput, "audio event bridge dropped or rejected " &
-      $droppedEvents & " events")
+  let eventWarning = eventMetrics.eventMetricsWarningMessage()
+  if eventWarning.len > 0 and config.verbosity != vbQuiet:
+    warning(errorOutput, eventWarning)
   let parameterEvents = session.audioSlice.drainParameterEvents()
   let parameterMetrics = session.audioSlice.takeParameterMetrics()
   if parameterMetrics.dropped > 0'u64 and config.verbosity != vbQuiet:
@@ -445,10 +492,10 @@ proc run*(session: var HostSession; config: RunConfig;
     var events = session.reactor.wait(monotonicNanos(ControlServiceNanos))
     if not events.isOk:
       return failSession[Unit](session, move(events.error))
-    var shutdown = session.serviceSignals(config, events.value, errorOutput)
-    if not shutdown.isOk:
-      return failSession[Unit](session, move(shutdown.error))
-    if shutdown.value:
+    var signals = session.drainSignals(events.value)
+    if not signals.isOk:
+      return failSession[Unit](session, move(signals.error))
+    if signals.value.shutdown:
       var stopping = session.state.transition(ssStopping)
       if not stopping.isOk:
         return stopping
@@ -456,6 +503,10 @@ proc run*(session: var HostSession; config: RunConfig;
     var guiEvents = session.serviceGuiEvents(config, events.value, errorOutput)
     if not guiEvents.isOk:
       return failSession[Unit](session, move(guiEvents.error))
+    var guiSignals = session.serviceGuiSignalActions(
+      config, signals.value.intents, errorOutput)
+    if not guiSignals.isOk:
+      return failSession[Unit](session, move(guiSignals.error))
     var pluginEvents = session.servicePluginEvents(events.value)
     if not pluginEvents.isOk:
       return failSession[Unit](session, move(pluginEvents.error))

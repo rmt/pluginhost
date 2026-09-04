@@ -98,6 +98,7 @@ suite "fixed-capacity JACK and CLAP event bridge":
     let metrics = slice.takeEventMetrics()
     check metrics.acceptedInput == 4
     check metrics.droppedInput == 0
+    check metrics.invalidInput == 0
     check metrics.jackLostInput == 3
     check metrics.acceptedOutput == 4
     check metrics.droppedOutput == 0
@@ -152,6 +153,7 @@ suite "fixed-capacity JACK and CLAP event bridge":
     let metrics = slice.takeEventMetrics()
     check metrics.acceptedInput == 4
     check metrics.droppedInput == 2
+    check metrics.invalidInput == 2
     check metrics.acceptedOutput == 3
     check fixture.outputRejected() == 0
     check fixture.contractFailures() == 0
@@ -188,6 +190,7 @@ suite "fixed-capacity JACK and CLAP event bridge":
     check metrics.acceptedInput == 1
     check metrics.droppedInput == 6
     check metrics.malformedInput == 3
+    check metrics.invalidInput == 3
     check fixture.contractFailures() == 0
 
   test "exact input capacity drops one excess event and recovers next cycle":
@@ -211,6 +214,7 @@ suite "fixed-capacity JACK and CLAP event bridge":
     check full.acceptedInput == ClapInputEventCapacity
     check full.inputCapacityDrops == 1
     check full.droppedInput == 1
+    check full.invalidInput == 0
     check full.acceptedOutput == ClapInputEventCapacity
 
     controls.clearMidiEvents(0)
@@ -284,6 +288,29 @@ suite "fixed-capacity JACK and CLAP event bridge":
     check metrics.acceptedOutput == 2
     check metrics.droppedOutput == 6
     check metrics.invalidOutput == 6
+    check metrics.outputCapacityDrops == 0
+    check fixture.contractFailures() == 0
+
+  test "valid CLAP NOTE_END is consumed without a JACK MIDI duplicate":
+    var controls = openControls()
+    var opened = openEventSlice("events_note_end")
+    var slice = move(opened.slice)
+    var observer = move(opened.observer)
+    let fixture = opened.fixture
+    defer:
+      doAssert slice.close().isOk
+      doAssert observer.close().isOk
+      doAssert controls.close().isOk
+
+    require slice.start().isOk
+    check controls.invokeProcess(64) == 0
+    check fixture.outputAccepted() == 1
+    check fixture.outputRejected() == 0
+    check controls.midiEventCount(0) == 0
+    let metrics = slice.takeEventMetrics()
+    check metrics.acceptedOutput == 1
+    check metrics.droppedOutput == 0
+    check metrics.invalidOutput == 0
     check metrics.outputCapacityDrops == 0
     check fixture.contractFailures() == 0
 

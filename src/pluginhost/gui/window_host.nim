@@ -29,6 +29,7 @@ type
   WindowEventKind* = enum
     wekOther
     wekClose
+    wekDestroyed
     wekConfigure
     wekMap
     wekUnmap

@@ -23,6 +23,7 @@ type
     adjustReturns: bool
     adjustedSize: GuiSize
     scaleCount: int
+    rejectHide: bool
 
   FakeWindowBackend = ref object of WindowHostBackend
     readFd: cint
@@ -115,6 +116,8 @@ method show*(client: FakeGuiClient): Result[bool] {.raises: [].} =
 
 method hide*(client: FakeGuiClient): Result[bool] {.raises: [].} =
   inc client.hideCount
+  if client.rejectHide:
+    return success(false)
   success(true)
 
 proc newFakeWindow(): FakeWindowBackend =
@@ -233,7 +236,40 @@ suite "GUI controller policy and lifecycle":
     check plugin.destroyCount == 1
     check controller.state == gcsClosed
 
-  test "WM close destroys the host GUI and permits recreation":
+  test "WM close uses hide and restores even when embedded hide is rejected":
+    var reactor = openTestReactor()
+    var plugin = newFakeGui()
+    plugin.rejectHide = true
+
+    var produced: FakeWindowBackend
+    let factory: WindowHostFactory = proc(): WindowHostBackend =
+      produced = newFakeWindow()
+      produced
+    var controller = newGuiController(plugin, addr reactor, factory, "test")
+    defer:
+      check controller.close().isOk
+      check reactor.close().isOk
+
+    check controller.start(true).isOk
+    check controller.state == gcsVisible
+    dispatchWindowEvent(reactor, controller, produced,
+      WindowEvent(kind: wekClose))
+    check controller.state == gcsHidden
+    check produced.state == whHidden
+    check plugin.hideCount == 1
+    check plugin.destroyCount == 0
+    check plugin.createCount == 1
+
+    check controller.show().isOk
+    check controller.state == gcsVisible
+    check plugin.showCount == 2
+    check plugin.createCount == 1
+    check plugin.destroyCount == 0
+
+    check controller.close().isOk
+    check plugin.destroyCount == 1
+
+  test "actual surface destruction cleans up and permits recreation":
     var reactor = openTestReactor()
     var plugin = newFakeGui()
     var produced: FakeWindowBackend
@@ -245,21 +281,19 @@ suite "GUI controller policy and lifecycle":
       check controller.close().isOk
       check reactor.close().isOk
 
-    check controller.start(false).isOk
-    produced.hasEvent = true
-    produced.pendingEvent = WindowPollResult(available: true,
-      event: WindowEvent(kind: wekClose))
-    var byte = 'x'
-    check posix.write(produced.writeFd, addr byte, 1) == 1
-    var events = reactor.wait(monotonicNanos(50_000_000))
-    require events.isOk
-    check controller.handleWindowEvents(events.value).isOk
+    check controller.start(true).isOk
+    dispatchWindowEvent(reactor, controller, produced,
+      WindowEvent(kind: wekDestroyed))
     check controller.state == gcsUncreated
     check plugin.destroyCount == 1
+    check plugin.hideCount == 0
+    check plugin.createCount == 1
+
     check controller.show().isOk
+    check controller.state == gcsVisible
     check plugin.createCount == 2
+    check plugin.destroyCount == 1
     check controller.close().isOk
-    check plugin.hideCount == 1
     check plugin.destroyCount == 2
 
   test "position-only ConfigureNotify events do not renegotiate plugin size":

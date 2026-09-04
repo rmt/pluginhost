@@ -297,6 +297,7 @@ proc compileClapFixtures() =
   compileEventFixtureVariant("events_clap", 1)
   compileEventFixtureVariant("events_midi2_only", 2)
   compileEventFixtureVariant("events_malformed_output", 3)
+  compileEventFixtureVariant("events_note_end", 4)
   compileGuiFixture()
   exec "cc -std=gnu11 -fPIC -shared -fvisibility=hidden " &
        "-Wall -Wextra -Werror -Wl,-z,defs " &
@@ -360,6 +361,7 @@ proc runRtTests() =
   compileFakeJackFixture()
   exec "mkdir -p build/fixtures/clap"
   compileEventFixtureVariant("events_raw", 0)
+  compileEventFixtureVariant("events_note_end", 4)
   exec "PLUGINHOST_FFI_FIXTURE=$PWD/build/fixtures/" &
        "libpluginhost_ffi_fixture.so " &
        "PLUGINHOST_JACK_FAKE_FIXTURE=$PWD/build/fixtures/" &

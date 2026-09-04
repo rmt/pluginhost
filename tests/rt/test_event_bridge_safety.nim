@@ -76,3 +76,4 @@ suite "CLAP event process-path safety":
     check malformedMetrics.acceptedInput == 0
     check malformedMetrics.droppedInput == 2
     check malformedMetrics.malformedInput == 1
+    check malformedMetrics.invalidInput == 1

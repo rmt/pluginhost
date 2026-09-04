@@ -25,6 +25,7 @@
 #define MODE_CLAP 1
 #define MODE_MIDI2_ONLY 2
 #define MODE_MALFORMED_OUTPUT 3
+#define MODE_NOTE_END 4
 #define OBSERVED_CAPACITY 4096U
 
 typedef struct observed_event {
@@ -50,6 +51,7 @@ static uint32_t output_rejected;
 static uint32_t contract_failures;
 static uint32_t destroy_count;
 static bool malformed_emitted;
+static bool note_end_emitted;
 static clap_process_status process_status = CLAP_PROCESS_CONTINUE;
 
 static const char *fixture_features[] = {
@@ -108,7 +110,8 @@ static bool fixture_note_get(const clap_plugin_t *plugin, uint32_t index,
    } else if (PLUGINHOST_EVENT_FIXTURE_MODE == MODE_MIDI2_ONLY) {
       info->supported_dialects = CLAP_NOTE_DIALECT_MIDI2;
       info->preferred_dialect = CLAP_NOTE_DIALECT_MIDI2;
-   } else if (PLUGINHOST_EVENT_FIXTURE_MODE == MODE_MALFORMED_OUTPUT) {
+   } else if (PLUGINHOST_EVENT_FIXTURE_MODE == MODE_MALFORMED_OUTPUT ||
+              PLUGINHOST_EVENT_FIXTURE_MODE == MODE_NOTE_END) {
       info->supported_dialects = CLAP_NOTE_DIALECT_MIDI |
                                  CLAP_NOTE_DIALECT_CLAP;
       info->preferred_dialect = CLAP_NOTE_DIALECT_MIDI;
@@ -325,6 +328,19 @@ static clap_process_status fixture_plugin_process(const clap_plugin_t *plugin,
       emit_malformed_output(process->out_events);
       malformed_emitted = true;
    }
+   if (PLUGINHOST_EVENT_FIXTURE_MODE == MODE_NOTE_END && !note_end_emitted) {
+      clap_event_note_t note_end = {
+         .header = {sizeof(note_end), process->frames_count,
+                    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_END, 0U},
+         .note_id = -1,
+         .port_index = -1,
+         .channel = -1,
+         .key = 60,
+         .velocity = 0.0,
+      };
+      push_event(process->out_events, &note_end.header);
+      note_end_emitted = true;
+   }
    ++process_count;
    return process_status;
 }
@@ -407,6 +423,7 @@ EVENT_FIXTURE_EXPORT void pluginhost_event_fixture_reset(void) {
    contract_failures = 0U;
    destroy_count = 0U;
    malformed_emitted = false;
+   note_end_emitted = false;
    process_status = CLAP_PROCESS_CONTINUE;
 }
 

@@ -685,7 +685,7 @@ The 10A review gate is complete; unit 10B is a separate review unit.
 - Connect X11 readiness to the reactor.
 - Implement `--show-gui`, `--hide-gui`, `--no-gui`, `--require-gui`, and `--gui-scale` policy.
 - Implement `SIGUSR1` show and `SIGUSR2` hide.
-- Make WM close hide/destroy without stopping audio and allow recreation.
+- Make WM close hide/unmap without stopping audio, and clean up/recreate after actual surface destruction.
 - Ensure `--no-gui` does not advertise GUI hosting.
 - Extend fixture with embedded/floating, resize, timer, POSIX FD, close, failure, and recreate GUI modes.
 

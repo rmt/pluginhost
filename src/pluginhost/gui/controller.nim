@@ -104,12 +104,14 @@ proc cleanupSurface(controller: GuiController;
   var failed = false
 
   if controller.pluginCreated:
+    # An embedded parent unmap remains authoritative if the plugin declines
+    # the advisory hide call during final cleanup.
     if not pluginWindowAlreadyDestroyed and controller.stateValue == gcsVisible:
       var hidden = controller.plugin.hide()
       if not hidden.isOk:
         first = move(hidden.error)
         failed = true
-      elif not hidden.value:
+      elif not hidden.value and controller.modeValue != gmEmbedded:
         first = controllerError("CLAP plugin rejected GUI hide during cleanup")
         failed = true
     var destroyed = controller.plugin.destroy()
@@ -340,11 +342,13 @@ proc hide*(controller: GuiController): Result[Unit] =
 
   var first: HostError
   var failed = false
+  # For embedded GUIs, unmapping the host parent is sufficient even when the
+  # plugin reports that its own hide request was not accepted.
   var hidden = controller.plugin.hide()
   if not hidden.isOk:
     first = move(hidden.error)
     failed = true
-  elif not hidden.value:
+  elif not hidden.value and controller.modeValue != gmEmbedded:
     first = controllerError("CLAP plugin rejected GUI hide")
     failed = true
   if controller.modeValue == gmEmbedded:
@@ -453,7 +457,12 @@ proc handleWindowEvents*(controller: GuiController;
       break
     case polled.value.event.kind
     of wekClose:
-      var closed = controller.cleanupSurface()
+      var hidden = controller.hide()
+      if not hidden.isOk:
+        return hidden
+    of wekDestroyed:
+      var closed = controller.cleanupSurface(
+        pluginWindowAlreadyDestroyed = true)
       if not closed.isOk:
         return closed
       controller.stateValue = gcsUncreated

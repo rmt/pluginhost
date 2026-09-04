@@ -350,6 +350,7 @@ The host MUST query the initial sample rate and buffer size before CLAP activati
 
 - `CLAP_EVENT_MIDI` and `CLAP_EVENT_MIDI_SYSEX` MUST be copied immediately into the corresponding JACK MIDI output buffer with the event timestamp preserved.
 - CLAP note-on and note-off events SHOULD be translated to MIDI 1.0 when values are representable.
+- `CLAP_EVENT_NOTE_END` MUST be accepted as a plugin-to-host voice-lifetime notification; because the host does not allocate CLAP voices and JACK MIDI has no equivalent, it is consumed without emitting a duplicate MIDI note-off.
 - Unsupported note expressions, MIDI 2.0 events, invalid port indices, out-of-order timestamps, or events that do not fit in the JACK buffer MUST fail safely and increment a drop/error counter.
 - Each JACK MIDI output buffer MUST be cleared at the start of its process cycle.
 - Plugin output-event `try_push()` MUST obey CLAP's copy/lifetime rules, including immediate copying of SysEx data.

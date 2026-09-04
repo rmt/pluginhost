@@ -33,10 +33,13 @@ Add a main-thread-only `GuiController` with the following ownership and policy:
    title. Show/hide and destruction are explicit and idempotent at the
    controller boundary.
 5. The X connection FD is registered with `MainReactor`. Window events are
-   drained with a fixed per-turn bound. WM close destroys the host-created GUI
-   surface so a later show can recreate it; `clap_host_gui.closed(true)` is
-   acknowledged by the host with exactly one `clap_plugin_gui.destroy()` call
-   before the host surface is released.
+   drained with a fixed per-turn bound. WM close is a user hide request: the
+   controller applies the same plugin-hide/host-unmap path as `SIGUSR2` without
+   destroying the CLAP GUI, so a later show reuses the same plugin GUI object. For
+   embedded GUIs, a plugin `hide()` result of false is tolerated because unmapping
+   the host parent is authoritative. Actual X11 surface destruction releases the
+   host surface and calls exactly one `clap_plugin_gui.destroy()` so a later show
+   can recreate it. `clap_host_gui.closed(true)` uses the same destroy path.
 6. Host GUI callbacks publish only bounded atomic requests. The main loop drains
    and applies them after plugin/timer/FD dispatch; callbacks never call Xlib or
    CLAP lifecycle methods directly.
@@ -49,7 +52,9 @@ Add a main-thread-only `GuiController` with the following ownership and policy:
   audio startup, while `--hide-gui` creates a hidden GUI and `--no-gui` does
   not create or advertise one.
 - `SIGUSR1` and `SIGUSR2` operate on the controller when enabled and retain the
-  existing rate-limited unavailable warning when disabled.
+  existing rate-limited unavailable warning when disabled. Window events are
+  applied before same-turn GUI signal actions, so WM close followed by `SIGUSR1`
+  restores visibility without unnecessary CLAP GUI recreation.
 - X11 remains dynamically loaded and all Xlib/CLAP GUI operations remain on the
   process's CLAP main thread.
 - Resize constraints are validated at the CLAP boundary and plugin-requested

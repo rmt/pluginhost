@@ -243,9 +243,13 @@ with fake plugin/window clients while the production path uses `ClapGuiClient`,
 The host bridge exposes `clap.gui` only when GUI hosting is enabled. GUI callback
 bits, packed resize dimensions, and plugin-owned close state are atomically
 coalesced; callbacks never call CLAP or Xlib policy directly. A bounded main-loop
-turn drains those requests and X11 events. WM close releases the host surface for
+turn drains those requests and X11 events. WM close applies the same
+plugin-hide/host-unmap path as `SIGUSR2` without destroying the CLAP GUI, so a
+same-turn or later show reuses the existing CLAP GUI object. For embedded GUIs, a
+plugin `hide()` result of false is tolerated because unmapping the host parent is
+authoritative. Actual X11 surface destruction releases the host surface for
 recreation, while `clap_host_gui.closed(true)` causes one host-side
-`clap_plugin_gui.destroy()` acknowledgement before the surface is released.
+`clap_plugin_gui.destroy()` acknowledgement before release.
 
 Increment 10A established the X11 declaration/API/window ownership boundary.
 Increment 10B connects it to CLAP and the session. Native Wayland remains deferred;
@@ -610,6 +614,8 @@ MIDI and SysEx are copied immediately into JACK-reserved output storage. Safely 
 4,096-entry SPSC transport, never retaining plugin cookie pointers. Active output is
 produced only by `process()`; inactive `flush()` receives an empty input list and cannot
 overlap the process endpoint.
+
+A valid `CLAP_EVENT_NOTE_END` is consumed without JACK output: it is a plugin-to-host voice-lifetime notification, its timestamp is ignored by CLAP, and this host has no CLAP voice allocator or MIDI equivalent.
 
 ### 11.4 Sleeping, tail, and wake policy
 

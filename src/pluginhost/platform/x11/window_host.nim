@@ -321,7 +321,6 @@ proc pollEvent*(host: var X11WindowHost): Result[WindowPollResult] =
   of X11ClientMessage:
     if isWmDeleteEvent(addr raw, host.window, host.wmProtocols,
                        host.wmDeleteWindow):
-      host.stateValue = whHidden
       return success(WindowPollResult(
         available: true, event: WindowEvent(kind: wekClose)))
   of X11ConfigureNotify:
@@ -341,7 +340,7 @@ proc pollEvent*(host: var X11WindowHost): Result[WindowPollResult] =
   of X11DestroyNotify:
     host.window = 0
     host.stateValue = whClosed
-    return success(WindowPollResult(available: true, event: WindowEvent(kind: wekClose)))
+    return success(WindowPollResult(available: true, event: WindowEvent(kind: wekDestroyed)))
   else:
     discard
   success(WindowPollResult(available: true, event: WindowEvent(kind: wekOther)))
