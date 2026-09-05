@@ -50,6 +50,7 @@
 #define MODE_AUDIO_BAD_PREFERENCE 27
 #define MODE_RENDER_MISSING_REQUIREMENT 28
 #define MODE_EXACT_LIMITS 29
+#define MODE_AUDIO_DANGLING_ZERO_PAIR 30
 
 #define MAX_PORT_TYPE_BYTES (4U * 1024U)
 
@@ -113,6 +114,8 @@ static uint32_t fixture_audio_count(const clap_plugin_t *plugin,
       return 1025U;
    if (PLUGINHOST_PORT_FIXTURE_MODE == MODE_EXACT_LIMITS)
       return 1024U;
+   if (PLUGINHOST_PORT_FIXTURE_MODE == MODE_AUDIO_DANGLING_ZERO_PAIR)
+      return is_input ? 0U : 1U;
    return 2U;
 }
 
@@ -130,6 +133,18 @@ static bool fixture_audio_get(const clap_plugin_t *plugin,
    expect_main_thread();
    if (info == NULL)
       return false;
+   if (PLUGINHOST_PORT_FIXTURE_MODE == MODE_AUDIO_DANGLING_ZERO_PAIR) {
+      if (is_input || index != 0U)
+         return false;
+      memset(info, 0, sizeof(*info));
+      info->id = 0U;
+      set_audio_name(info, "Hive Output");
+      info->flags = CLAP_AUDIO_PORT_IS_MAIN;
+      info->channel_count = 2U;
+      info->port_type = CLAP_PORT_STEREO;
+      info->in_place_pair = 0U;
+      return true;
+   }
    if (PLUGINHOST_PORT_FIXTURE_MODE == MODE_EXACT_LIMITS) {
       if (index >= 1024U)
          return false;

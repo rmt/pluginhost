@@ -354,12 +354,12 @@ Configuration values are validated before any plugin code executes.
 
 `PortPlan` is a host-owned, immutable description built while the plugin is deactivated:
 
-- `AudioGroup`: CLAP index/ID, direction, name, channel count, type, flags, and flattened-channel range.
+- `AudioGroup`: CLAP index/ID, direction, name, channel count, type, flags, normalized in-place-pair metadata, and flattened-channel range.
 - `AudioChannelPlan`: group/channel indices, provisional canonical JACK short name, optional alias, and direction.
 - `NotePortPlan`: CLAP index/ID, name, supported/preferred dialect, provisional JACK name, and direction.
 - `PortPlanVersion`: monotonically increasing generation for diagnostics and restart validation.
 
-The CLAP inspector applies the strict stable consistency rules also enforced by the official validator. `JackBackend` realizes the plan only after it knows JACK's actual client name and limits: it validates canonical full names, prefixes metadata aliases with the actual client name, bounds/truncates aliases on UTF-8 boundaries, registers ports transactionally, and returns a fixed-layout `RtPortMap` containing handles and counts rather than metadata.
+The CLAP inspector applies the strict stable consistency rules also enforced by the official validator. Fields required to build the bounded real-time map remain fatal when malformed. The host always supplies distinct input and output buffers, so a dangling `in_place_pair` ID is normalized to absent while valid pair IDs remain informational metadata. `JackBackend` realizes the plan only after it knows JACK's actual client name and limits: it validates canonical full names, prefixes metadata aliases with the actual client name, bounds/truncates aliases on UTF-8 boundaries, registers ports transactionally, and returns a fixed-layout `RtPortMap` containing handles and counts rather than metadata.
 
 A structural rescan creates a new plan and map only after JACK callbacks are quiescent. Live mutation or atomic replacement of a map is not needed initially.
 

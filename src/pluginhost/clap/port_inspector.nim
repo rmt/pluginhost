@@ -253,27 +253,27 @@ proc scanAudioDirection(plugin: ptr ClapPlugin;
     flattenedCount = flattenedPast
   success()
 
-proc validateInPlacePairs(groups: seq[AudioGroup]; path,
-                          pluginId: string): Result[Unit] =
+proc normalizeInPlacePairs(groups: var seq[AudioGroup]) =
+  var inputIds = initHashSet[uint32]()
+  var outputIds = initHashSet[uint32]()
   for group in groups:
+    case group.direction
+    of pdInput:
+      inputIds.incl(group.id)
+    of pdOutput:
+      outputIds.incl(group.id)
+
+  for group in groups.mitems:
     if group.inPlacePair.isNone:
       continue
-    let expectedDirection = if group.direction == pdInput: pdOutput else: pdInput
-    var found = false
-    for candidate in groups:
-      if candidate.direction == expectedDirection and
-          candidate.id == group.inPlacePair.get:
-        found = true
-        break
-    if not found:
-      return failure[Unit](portError(
-        path,
-        pluginId,
-        "CLAP audio in-place pair is invalid",
-        fieldDetail(group.direction, group.index, "in_place_pair",
-          "opposite-direction ID not found: " & $group.inPlacePair.get),
-      ))
-  success()
+    let pairId = group.inPlacePair.get
+    let pairExists = case group.direction
+      of pdInput: pairId in outputIds
+      of pdOutput: pairId in inputIds
+    if not pairExists:
+      # The process path always supplies distinct buffers, so a dangling
+      # informational pair cannot affect the realized layout.
+      group.inPlacePair = none(uint32)
 
 proc noteDialects(raw: uint32): NoteDialects =
   if (raw and ClapNoteDialectClap) != 0:
@@ -402,9 +402,7 @@ proc inspectClapPorts*(plugin: ptr ClapPlugin;
       plugin, audioPorts, pdOutput, path, pluginId, totalBytes, groups, channels)
     if not outputs.isOk:
       return failure[PortPlan](outputs.error)
-    let pairs = validateInPlacePairs(groups, path, pluginId)
-    if not pairs.isOk:
-      return failure[PortPlan](pairs.error)
+    normalizeInPlacePairs(groups)
 
   if notePorts != nil:
     if notePorts.count == nil or notePorts.get == nil:

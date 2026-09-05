@@ -317,6 +317,7 @@ The host MUST query the initial sample rate and buffer size before CLAP activati
 - CLAP port grouping and channel order MUST be preserved internally in the `clap_audio_buffer` arrays.
 - JACK buffers MUST be passed to the plugin as float32 channel pointers without a full-buffer copy whenever possible.
 - `data64` MUST be null in the initial release. CLAP requires plugins to support float32 processing.
+- The initial host MUST use distinct input and output buffers; it does not perform CLAP in-place processing. A dangling `in_place_pair` ID MUST be normalized to no pair rather than blocking startup; valid pair metadata MAY be retained.
 - Port names MUST be deterministic, unique within the client, legal for JACK, and short enough for the limit calculated from JACK's actual client name and reported name size.
 - Canonical short names SHOULD follow `audio_in_N` and `audio_out_N`, using one-based flattened channel numbers.
 - CLAP port/channel names SHOULD be exposed as JACK aliases or metadata when supported; aliases MUST be bounded and truncated on a valid UTF-8 boundary when required.

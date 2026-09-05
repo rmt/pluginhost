@@ -278,6 +278,7 @@ proc compileClapFixtures() =
   compilePortFixtureVariant("audio_bad_preference", 27)
   compilePortFixtureVariant("render_missing_requirement", 28)
   compilePortFixtureVariant("ports_exact_limits", 29)
+  compilePortFixtureVariant("audio_dangling_zero_pair", 30)
   compileAudioFixtureVariant("audio_tone", 0)
   compileAudioFixtureVariant("audio_gain", 1)
   compileAudioFixtureVariant("audio_multi", 2)

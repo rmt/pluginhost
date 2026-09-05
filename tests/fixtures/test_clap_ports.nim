@@ -168,6 +168,41 @@ suite "CLAP deactivated port inspection and render negotiation":
     check not renderAfterClose.isOk
     check renderAfterClose.error.kind == hekClapRender
 
+  test "dangling in-place pairs are normalized for separate host buffers":
+    type Scenario = tuple[
+      variant: string,
+      groupCount: int,
+      groupIndex: int,
+      direction: PortDirection,
+      id: uint32,
+    ]
+    let scenarios: array[2, Scenario] = [
+      ("audio_bad_pair", 4, 0, pdInput, 10'u32),
+      ("audio_dangling_zero_pair", 1, 0, pdOutput, 0'u32),
+    ]
+
+    for scenario in scenarios:
+      block:
+        var opened = openPortInstance(scenario.variant)
+        var instance = move(opened.instance)
+        var observer = move(opened.observer)
+        let api = opened.api
+        defer:
+          doAssert instance.close().isOk
+          doAssert observer.close().isOk
+
+        let inspected = instance.inspectPortPlan()
+        require inspected.isOk
+        let plan = inspected.value
+        check plan.audioGroupCount == scenario.groupCount
+        let group = plan.audioGroup(scenario.groupIndex)
+        check group.direction == scenario.direction
+        check group.id == scenario.id
+        check group.inPlacePair.isNone
+        if scenario.variant == "audio_bad_pair":
+          check plan.audioGroup(2).inPlacePair == some(10'u32)
+        check api.contractFailures() == 0'u32
+
   test "exact group channel string and dialect bounds are accepted":
     var opened = openPortInstance("ports_exact_limits")
     var instance = move(opened.instance)
@@ -247,7 +282,6 @@ suite "CLAP deactivated port inspection and render negotiation":
       ("audio_unterminated_name", "field=name"),
       ("audio_oversized_type", "field=port_type"),
       ("audio_inconsistent", "main port must be at index zero"),
-      ("audio_bad_pair", "opposite-direction ID not found"),
       ("audio_too_many_channels", "direction total exceeds 4096"),
       ("audio_bad_type", "stereo requires two channels"),
       ("audio_bad_preference", "preference requires 64-bit support"),
