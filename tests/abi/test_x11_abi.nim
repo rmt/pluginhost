@@ -37,6 +37,7 @@ suite "X11 ABI":
     check sizeof(X11UnmapWindowProc) == sizeof(pointer)
     check sizeof(X11ResizeWindowProc) == sizeof(pointer)
     check sizeof(X11StoreNameProc) == sizeof(pointer)
+    check sizeof(X11ChangePropertyProc) == sizeof(pointer)
     check sizeof(X11InternAtomProc) == sizeof(pointer)
     check sizeof(X11SetWMProtocolsProc) == sizeof(pointer)
     check sizeof(X11ConnectionNumberProc) == sizeof(pointer)

@@ -6,7 +6,7 @@
 import std/posix
 
 import ../../domain/[errors, result]
-import ../../gui/window_host
+import ../../gui/[icon, window_host]
 import ./[api, ffi]
 
 const
@@ -229,6 +229,7 @@ proc height*(host: X11WindowHost): uint32 {.inline.} =
 proc title*(host: X11WindowHost): string =
   host.titleValue
 
+
 proc requireOpen(host: X11WindowHost; operation: string): Result[Unit] =
   if not host.isOpen:
     return failure[Unit](x11Error(
@@ -239,6 +240,31 @@ proc requireStatus(status: cint; operation: string): Result[Unit] =
   if status == 0:
     return failure[Unit](x11Error(
       "X11 window operation failed", "operation=" & operation))
+  success()
+proc setIcon*(host: var X11WindowHost; icon: GuiIcon): Result[Unit] =
+  var open = host.requireOpen("set-icon")
+  if not open.isOk:
+    return open
+  if icon == nil or icon.pixels.len == 0:
+    return failure[Unit](x11Error("X11 window icon is empty"))
+  let property = host.api.functions.internAtom(
+    host.display, X11NetWmIconName.cstring, 0)
+  let cardinal = host.api.functions.internAtom(
+    host.display, X11CardinalName.cstring, 0)
+  if property == 0 or cardinal == 0:
+    return failure[Unit](x11Error("could not resolve X11 window-icon atoms"))
+  var data = newSeq[clong](2 + icon.pixels.len)
+  data[0] = clong(icon.width)
+  data[1] = clong(icon.height)
+  for index, pixel in icon.pixels:
+    data[index + 2] = clong(pixel)
+  let changed = host.api.functions.changeProperty(
+    host.display, host.window, property, cardinal, 32,
+    X11PropModeReplace, cast[ptr uint8](unsafeAddr data[0]), cint(data.len))
+  if changed == 0:
+    return failure[Unit](x11Error("could not set the X11 window icon property"))
+  if host.api.functions.flush(host.display) == 0:
+    return failure[Unit](x11Error("could not flush the X11 window icon property"))
   success()
 
 proc show*(host: var X11WindowHost): Result[Unit] =

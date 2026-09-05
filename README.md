@@ -2,7 +2,7 @@
 
 `pluginhost` is an in-progress standalone Linux JACK host for native CLAP plugins, implemented in Nim. Its intended role is similar to `carla-single`, with one plugin instance and one JACK client per process.
 
-The current development version is **0.0.10-dev**. The implementation includes checked CLAP ownership/catalog/lifecycle, human/JSON `list` and recursive `scan`, grouped zero-copy JACK audio, and a fixed-capacity sample-accurate JACK MIDI/CLAP event bridge. The canonical public command runs one plugin instance as one JACK client under an `epoll`/`signalfd` main reactor, handles orderly signals and JACK/process failures, services CLAP main-thread callbacks plus generation-safe plugin timers and POSIX FDs, reflects plugin latency through JACK, tracks dirty-state notification, handles bounded CLAP parameter output/rescans, sleep/wake requests, and safe restart/port rebuild requests, and owns an optional atomic PID file. It loads requested CLAP state before audio configuration and atomically saves requested state on clean signal shutdown. Increment 10B now negotiates CLAP GUI extensions through the dynamically loaded X11/XEmbed window host, supports embedded/floating fallback, show/hide/recreate, plugin resize requests, GUI signals, and `--no-gui`/`--require-gui` policy without entering the JACK process path.
+The current development version is **0.0.10-dev**. The implementation includes checked CLAP ownership/catalog/lifecycle, human/JSON `list` and recursive `scan`, grouped zero-copy JACK audio, and a fixed-capacity sample-accurate JACK MIDI/CLAP event bridge. The canonical public command runs one plugin instance as one JACK client under an `epoll`/`signalfd` main reactor, handles orderly signals and JACK/process failures, services CLAP main-thread callbacks plus generation-safe plugin timers and POSIX FDs, reflects plugin latency through JACK, tracks dirty-state notification, handles bounded CLAP parameter output/rescans, sleep/wake requests, safe restart/port rebuild requests, and an optional atomic PID file. It loads requested CLAP state before audio configuration and atomically saves requested state on clean signal shutdown. Increment 10B negotiates CLAP GUI extensions through the dynamically loaded X11/XEmbed window host, supports embedded/floating fallback, show/hide/recreate, plugin resize requests, GUI signals, and `--no-gui`/`--require-gui` policy. The current tray path uses a separately loaded libdbus StatusNotifierItem service; its primary activation toggles GUI visibility through the main reactor without entering the JACK process path.
 
 ## Build
 
@@ -15,7 +15,7 @@ Requirements:
 - JACK development headers and `libjack.so.0` for ABI tests
 - Python 3 for generated-code auditing and the disposable integration harness
 - PipeWire, PipeWire's JACK implementation, `pw-jack`, `pw-cli`, and `pw-dump` for `testIntegration` and the strict `all` gate
-- Xlib, `Xvfb`, and `xvfb-run` for `testGui` and the strict `all` gate
+- Xlib, D-Bus development headers/runtime (`dbus-1`, `dbus-run-session`, and `gdbus`), `Xvfb`, and `xvfb-run` for `testGui` and the strict `all` gate
 
 ```sh
 nimble check
@@ -45,9 +45,7 @@ has no transitive package dependencies, and is used only in the non-real-time
 control plane.
 
 `nimble testAbi` verifies the handwritten raw bindings against the vendored
-official CLAP 1.2.10 headers, the installed JACK development headers, and the installed Xlib event layouts. It also checks missing-library/symbol rollback and
-runtime calls through the owned JACK procedure table. `nimble testGui` compiles an independently built CLAP GUI fixture and the X11 window-host/controller test, then runs them under a disposable
-Xvfb server. The complete CLAP header tree is preserved under `vendor/clap/`
+official CLAP 1.2.10 headers, the installed JACK development headers, the installed Xlib and libdbus layouts, and the dynamic-loader boundaries. `nimble testGui` independently compiles the CLAP GUI fixture, X11 window-host/controller test, and a fake StatusNotifierWatcher, then runs the X11 and D-Bus paths under disposable Xvfb/session-bus environments. The complete CLAP header tree is preserved under `vendor/clap/`
 with its MIT license and exact upstream provenance. Draft headers are vendored
 unchanged but are not part of pluginhost's bound or supported ABI surface.
 
@@ -78,10 +76,20 @@ prohibited-I/O operations in host callback scope. Set
 prerequisites fail rather than skip. `nimble all` includes all four isolated live runs.
 
 The checked Linux loader uses `dlopen`/`dlsym`/`dlclose` without another Nim package.
-Its generic owner, `JackApi`, and `X11Api` are move-only and require explicit, checked,
-idempotent close. Importing JACK or X11 declarations does not load `libjack.so.0` or
-`libX11.so.6`; information and headless commands remain independent of both, and the
-concrete backends load them explicitly.
+Its generic owner, `JackApi`, `X11Api`, and `DbusApi` are move-only and require
+explicit, checked, idempotent close. Importing JACK, X11, or D-Bus declarations
+does not load their shared libraries; information and headless commands remain
+independent of all three, and concrete backends load them explicitly.
+
+The optional tray backend owns a private dynamically loaded libdbus-1 session
+connection and exports a `org.freedesktop.StatusNotifierItem` object. It
+registers with the standard `org.freedesktop.StatusNotifierWatcher` and also
+tries the deployed KDE-compatible `org.kde.StatusNotifierWatcher` name.
+If no watcher or session bus is available, the host warns and continues with
+its normal GUI and signal policy. The legacy XEmbed system-tray protocol is
+not used. CLAP 1.2.10 has no standard plugin-icon extension, so `--icon` accepts
+a bounded 8-bit RGB PPM image; otherwise the host uses a generic fallback icon
+for both the StatusNotifierItem and the X11 window.
 
 ## Security
 
@@ -120,12 +128,20 @@ disabled-GUI warning. `--pid-file` atomically publishes the running PID and
 removes only the entry the process owns. By default the host attempts an embedded
 X11 GUI, falls back to floating X11 when supported, and otherwise warns and
 continues headlessly; `--hide-gui` creates it hidden, `--require-gui` makes
-failure fatal, and `--gui-scale` requests a positive scale.
+failure fatal, and `--gui-scale` requests a positive scale. `--icon PATH`
+loads a bounded P3/P6 8-bit RGB PPM image and applies it to both the X11 window
+and the StatusNotifierItem tray item; without it, a generic icon is used.
+When a StatusNotifierWatcher is available, the tray item's left-click activation
+alternates GUI show/hide; watcher/session-bus absence is a warning, not a
+startup failure. Tray events are handled on the CLAP main/reactor thread and do
+not affect audio. The backend accepts both the standard freedesktop and KDE
+StatusNotifierItem interface spellings.
 The 10B GUI path is main-thread-only and does not enter JACK processing. `--load-state`
-loads state before audio configuration. `--save-state` saves after JACK/CLAP processing is
-quiesced during clean `SIGINT`/`SIGTERM` shutdown; it writes a mode-0600 same-directory
-temporary, synchronizes it, and atomically renames it over the destination. Each CLAP
-state stream callback transfers at most 64 KiB and one transaction is limited to 64 MiB.
+loads state before audio configuration. `--save-state` saves after JACK/CLAP
+processing is quiesced during clean `SIGINT`/`SIGTERM` shutdown; it writes a
+mode-0600 same-directory temporary, synchronizes it, and atomically renames it
+over the destination. Each CLAP state stream callback transfers at most 64 KiB
+and one transaction is limited to 64 MiB.
 
 ## Project documents
 

@@ -101,6 +101,7 @@ The initial CLI MUST provide:
 --no-gui                Do not create or advertise GUI hosting for this run
 --require-gui           Fail startup if a usable plugin GUI cannot be shown
 --gui-scale FACTOR      Request an explicit positive X11 GUI scale
+--icon FILE             Use a bounded 8-bit RGB PPM icon for GUI/tray
 --load-state FILE       Load CLAP state before activation
 --save-state FILE       Atomically save CLAP state on clean shutdown
 --pid-file FILE         Atomically write the running PID and remove it on exit
@@ -156,10 +157,20 @@ A persistent plugin cache is not required initially.
 - Production builds MUST disable Nim's implicit signal handlers.
 - Handled signals MUST be blocked with `pthread_sigmask` before `jack_client_open` so JACK-created threads inherit the mask.
 - The main control plane MUST consume handled signals through `signalfd` or an equivalent dedicated mechanism; no handled signal may run host policy or wakeup I/O on the JACK process thread.
-- Any POSIX signal handler used by a fallback implementation MUST only perform async-signal-safe notification and MUST NOT call CLAP, JACK, X11, allocation, or logging APIs.
+- Any POSIX signal handler used by a fallback implementation MUST only perform async-signal-safe notification and MUST NOT call CLAP, JACK, X11, D-Bus, allocation, or logging APIs.
 - Closing the GUI window MUST hide/destroy the GUI as required by the plugin, but MUST NOT stop audio or terminate the host.
 - A request to show a GUI after it was closed MUST recreate it when the plugin permits recreation.
 - `SIGUSR1` under `--no-gui` MUST be ignored with a rate-limited warning.
+- When GUI hosting is enabled, the host SHOULD register a
+  `org.freedesktop.StatusNotifierItem` on the session bus when a
+  `org.freedesktop.StatusNotifierWatcher` or deployed KDE-compatible
+  `org.kde.StatusNotifierWatcher` is available.
+- A primary-button `Activate` method call MUST toggle the plugin GUI through
+  the main control thread; it MUST NOT affect JACK activation or audio
+  processing.
+- Missing or failing session-bus/watcher integration MUST produce a warning and
+  preserve the selected GUI/signal behavior; it MUST not fail ordinary startup.
+- `--no-gui` MUST not create or advertise a tray item.
 
 ## 7. CLAP loading and lifecycle
 
@@ -377,6 +388,14 @@ The host MUST query the initial sample rate and buffer size before CLAP activati
 - The host MUST implement plugin requests to show, hide, resize, and report closure.
 - Show/hide MUST not activate, deactivate, reset, or interrupt audio processing.
 - The window title SHOULD contain the plugin name and JACK client name.
+- When a StatusNotifierItem is available, its primary-button activation MUST
+  alternate GUI show and hide without recreating an existing CLAP GUI surface.
+- When `--icon FILE` is supplied, the host MUST use the validated image for
+  both the X11 window icon and StatusNotifierItem `IconPixmap`.
+- The accepted icon format is P3 or P6 PPM with 8-bit RGB samples, dimensions
+  no larger than 64×64 pixels, and a file no larger than 4 MiB.
+- The host MUST use a deterministic generic fallback icon when no icon is
+  supplied. The current CLAP 1.2.10 standard has no plugin-icon extension.
 
 ### 11.2 X11 and Wayland
 
@@ -387,6 +406,10 @@ The host MUST query the initial sample rate and buffer size before CLAP activati
 - Under a Wayland desktop with XWayland available, X11/XEmbed remains the required compatibility path.
 - A plugin-supported floating `CLAP_WINDOW_API_WAYLAND` GUI SHOULD be supported when no X11 path is available.
 - Native Wayland embedding is explicitly out of scope because the stable CLAP GUI contract describes Wayland as floating-only.
+- The tray uses the freedesktop StatusNotifierItem protocol over a dynamically
+  loaded session D-Bus connection and accepts the deployed KDE-compatible
+  watcher/item interface names. The legacy XEmbed system-tray protocol is
+  not used, and native Wayland tray protocols remain out of scope.
 
 ### 11.3 Main-loop services needed by GUIs
 
@@ -502,7 +525,7 @@ Exact values may change before the CLI is declared stable, but they MUST be docu
 The project MUST include:
 
 - Unit tests for CLI parsing, descriptor selection, path discovery, name sanitization, state streams, event conversion, ordering, overflow, and lifecycle state transitions.
-- C-vs-Nim ABI conformance tests for every CLAP and JACK type and procedure signature used by the host.
+- C-vs-Nim ABI conformance tests for every CLAP, JACK, X11, and D-Bus type and procedure signature used by the host.
 - A purpose-built test CLAP library with multiple descriptors and controllable audio, MIDI, state, parameter, restart, timer, FD, and GUI behavior.
 - Integration tests against a disposable JACK server/dummy backend.
 - Tests with PipeWire's JACK implementation in CI or a documented pre-release test matrix.
@@ -519,7 +542,7 @@ The initial release is accepted only when all of these pass:
 2. **Effect:** Launch a stereo CLAP effect, connect generated JACK audio to it, and verify processed stereo output.
 3. **Multiple ports:** Use a fixture with multiple grouped audio and note ports and verify counts, direction, ordering, and naming.
 4. **MIDI timing:** Verify events at multiple offsets in one JACK period reach the plugin at the same offsets and plugin MIDI output retains offsets.
-5. **GUI:** Show the embedded X11 GUI, resize it, hide with `SIGUSR2`, show with `SIGUSR1`, close and reopen it, all while audio continues.
+5. **GUI:** Show the embedded X11 GUI, resize it, hide with `SIGUSR2`, show with `SIGUSR1`, close and reopen it, and toggle it from the StatusNotifierItem tray activation, all while audio continues.
 6. **Headless:** Run with `--no-gui` without an X display and process audio/MIDI normally.
 7. **GUI services:** Verify a test GUI using CLAP timers and POSIX FD support remains responsive.
 8. **Parameters:** Change a control in the plugin GUI and verify `request_flush`, parameter events, and dirty state work without deadlock.
@@ -540,8 +563,9 @@ The initial release MUST include:
 - Supported Linux architectures, Nim versions, CLAP version, and JACK implementations.
 - Runtime/build dependency and license information.
 - Known GUI limitations under native Wayland.
+- Known tray-icon limitations when no session bus or StatusNotifierWatcher is available.
+- The icon policy: standard CLAP 1.2.10 has no plugin-icon API; `--icon` accepts bounded PPM input and otherwise uses the generic fallback.
 - A security warning about executing plugins in-process.
-- A troubleshooting section for JACK connection failures, missing ports, missing GUI, plugin selection, and state failures.
 
 ## 19. Initial design decisions requiring owner confirmation
 
@@ -555,6 +579,8 @@ The requirements above proceed with these working decisions:
 6. JACK transport and tempo are deferred.
 7. One plugin instance per process is intentional.
 8. `pluginhost` is a working name. The final product name and project license remain undecided.
+9. StatusNotifierItem over session D-Bus is the optional tray protocol. A missing
+   watcher is a non-fatal warning; the legacy XEmbed tray protocol is removed.
 
 Changing any of these decisions should update this document and the associated acceptance tests before implementation.
 
@@ -568,6 +594,13 @@ The following findings shaped these requirements:
 - CLAP defines one stable main-thread identity and a symbolic, non-concurrent audio-thread context. Each API method specifies its permitted thread/state.
 - CLAP float32 audio support is mandatory; float64 is optional.
 - The CLAP GUI contract supports X11 embedding through XEmbed. Wayland is currently described as floating-only.
+- The current CLAP 1.2.10 headers define no standard plugin-icon metadata or
+  icon extension; host-supplied bounded PPM input and a generic fallback are
+  therefore explicit policy.
+- The freedesktop StatusNotifierItem protocol registers a session-bus service
+  and object with the StatusNotifierWatcher; its `Activate` method is the tray
+  primary-click action and `IconPixmap` carries ARGB32 images. KDE-compatible
+  deployments use the corresponding `org.kde` watcher/item interface names.
 - JACK's process callback is real-time and explicitly forbids operations including allocation, printing, blocking locks, sleeping, waiting, and polling.
 - JACK MIDI events are normalized, sample-timestamped events. SysEx may arrive in backend-sized chunks.
 - `carla-single` launches one plugin bridge from a command line, but Carla is intentionally much broader than this product.
@@ -579,6 +612,9 @@ Primary sources:
 - CLAP entry/search paths: <https://github.com/free-audio/clap/blob/main/include/clap/entry.h>
 - CLAP plugin lifecycle: <https://github.com/free-audio/clap/blob/main/include/clap/plugin.h>
 - CLAP GUI extension: <https://github.com/free-audio/clap/blob/main/include/clap/ext/gui.h>
+- StatusNotifierItem specification: <https://www.freedesktop.org/wiki/Specifications/StatusNotifierItem/>
+- StatusNotifierWatcher specification: <https://www.freedesktop.org/wiki/Specifications/StatusNotifierWatcher/>
+- libdbus API reference: <https://dbus.freedesktop.org/doc/api/html/>
 - CLAP audio ports: <https://github.com/free-audio/clap/blob/main/include/clap/ext/audio-ports.h>
 - CLAP note ports/events: <https://github.com/free-audio/clap/blob/main/include/clap/ext/note-ports.h>
 - CLAP parameter extension: <https://github.com/free-audio/clap/blob/main/include/clap/ext/params.h>

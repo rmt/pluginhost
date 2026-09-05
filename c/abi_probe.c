@@ -23,7 +23,7 @@
 
 #include <jack/jack.h>
 #include <X11/Xlib.h>
-
+#include <dbus/dbus.h>
 #include <jack/midiport.h>
 #include "rt_atomic.h"
 #include <signal.h>
@@ -286,11 +286,85 @@ ABI_ASSERT_SYMBOL(jack_midi_event_reserve,
 ABI_ASSERT_SYMBOL(jack_midi_event_write,
                   int (*)(void *, jack_nframes_t, const jack_midi_data_t *, size_t));
 ABI_ASSERT_SYMBOL(jack_midi_get_lost_event_count, uint32_t (*)(void *));
-
 ABI_ASSERT_SYMBOL(epoll_create1, int (*)(int));
 ABI_ASSERT_SYMBOL(epoll_ctl, int (*)(int, int, int, struct epoll_event *));
 ABI_ASSERT_SYMBOL(epoll_wait, int (*)(int, struct epoll_event *, int, int));
 ABI_ASSERT_SYMBOL(signalfd, int (*)(int, const sigset_t *, int));
+ABI_ASSERT_SYMBOL(XChangeProperty,
+                  int (*)(Display *, Window, Atom, Atom, int, int,
+                          const unsigned char *, int));
+ABI_ASSERT_SYMBOL(dbus_threads_init_default, dbus_bool_t (*)(void));
+ABI_ASSERT_SYMBOL(dbus_bus_get_private,
+                  DBusConnection *(*)(DBusBusType, DBusError *));
+ABI_ASSERT_SYMBOL(dbus_bus_request_name,
+                  int (*)(DBusConnection *, const char *, unsigned int,
+                          DBusError *));
+ABI_ASSERT_SYMBOL(dbus_bus_release_name,
+                  int (*)(DBusConnection *, const char *, DBusError *));
+ABI_ASSERT_SYMBOL(dbus_connection_set_exit_on_disconnect,
+                  void (*)(DBusConnection *, dbus_bool_t));
+ABI_ASSERT_SYMBOL(dbus_connection_get_is_connected,
+                  dbus_bool_t (*)(DBusConnection *));
+ABI_ASSERT_SYMBOL(dbus_connection_get_unix_fd,
+                  dbus_bool_t (*)(DBusConnection *, int *));
+ABI_ASSERT_SYMBOL(dbus_connection_read_write_dispatch,
+                  dbus_bool_t (*)(DBusConnection *, int));
+ABI_ASSERT_SYMBOL(dbus_connection_close, void (*)(DBusConnection *));
+ABI_ASSERT_SYMBOL(dbus_connection_unref, void (*)(DBusConnection *));
+ABI_ASSERT_SYMBOL(dbus_connection_send_with_reply_and_block,
+                  DBusMessage *(*)(DBusConnection *, DBusMessage *, int,
+                                   DBusError *));
+ABI_ASSERT_SYMBOL(dbus_connection_send,
+                  dbus_bool_t (*)(DBusConnection *, DBusMessage *,
+                                  dbus_uint32_t *));
+ABI_ASSERT_SYMBOL(dbus_connection_flush, void (*)(DBusConnection *));
+ABI_ASSERT_SYMBOL(dbus_connection_register_object_path,
+                  dbus_bool_t (*)(DBusConnection *, const char *,
+                                  const DBusObjectPathVTable *, void *));
+ABI_ASSERT_SYMBOL(dbus_connection_unregister_object_path,
+                  dbus_bool_t (*)(DBusConnection *, const char *));
+ABI_ASSERT_SYMBOL(dbus_message_new_method_call,
+                  DBusMessage *(*)(const char *, const char *, const char *,
+                                   const char *));
+ABI_ASSERT_SYMBOL(dbus_message_new_method_return,
+                  DBusMessage *(*)(DBusMessage *));
+ABI_ASSERT_SYMBOL(dbus_message_new_error,
+                  DBusMessage *(*)(DBusMessage *, const char *, const char *));
+ABI_ASSERT_SYMBOL(dbus_message_unref, void (*)(DBusMessage *));
+ABI_ASSERT_SYMBOL(dbus_message_get_interface,
+                  const char *(*)(DBusMessage *));
+ABI_ASSERT_SYMBOL(dbus_message_get_member, const char *(*)(DBusMessage *));
+ABI_ASSERT_SYMBOL(dbus_message_get_type, int (*)(DBusMessage *));
+ABI_ASSERT_SYMBOL(dbus_message_is_method_call,
+                  dbus_bool_t (*)(DBusMessage *, const char *, const char *));
+ABI_ASSERT_SYMBOL(dbus_error_init, void (*)(DBusError *));
+ABI_ASSERT_SYMBOL(dbus_error_free, void (*)(DBusError *));
+ABI_ASSERT_SYMBOL(dbus_error_is_set, dbus_bool_t (*)(const DBusError *));
+ABI_ASSERT_SYMBOL(dbus_message_iter_init,
+                  dbus_bool_t (*)(DBusMessage *, DBusMessageIter *));
+ABI_ASSERT_SYMBOL(dbus_message_iter_init_append,
+                  void (*)(DBusMessage *, DBusMessageIter *));
+ABI_ASSERT_SYMBOL(dbus_message_iter_has_next,
+                  dbus_bool_t (*)(DBusMessageIter *));
+ABI_ASSERT_SYMBOL(dbus_message_iter_next,
+                  dbus_bool_t (*)(DBusMessageIter *));
+ABI_ASSERT_SYMBOL(dbus_message_iter_get_arg_type,
+                  int (*)(DBusMessageIter *));
+ABI_ASSERT_SYMBOL(dbus_message_iter_get_basic,
+                  void (*)(DBusMessageIter *, void *));
+ABI_ASSERT_SYMBOL(dbus_message_iter_append_basic,
+                  dbus_bool_t (*)(DBusMessageIter *, int, const void *));
+ABI_ASSERT_SYMBOL(dbus_message_iter_open_container,
+                  dbus_bool_t (*)(DBusMessageIter *, int, const char *,
+                                  DBusMessageIter *));
+ABI_ASSERT_SYMBOL(dbus_message_iter_close_container,
+                  dbus_bool_t (*)(DBusMessageIter *, DBusMessageIter *));
+ABI_ASSERT_SYMBOL(dbus_message_iter_abandon_container,
+                  void (*)(DBusMessageIter *, DBusMessageIter *));
+ABI_ASSERT_SYMBOL(dbus_message_iter_append_fixed_array,
+                  dbus_bool_t (*)(DBusMessageIter *, int, const void *, int));
+ABI_ASSERT_SYMBOL(dbus_message_iter_recurse,
+                  void (*)(DBusMessageIter *, DBusMessageIter *));
 
 uint64_t pluginhost_abi_size(int32_t type_id) {
    switch (type_id) {
@@ -366,6 +440,9 @@ uint64_t pluginhost_abi_size(int32_t type_id) {
       ABI_TYPE_CASE(303, XEvent);
       ABI_TYPE_CASE(304, XConfigureEvent);
       ABI_TYPE_CASE(305, XClientMessageEvent);
+      ABI_TYPE_CASE(307, DBusError);
+      ABI_TYPE_CASE(308, DBusMessageIter);
+      ABI_TYPE_CASE(309, DBusObjectPathVTable);
       default: return UINT64_MAX;
    }
 }
@@ -444,6 +521,9 @@ uint64_t pluginhost_abi_align(int32_t type_id) {
       ABI_ALIGN_CASE(303, XEvent);
       ABI_ALIGN_CASE(304, XConfigureEvent);
       ABI_ALIGN_CASE(305, XClientMessageEvent);
+      ABI_ALIGN_CASE(307, DBusError);
+      ABI_ALIGN_CASE(308, DBusMessageIter);
+      ABI_ALIGN_CASE(309, DBusObjectPathVTable);
       default: return UINT64_MAX;
    }
 }
@@ -669,6 +749,14 @@ uint64_t pluginhost_abi_offset(int32_t field_id) {
       ABI_FIELD_CASE(305, 2, XClientMessageEvent, message_type);
       ABI_FIELD_CASE(305, 3, XClientMessageEvent, format);
       ABI_FIELD_CASE(305, 4, XClientMessageEvent, data);
+      ABI_FIELD_CASE(307, 1, DBusError, name);
+      ABI_FIELD_CASE(307, 2, DBusError, message);
+      ABI_FIELD_CASE(307, 4, DBusError, padding1);
+      ABI_FIELD_CASE(308, 1, DBusMessageIter, dummy3);
+      ABI_FIELD_CASE(308, 2, DBusMessageIter, pad2);
+      ABI_FIELD_CASE(308, 3, DBusMessageIter, pad3);
+      ABI_FIELD_CASE(309, 1, DBusObjectPathVTable, message_function);
+      ABI_FIELD_CASE(309, 2, DBusObjectPathVTable, dbus_internal_pad1);
       default: return UINT64_MAX;
    }
 }

@@ -1,7 +1,7 @@
 ## GUI capability adapter for the concrete X11 window owner.
 
 import ../../domain/[errors, result]
-import ../../gui/[window_backend, window_host]
+import ../../gui/[icon, window_backend, window_host]
 import ./window_host as x11_window_host
 
 type
@@ -27,6 +27,10 @@ method open*(backend: X11WindowBackend; title: string;
 
 method close*(backend: X11WindowBackend): Result[Unit] {.raises: [].} =
   backend.host.close()
+
+method setIcon*(backend: X11WindowBackend; icon: GuiIcon): Result[Unit] {.
+    raises: [].} =
+  backend.host.setIcon(icon)
 
 method show*(backend: X11WindowBackend): Result[Unit] {.raises: [].} =
   backend.host.show()

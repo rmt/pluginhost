@@ -3,7 +3,7 @@ import std/[options, posix, unittest]
 import pluginhost/app/main_reactor
 import pluginhost/clap/host_bridge
 import pluginhost/domain/[reactor, result]
-import pluginhost/gui/[controller, plugin_client, window_backend, window_host]
+import pluginhost/gui/[controller, icon, plugin_client, window_backend, window_host]
 import pluginhost/platform/linux/reactor as linux_reactor
 
 type
@@ -33,6 +33,8 @@ type
     widthValue: uint32
     heightValue: uint32
     resizeCount: int
+    iconValue: GuiIcon
+    iconSetCount: int
     pendingEvent: WindowPollResult
     hasEvent: bool
 
@@ -146,6 +148,11 @@ method close*(backend: FakeWindowBackend): Result[Unit] {.raises: [].} =
     backend.writeFd = -1
   backend.stateValue = whClosed
   success()
+method setIcon*(backend: FakeWindowBackend; icon: GuiIcon): Result[Unit] {.
+    raises: [].} =
+  backend.iconValue = icon
+  inc backend.iconSetCount
+  success()
 
 method show*(backend: FakeWindowBackend): Result[Unit] {.raises: [].} =
   backend.stateValue = whVisible
@@ -204,14 +211,19 @@ suite "GUI controller policy and lifecycle":
     let factory: WindowHostFactory = proc(): WindowHostBackend =
       produced = newFakeWindow()
       produced
+    var customResult = newGuiIcon(1, 1, @[0xff123456'u32])
+    require customResult.isOk
+    let customIcon = customResult.value
     var controller = newGuiController(
-      plugin, addr reactor, factory, "Surge XT [CLAP]", some(1.25))
+      plugin, addr reactor, factory, "Surge XT [CLAP]", some(1.25),
+      icon = customIcon)
     defer:
       check controller.close().isOk
       check reactor.close().isOk
 
     check controller.start(true).isOk
-    check controller.state == gcsVisible
+    check produced.iconSetCount == 1
+    check produced.iconValue == customIcon
     check controller.mode == gmEmbedded
     check controller.isCreated
     check plugin.createCount == 1
@@ -400,3 +412,24 @@ suite "GUI controller policy and lifecycle":
     check controller.mode == gmFloating
     check plugin.parentCount == 0
     check plugin.transientCount == 1
+
+  test "toggle alternates GUI visibility without recreating the plugin window":
+    var reactor = openTestReactor()
+    var plugin = newFakeGui()
+    var produced: FakeWindowBackend
+    let factory: WindowHostFactory = proc(): WindowHostBackend =
+      produced = newFakeWindow()
+      produced
+    var controller = newGuiController(plugin, addr reactor, factory, "test")
+    defer:
+      check controller.close().isOk
+      check reactor.close().isOk
+
+    check controller.start(false).isOk
+    check controller.state == gcsHidden
+    check controller.toggle().isOk
+    check controller.state == gcsVisible
+    check controller.toggle().isOk
+    check controller.state == gcsHidden
+    check plugin.createCount == 1
+    check plugin.destroyCount == 0

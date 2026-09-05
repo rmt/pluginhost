@@ -15,14 +15,14 @@ proc dependencyPathsClause(): string =
   if result == "--path:":
     result = ""
 
-proc verifyNoEagerJackDependency(path: string) =
+proc verifyNoEagerPlatformDependency(path: string) =
   exec "command -v readelf >/dev/null 2>&1 || { " &
        "echo 'readelf is required for ELF dependency verification' >&2; " &
        "exit 1; }; dependencies=$(readelf -d " & path & ") || { " &
        "echo 'could not inspect ELF dependencies: " & path & "' >&2; " &
        "exit 1; }; if printf '%s\n' \"$dependencies\" | " &
-       "grep -Fq 'libjack.so.0'; then " &
-       "echo 'unexpected eager libjack dependency: " & path & "' >&2; " &
+       "grep -Eq 'libjack.so.0|libdbus-1.so.3|libX11.so.6'; then " &
+       "echo 'unexpected eager platform dependency: " & path & "' >&2; " &
        "exit 1; fi"
 
 proc compileTestBinary() =
@@ -30,7 +30,7 @@ proc compileTestBinary() =
   exec "nim c --hints:off --path:src " & dependencyPathsClause() &
        " --nimcache:build/nimcache/test-app " &
        "--out:build/test/pluginhost src/pluginhost.nim"
-  verifyNoEagerJackDependency("build/test/pluginhost")
+  verifyNoEagerPlatformDependency("build/test/pluginhost")
 
 proc compileFfiFixture() =
   exec "mkdir -p build/fixtures"
@@ -317,7 +317,7 @@ proc runUnitTests() =
 proc runAbiTests() =
   exec "mkdir -p build/abi build/nimcache/abi build/test"
   exec "cc -std=gnu11 -Wall -Wextra -Werror -Ic -Ivendor/clap/include " &
-       "$(pkg-config --cflags jack x11) -c c/abi_probe.c " &
+       "$(pkg-config --cflags jack x11 dbus-1) -c c/abi_probe.c " &
        "-o build/abi/abi_probe.o"
   compileFfiFixture()
   compilePartialJackFixture()
@@ -329,7 +329,7 @@ proc runAbiTests() =
        dependencyPathsClause() & " --nimcache:build/nimcache/abi " &
        "--passL:build/abi/abi_probe.o --out:build/test/all_abi_tests " &
        "tests/abi/all_abi_tests.nim"
-  verifyNoEagerJackDependency("build/test/all_abi_tests")
+  verifyNoEagerPlatformDependency("build/test/all_abi_tests")
 
 proc runGeneratedCallbackAudit() =
   exec "rm -rf build/nimcache/rt-product && " &
@@ -393,18 +393,36 @@ proc runGuiTests() =
   exec "cc -std=gnu11 -Wall -Wextra -Werror $(pkg-config --cflags x11) " &
        "tests/integration/x11_send_wm_delete.c $(pkg-config --libs x11) " &
        "-o build/integration/x11_send_wm_delete"
+  exec "cc -std=gnu11 -Wall -Wextra -Werror $(pkg-config --cflags dbus-1) " &
+       "tests/integration/dbus_fake_watcher.c $(pkg-config --libs dbus-1) " &
+       "-o build/integration/dbus_fake_watcher"
   exec "command -v Xvfb >/dev/null 2>&1 || { echo 'Xvfb is required for GUI tests' >&2; exit 1; }"
   exec "command -v xvfb-run >/dev/null 2>&1 || { echo 'xvfb-run is required for GUI tests' >&2; exit 1; }"
+  exec "command -v dbus-run-session >/dev/null 2>&1 || { echo 'dbus-run-session is required for GUI tests' >&2; exit 1; }"
+  exec "command -v gdbus >/dev/null 2>&1 || { echo 'gdbus is required for GUI tests' >&2; exit 1; }"
   compileControlIntegrationTest(
     "tests/integration/test_x11_window_host.nim", "x11_window_host")
+  compileControlIntegrationTest(
+    "tests/integration/test_dbus_tray_icon.nim", "dbus_tray_icon")
   exec "command -v readelf >/dev/null 2>&1 || { echo 'readelf is required for GUI tests' >&2; exit 1; }"
   exec "dependencies=$(readelf -d build/test/x11_window_host) || exit 1; " &
        "if printf '%s\\n' \"$dependencies\" | grep -Fq 'libX11.so'; then " &
        "echo 'unexpected eager libX11 dependency in X11 test host' >&2; exit 1; fi"
+  exec "dependencies=$(readelf -d build/test/dbus_tray_icon) || exit 1; " &
+       "if printf '%s\\n' \"$dependencies\" | grep -Fq 'libdbus-1.so'; then " &
+       "echo 'unexpected eager libdbus-1 dependency in D-Bus tray test host' >&2; exit 1; fi"
   exec "PLUGINHOST_X11_SEND_DELETE=$PWD/build/integration/x11_send_wm_delete " &
        "PLUGINHOST_CLAP_FIXTURE_DIR=$PWD/build/fixtures/clap " &
        "xvfb-run -a -s '-screen 0 1024x768x24 -extension GLX -nolisten tcp' " &
        "build/test/x11_window_host"
+  exec "PLUGINHOST_DBUS_FAKE_WATCHER=$PWD/build/integration/dbus_fake_watcher " &
+       "dbus-run-session -- xvfb-run -a " &
+       "-s '-screen 0 1024x768x24 -extension GLX -nolisten tcp' " &
+       "build/test/dbus_tray_icon"
+  exec "PLUGINHOST_DBUS_FAKE_WATCHER=$PWD/build/integration/dbus_fake_watcher " &
+       "PLUGINHOST_DBUS_WATCHER_VARIANT=kde dbus-run-session -- xvfb-run -a " &
+       "-s '-screen 0 1024x768x24 -extension GLX -nolisten tcp' " &
+       "build/test/dbus_tray_icon"
 
 task test, "Build the executable and run the fast unit test suite":
   compileTestBinary()
@@ -424,7 +442,7 @@ task testIntegration, "Run isolated live PipeWire-JACK integration tests":
   compileTestBinary()
   runIntegrationTests()
 
-task testGui, "Run the X11 window-host spike under Xvfb":
+task testGui, "Run the X11 GUI and D-Bus tray tests under Xvfb":
   runGuiTests()
 
 task all, "Run compile checks, build the executable, and run tests":

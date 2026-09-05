@@ -48,6 +48,7 @@ suite "command-line parsing":
       "--hide-gui",
       "--require-gui",
       "--gui-scale", "1.5",
+      "--icon", "icon.ppm",
       "--load-state", "input.state",
       "--save-state=output.state",
       "--pid-file", "host.pid",
@@ -66,6 +67,7 @@ suite "command-line parsing":
     check config.guiPolicy == gpHidden
     check config.requireGui
     check config.guiScale == some(1.5)
+    check config.iconPath == some("icon.ppm")
     check config.loadStatePath == some("input.state")
     check config.saveStatePath == some("output.state")
     check config.pidFilePath == some("host.pid")
@@ -116,11 +118,13 @@ suite "command-line parsing":
       "--plugin-id", "id", "--plugin-index", "1", "plugin.clap"])
     let gui = parseCommand(@["--show-gui", "--hide-gui", "plugin.clap"])
     let impossibleGui = parseCommand(@["--no-gui", "--require-gui", "plugin.clap"])
+    let impossibleIcon = parseCommand(@["--no-gui", "--icon", "icon.ppm", "plugin.clap"])
     let verbosity = parseCommand(@["--quiet", "--verbose", "plugin.clap"])
 
     check not selectors.isOk
     check not gui.isOk
     check not impossibleGui.isOk
+    check not impossibleIcon.isOk
     check not verbosity.isOk
 
   test "value options reject missing empty and repeated values":

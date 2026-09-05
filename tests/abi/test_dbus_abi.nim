@@ -1,0 +1,63 @@
+import std/unittest
+
+import pluginhost/platform/dbus/ffi
+import ./abi_probe
+
+suite "D-Bus ABI":
+  test "public stack and callback structures match libdbus headers":
+    check uint64(sizeof(DBusError)) == abiSize(307)
+    check uint64(alignof(DBusError)) == abiAlign(307)
+    check uint64(sizeof(DBusMessageIter)) == abiSize(308)
+    check uint64(alignof(DBusMessageIter)) == abiAlign(308)
+    check uint64(sizeof(DBusObjectPathVTable)) == abiSize(309)
+    check uint64(alignof(DBusObjectPathVTable)) == abiAlign(309)
+    check uint64(offsetOf(DBusError, name)) == abiOffset(abiFieldId(307, 1))
+    check uint64(offsetOf(DBusError, message)) == abiOffset(abiFieldId(307, 2))
+    check uint64(offsetOf(DBusError, padding)) == abiOffset(abiFieldId(307, 4))
+    check uint64(offsetOf(DBusMessageIter, dummy3)) == abiOffset(abiFieldId(308, 1))
+    check uint64(offsetOf(DBusMessageIter, pad2)) == abiOffset(abiFieldId(308, 2))
+    check uint64(offsetOf(DBusMessageIter, pad3)) == abiOffset(abiFieldId(308, 3))
+    check uint64(offsetOf(DBusObjectPathVTable, messageFunction)) ==
+      abiOffset(abiFieldId(309, 1))
+    check uint64(offsetOf(DBusObjectPathVTable, pad1)) ==
+      abiOffset(abiFieldId(309, 2))
+
+  test "all dynamically resolved D-Bus aliases are pointer-sized":
+    check sizeof(DBusBusGetPrivateProc) == sizeof(pointer)
+    check sizeof(DBusThreadsInitDefaultProc) == sizeof(pointer)
+    check sizeof(DBusBusRequestNameProc) == sizeof(pointer)
+    check sizeof(DBusBusReleaseNameProc) == sizeof(pointer)
+    check sizeof(DBusConnectionSetExitOnDisconnectProc) == sizeof(pointer)
+    check sizeof(DBusConnectionGetIsConnectedProc) == sizeof(pointer)
+    check sizeof(DBusConnectionGetUnixFdProc) == sizeof(pointer)
+    check sizeof(DBusConnectionReadWriteDispatchProc) == sizeof(pointer)
+    check sizeof(DBusConnectionCloseProc) == sizeof(pointer)
+    check sizeof(DBusConnectionUnrefProc) == sizeof(pointer)
+    check sizeof(DBusConnectionSendWithReplyAndBlockProc) == sizeof(pointer)
+    check sizeof(DBusConnectionSendProc) == sizeof(pointer)
+    check sizeof(DBusConnectionFlushProc) == sizeof(pointer)
+    check sizeof(DBusConnectionRegisterObjectPathProc) == sizeof(pointer)
+    check sizeof(DBusConnectionUnregisterObjectPathProc) == sizeof(pointer)
+    check sizeof(DBusMessageNewMethodCallProc) == sizeof(pointer)
+    check sizeof(DBusMessageNewMethodReturnProc) == sizeof(pointer)
+    check sizeof(DBusMessageNewErrorProc) == sizeof(pointer)
+    check sizeof(DBusMessageUnrefProc) == sizeof(pointer)
+    check sizeof(DBusMessageGetInterfaceProc) == sizeof(pointer)
+    check sizeof(DBusMessageGetMemberProc) == sizeof(pointer)
+    check sizeof(DBusMessageGetTypeProc) == sizeof(pointer)
+    check sizeof(DBusMessageIsMethodCallProc) == sizeof(pointer)
+    check sizeof(DBusErrorInitProc) == sizeof(pointer)
+    check sizeof(DBusErrorFreeProc) == sizeof(pointer)
+    check sizeof(DBusErrorIsSetProc) == sizeof(pointer)
+    check sizeof(DBusMessageIterInitProc) == sizeof(pointer)
+    check sizeof(DBusMessageIterInitAppendProc) == sizeof(pointer)
+    check sizeof(DBusMessageIterHasNextProc) == sizeof(pointer)
+    check sizeof(DBusMessageIterNextProc) == sizeof(pointer)
+    check sizeof(DBusMessageIterGetArgTypeProc) == sizeof(pointer)
+    check sizeof(DBusMessageIterGetBasicProc) == sizeof(pointer)
+    check sizeof(DBusMessageIterAppendBasicProc) == sizeof(pointer)
+    check sizeof(DBusMessageIterOpenContainerProc) == sizeof(pointer)
+    check sizeof(DBusMessageIterCloseContainerProc) == sizeof(pointer)
+    check sizeof(DBusMessageIterAbandonContainerProc) == sizeof(pointer)
+    check sizeof(DBusMessageIterAppendFixedArrayProc) == sizeof(pointer)
+    check sizeof(DBusMessageIterRecurseProc) == sizeof(pointer)

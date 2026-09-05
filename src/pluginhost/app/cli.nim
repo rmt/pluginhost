@@ -27,6 +27,7 @@ The 'run' subcommand may be omitted: pluginhost [run options] PLUGIN_PATH""")
     flag("--no-gui", help = "Disable GUI hosting")
     flag("--require-gui", help = "Fail if a usable GUI cannot be shown")
     option("--gui-scale", help = "Request a positive GUI scale")
+    option("--icon", help = "Use a bounded PPM image for the GUI/tray icon")
     option("--load-state", help = "Load CLAP state before activation")
     option("--save-state", help = "Save CLAP state on clean shutdown")
     option("--pid-file", help = "Write the running process ID to this file")
@@ -144,6 +145,14 @@ proc buildRunCommand(options: auto): Result[Command] =
     if not parsed.isOk:
       return failure[Command](parsed.error)
     config.guiScale = some(parsed.value)
+
+  let iconPath = validateOptional(options.icon_opt, "--icon")
+  if not iconPath.isOk:
+    return failure[Command](iconPath.error)
+  if config.guiPolicy == gpDisabled and iconPath.value.isSome:
+    return failure[Command](usageError(
+      "--icon cannot be used with --no-gui"))
+  config.iconPath = iconPath.value
 
   let loadState = validateOptional(options.load_state_opt, "--load-state")
   if not loadState.isOk:

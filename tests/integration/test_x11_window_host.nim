@@ -1,10 +1,10 @@
-import std/[os, osproc, unittest]
+import std/[os, osproc, strutils, unittest]
 
 import fixtures/clap/gui_fixture_api
 import pluginhost/app/main_reactor
 import pluginhost/clap/[gui_client, instance, loader]
 import pluginhost/domain/[plugin_catalog, reactor, result]
-import pluginhost/gui/[controller, window_backend, window_host]
+import pluginhost/gui/[controller, icon, window_backend, window_host]
 import pluginhost/platform/linux/reactor as linux_reactor
 import pluginhost/platform/x11/[gui_adapter, window_host]
 import pluginhost/platform/linux/dynlib
@@ -76,6 +76,11 @@ suite "X11 window-host integration":
     check host.fileDescriptor >= 0
     check host.width == 160
     check host.height == 90
+    require host.setIcon(defaultGuiIcon()).isOk
+    let iconProperty = execCmdEx(
+      "xprop -id " & $host.windowId & " _NET_WM_ICON")
+    check iconProperty.exitCode == 0
+    check iconProperty.output.contains("_NET_WM_ICON")
 
     var driverResult = linux_reactor.openLinuxReactorDriver()
     require driverResult.isOk

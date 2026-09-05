@@ -15,12 +15,18 @@ const
   X11MapNotify* = 19
   X11ConfigureNotify* = 22
   X11ClientMessage* = 33
-
+  X11PropModeReplace* = 0
+  X11NetWmIconName* = "_NET_WM_ICON"
+  X11CardinalName* = "CARDINAL"
 
 type
   XDisplay* = object
   XWindow* = culong
   XAtom* = culong
+
+  ## Opaque Xlib graphics context used only as an ABI pointer target.
+  XGC* = object
+  XGCValues* = object
 
   ## XEvent is a union whose largest member is long[24] on the supported
   ## Linux ABIs. Keeping it as storage avoids importing Xlib's private structs.
@@ -72,6 +78,9 @@ type
       width, height: cuint): cint {.cdecl, gcsafe, raises: [].}
   X11StoreNameProc* = proc(display: ptr XDisplay; window: XWindow;
       name: cstring): cint {.cdecl, gcsafe, raises: [].}
+  X11ChangePropertyProc* = proc(display: ptr XDisplay; window: XWindow;
+      property, dataType: XAtom; format, mode: cint; data: ptr uint8;
+      elementCount: cint): cint {.cdecl, gcsafe, raises: [].}
   X11InternAtomProc* = proc(display: ptr XDisplay; name: cstring;
       onlyIfExists: cint): XAtom {.cdecl, gcsafe, raises: [].}
   X11SetWMProtocolsProc* = proc(display: ptr XDisplay; window: XWindow;
@@ -96,6 +105,7 @@ type
     unmapWindow*: X11UnmapWindowProc
     resizeWindow*: X11ResizeWindowProc
     storeName*: X11StoreNameProc
+    changeProperty*: X11ChangePropertyProc
     internAtom*: X11InternAtomProc
     setWMProtocols*: X11SetWMProtocolsProc
     connectionNumber*: X11ConnectionNumberProc

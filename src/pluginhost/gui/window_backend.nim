@@ -4,8 +4,7 @@
 ## platform window API. Implementations must be explicitly opened and closed.
 
 import ../domain/[errors, result]
-import ./window_host
-
+import ./[icon, window_host]
 type
   WindowHostBackend* = ref object of RootObj
 
@@ -22,6 +21,12 @@ method open*(backend: WindowHostBackend; title: string;
   discard height
   failure[Unit](windowBackendError("window backend does not support opening"))
 
+
+method setIcon*(backend: WindowHostBackend; icon: GuiIcon): Result[Unit] {.
+    base, raises: [].} =
+  discard backend
+  discard icon
+  failure[Unit](windowBackendError("window backend does not support icons"))
 method close*(backend: WindowHostBackend): Result[Unit] {.base, raises: [].} =
   discard backend
   success()

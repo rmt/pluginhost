@@ -3,7 +3,7 @@
 **Plan version:** 1.0.0  
 **Target product release:** `pluginhost` 0.1.0  
 **Initial development version:** 0.0.1-dev  
-**Status:** Increments 0–10A approved; Increment 10B implementation complete in the current review worktree and pending review
+**Status:** Increments 0–10A approved; review units 10B and 10C are implemented in the current review worktree and pending review
 **Companion documents:** [`REQUIREMENTS.md`](REQUIREMENTS.md), [`DESIGN.md`](DESIGN.md)
 
 ## 1. Purpose
@@ -675,6 +675,7 @@ The 10A review unit implements:
 
 The 10A review gate is complete; unit 10B is a separate review unit.
 
+
 ### Review unit 10B — CLAP GUI integration
 **Current review unit status:** Implemented in the current worktree; pending human review gate 10B.
 
@@ -684,10 +685,12 @@ The 10A review gate is complete; unit 10B is a separate review unit.
 - Implement host GUI resize/show/hide/closed callbacks through coalesced main-thread requests.
 - Connect X11 readiness to the reactor.
 - Implement `--show-gui`, `--hide-gui`, `--no-gui`, `--require-gui`, and `--gui-scale` policy.
+- Implement bounded `--icon` PPM loading, deterministic generic fallback, and
+  application of the same icon to the X11 window and tray item. Standard CLAP
+  1.2.10 has no plugin-icon extension.
 - Implement `SIGUSR1` show and `SIGUSR2` hide.
 - Make WM close hide/unmap without stopping audio, and clean up/recreate after actual surface destruction.
 - Ensure `--no-gui` does not advertise GUI hosting.
-- Extend fixture with embedded/floating, resize, timer, POSIX FD, close, failure, and recreate GUI modes.
 
 ### Tests
 
@@ -700,14 +703,48 @@ The 10A review gate is complete; unit 10B is a separate review unit.
 - Audio cycle counter continues while GUI is shown, hidden, resized, and recreated.
 - Reentrant plugin GUI requests are deferred to safe points.
 - Repeated create/destroy has no X11/FD/timer leaks.
+- StatusNotifierItem registration and primary-button activation toggle the
+  existing GUI through the main reactor.
+- Missing session bus/watcher and tray connection failure warn without stopping
+  an ordinary GUI/audio run.
 
 ### Manual verification
 
-Run the fixture and at least two independent real plugin GUIs under X11/XWayland. Exercise signals, resize, WM close, and state changes while monitoring JACK xruns.
+Run the fixture and at least two independent real plugin GUIs under X11/XWayland. Exercise signals, resize, WM close, state changes, and the tray primary-button toggle while monitoring JACK xruns.
 
 ### Human review gate 10
 
 Review X11 ownership/error handling, CLAP GUI call order, callback reentrancy, headless policy, timer/FD cleanup, and evidence that audio is unaffected.
+
+### Review unit 10C — StatusNotifierItem tray icon
+**Current review unit status:** Implemented in the current worktree; pending human review gate 10C.
+
+- Replace the legacy XEmbed tray path with a backend-neutral optional
+  `TrayIconBackend` and main-thread `TrayController` backed by a separately
+  dynamically loaded libdbus-1 session connection.
+- Export `/StatusNotifierItem` under a deterministic per-process service name,
+  register it with the standard `StatusNotifierWatcher` or the deployed KDE
+  compatibility name/interface, and handle bounded `Activate` requests as GUI
+  toggle events.
+- Publish the host-selected bounded icon as SNI `IconPixmap`; use the same
+  validated icon for the X11 window `_NET_WM_ICON`. The pinned standard CLAP
+  1.2.10 headers provide no plugin-icon capability, so no plugin-derived icon
+  path is claimed.
+- Register the D-Bus descriptor with `MainReactor`, bound dispatch/event
+  draining, and preserve generation-safe cleanup.
+- Keep missing session bus/watchers and tray transport failures non-fatal,
+  warning once and preserving GUI, signal, and audio behavior.
+- Close the tray before GUI/plugin teardown and retain explicit idempotent
+  ownership cleanup. Remove the obsolete XEmbed tray code and fixtures.
+
+### Human review gate 10C
+
+Review the libdbus ABI declarations and dynamic ownership, standard and KDE
+compatibility registration/property signatures, StatusNotifierItem
+registration/properties/activation behavior, icon byte/layout conversion,
+reactor generation/cleanup behavior, bounded dispatch, non-fatal fallback, and
+proof that tray activation remains a main-thread GUI operation.
+
 
 ## 18. Increment 11 — Feature-complete hardening and release candidate
 
@@ -785,7 +822,7 @@ This table is updated only when work is reviewed.
 | 7 — Reactor/signals | Approved | Increment 7 review | Public headless run, epoll/signalfd reactor, orderly shutdown, main-thread callbacks, and atomic PID files accepted |
 | 8 — Host extensions/restart | Approved | Review units 8A and 8B | Main-thread timer/FD services, dirty notification, JACK latency, bounded parameter transport, restart/rescan, sleep/wake, and compatible reconnection/loss evidence accepted |
 | 9 — State | Approved | Increment 9 review | Bounded 64 KiB/64 MiB CLAP streams, pre-configuration load, clean-signal transactional save, rollback, and live evidence accepted |
-| 10 — GUI | In progress | Review unit 10B pending | 10A Xlib window-host spike approved; 10B CLAP GUI negotiation/controller, dynamic X11 adapter, callback transport, CLI policy, fixture, unit, and Xvfb evidence implemented in the current review worktree |
+| 10 — GUI | In progress | Review units 10B and 10C pending | 10A Xlib window-host spike approved; 10B CLAP GUI negotiation/controller and 10C StatusNotifierItem D-Bus tray toggle/icon are implemented in the current review worktree with unit, ABI, fixture, and Xvfb/session-bus evidence |
 | 11 — Release candidate | Not started | — | — |
 | 12 — MVP release | Not started | — | Target 0.1.0 |
 
@@ -804,6 +841,7 @@ Allowed statuses: `Not started`, `In progress`, `Changes requested`, `Approved`,
 | Plugin callback reentrancy | Increments 7–8 deferred request dispatch | Reentrant fixture tests |
 | Restart races/use-after-free | Increments 4, 5, and 8 quiescence tests | Repeated restart stress |
 | X11/XEmbed incompatibility | Increment 10A isolated spike | Xvfb, GUI fixture, and real-plugin matrix |
+| StatusNotifierItem availability | Increment 10C optional backend and warning policy | Session-bus fake watcher, D-Bus property/activation test, and desktop matrix |
 | GUI timer/FD leaks | Increments 8 and 10 | Repeated GUI lifecycle checks |
 | State-file corruption | Increment 9 transaction design | Failure-injection tests |
 | Scope growth obscures review | Review-size rule and per-increment non-goals | Progress/review record |
@@ -831,4 +869,4 @@ Each candidate requires requirements/design updates and, where architectural, an
 
 ## 23. First action after each review gate
 
-After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 9 and review unit 10A are approved. Increment 10B is implemented in the current review worktree and awaits review of the CLAP GUI call order, callback transport, controller ownership, X11 integration, and focused/full verification evidence.
+After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 9 and review unit 10A are approved. Review units 10B and 10C are implemented in the current review worktree and await review of the CLAP GUI/tray call order, callback transport, controller ownership, X11 window and D-Bus integration, icon policy, and focused/full verification evidence.

@@ -28,7 +28,7 @@ In priority order:
 4. **Main-thread responsiveness:** plugin GUI, timers, POSIX FDs, host callbacks, and signals share one event-driven main loop.
 5. **Failure isolation within the process:** partial initialization and ordinary API failures must clean up deterministically, while acknowledging that an in-process plugin can still crash the process.
 6. **Testability:** lifecycle, port mapping, event conversion, state streams, and queue behavior must be testable without a physical audio device or third-party plugin.
-7. **Replaceable boundaries:** CLAP, JACK, X11, Linux event APIs, and filesystem behavior must be contained in adapters.
+7. **Replaceable boundaries:** CLAP, JACK, X11, session D-Bus, Linux event APIs, and filesystem behavior must be contained in adapters.
 8. **Minimal deployment:** avoid a general GUI toolkit and unrelated host functionality in the initial release.
 
 ## 3. Architecture principles
@@ -44,7 +44,7 @@ Communication crosses the boundary only through atomics and fixed-capacity queue
 
 ### 3.2 Ports and adapters at external boundaries
 
-The application coordinator depends on narrow capabilities rather than raw JACK, CLAP DSO, X11, or Linux calls. Concrete adapters implement those capabilities.
+The application coordinator depends on narrow capabilities rather than raw JACK, CLAP DSO, X11, D-Bus, or Linux calls. Concrete adapters implement those capabilities.
 
 The architecture does not force CLAP concepts into an overly generic plugin model. CLAP-specific lifecycle and extensions remain in the CLAP package. Shared abstractions cover only concepts the application actually needs: a loadable processor, a port plan, a real-time process endpoint, state capability, and GUI capability.
 
@@ -54,7 +54,7 @@ Session, plugin, audio backend, and GUI states are represented as enums with che
 
 ### 3.4 Explicit ownership and cleanup
 
-Foreign resources use explicit `open`/`close` or `init`/`deinit` pairs. Cleanup methods are idempotent. The design does not rely on Nim finalizer order for JACK clients, dynamic libraries, CLAP instances, X11 resources, file descriptors, or state files.
+Foreign resources use explicit `open`/`close` or `init`/`deinit` pairs. Cleanup methods are idempotent. The design does not rely on Nim finalizer order for JACK clients, dynamic libraries, X11/D-Bus resources, file descriptors, or state files.
 
 ### 3.5 Immutable configuration and snapshots
 
@@ -76,6 +76,7 @@ flowchart LR
     Server[JACK / PipeWire-JACK server]
     Plugin[Native CLAP plugin]
     Display[X11 / XWayland display]
+    Bus[Session D-Bus / StatusNotifierWatcher]
     FS[Plugin and state files]
 
     User -->|CLI and POSIX signals| Host[pluginhost process]
@@ -84,13 +85,12 @@ flowchart LR
     Audio <-->|audio ports| Server
     Host <-->|CLAP ABI calls and callbacks| Plugin
     Host <-->|window and events| Display
+    Host <-->|StatusNotifierItem| Bus
     Host <-->|load, scan, state| FS
-```
 
 Trust boundaries:
 
-- CLAP plugins are third-party native code in the same address space.
-- JACK, X11, and filesystem data are external inputs and must be validated.
+- JACK, X11, session D-Bus, and filesystem data are external inputs and must be validated.
 - Signal handlers and foreign callbacks can run asynchronously and must not touch main-thread-owned resources directly.
 
 ## 5. Top-level component model
@@ -103,6 +103,7 @@ flowchart TB
     Clap[ClapRuntime]
     Jack[JackBackend]
     Gui[GuiController]
+    Tray[TrayController]
     State[StateStore]
     Discovery[PluginDiscovery]
     RT[RtEngine]
@@ -113,6 +114,7 @@ flowchart TB
     Session --> Clap
     Session --> Jack
     Session --> Gui
+    Session --> Tray
     Session --> State
     Main --> Discovery
 
@@ -123,12 +125,14 @@ flowchart TB
     Mail -->|drained by main thread| Session
     Reactor -->|timers, FDs, signals| Session
     Gui --> Reactor
+    Tray --> Reactor
     Clap --> Reactor
 
     FFI1[CLAP FFI] --> Clap
     FFI2[JACK FFI] --> Jack
     FFI3[X11 FFI] --> Gui
-    FFI4[POSIX FFI] --> Reactor
+    FFI4[D-Bus FFI] --> Tray
+    FFI5[POSIX FFI] --> Reactor
 ```
 
 ### 5.1 Composition root and CLI
@@ -137,18 +141,18 @@ Responsibilities:
 
 - Parse arguments into immutable `RunConfig`, `ListConfig`, or `ScanConfig` values.
 - Validate mutually exclusive options and paths.
-- Construct concrete Linux/JACK/CLAP/X11 adapters.
+- Construct concrete Linux/JACK/CLAP/X11/D-Bus adapters.
 - Map typed failures to diagnostics and exit statuses.
 - Ensure the top-level cleanup path runs exactly once.
 
 The CLI layer contains no plugin lifecycle or process logic.
 
 ### 5.2 `HostSession` coordinator
-
 `HostSession` is the control-plane owner for one running plugin instance. It:
 
 - Executes startup, restart, and shutdown state transitions.
-- Owns the plugin module/instance, JACK backend, GUI controller, reactor registrations, state service, mailboxes, and metrics.
+- Owns the plugin module/instance, JACK backend, GUI controller, optional tray
+  controller, reactor registrations, state service, mailboxes, and metrics.
 - Drains requests generated by CLAP callbacks or JACK notifications.
 - Applies policy such as headless fallback, required-GUI failure, save-on-exit, and exit-status selection.
 - Ensures JACK is quiescent before changing or releasing real-time snapshots.
@@ -252,15 +256,40 @@ recreation, while `clap_host_gui.closed(true)` causes one host-side
 `clap_plugin_gui.destroy()` acknowledgement before release.
 
 Increment 10A established the X11 declaration/API/window ownership boundary.
-Increment 10B connects it to CLAP and the session. Native Wayland remains deferred;
-the stable CLAP contract permits only floating Wayland and no native embedded path in
-this design.
+Increment 10B connects it to CLAP and the session. The window host applies the
+host-selected bounded icon through `_NET_WM_ICON`; standard CLAP 1.2.10 exposes
+no plugin-icon capability, so `--icon` PPM input and the generic fallback are
+explicit host policy. Native Wayland remains deferred; the stable CLAP contract
+permits only floating Wayland and no native embedded path in this design.
+
+### 5.6.1 `TrayController`
+
+`TrayController` owns the optional application tray icon independently from
+the plugin GUI surface. It:
+
+- Creates a StatusNotifierItem backend through a backend-neutral
+  `TrayIconBackend`, registers its session-D-Bus connection FD with
+  `MainReactor`, and owns its cleanup.
+- Drains a bounded number of libdbus dispatch turns per reactor event and
+  reports only primary activation or connection closure to `HostSession`.
+- Keeps tray protocol work on the main thread and never calls CLAP or JACK
+  from a D-Bus callback or event source.
+- Treats a missing session bus/watcher, connection failure, and cleanup failure
+  as explicit GUI diagnostics. Ordinary startup remains usable without a tray;
+  the controller does not alter `--require-gui` policy for the plugin GUI.
+
+The concrete backend owns a private dynamically loaded libdbus-1 connection,
+requests a deterministic per-process `org.freedesktop.StatusNotifierItem`
+service name, exports `/StatusNotifierItem`, and registers with the standard
+`org.freedesktop.StatusNotifierWatcher` or the deployed KDE-compatible
+`org.kde.StatusNotifierWatcher`. It accepts both freedesktop and KDE item
+interface spellings, publishes the standard `a(iiay)` ARGB32 pixmap, and
+publishes the host-selected bounded icon. The legacy XEmbed system-tray
+protocol is not used.
 
 ### 5.7 `MainReactor`
-
-The Linux implementation multiplexes:
-
 - X11 connection readiness.
+- StatusNotifierItem session-D-Bus connection readiness and bounded activation events.
 - CLAP POSIX FD registrations.
 - CLAP monotonic timers.
 - A Linux `signalfd` created after handled signals are blocked process-wide.
@@ -370,7 +399,7 @@ executable/composition
   -> application (CLI, HostSession)
       -> shared domain types (config, ports, errors, lifecycle, metrics)
       -> capability interfaces
-  -> concrete adapters (CLAP, JACK, X11, Linux, filesystem)
+  -> concrete adapters (CLAP, JACK, X11, D-Bus, Linux, filesystem)
       -> shared domain types
       -> raw FFI modules
 ```
@@ -674,8 +703,7 @@ A small C probe compiled against the pinned official headers exports or prints:
 - Enum/flag values and integer widths.
 - Callback calling-convention compatibility where testable.
 
-Nim tests compare these values with imported types on x86_64 and aarch64. A CLAP SDK update is not accepted until ABI tests and extension audits pass.
-
+| X11 display/window | `X11WindowHost` | GUI creation | GUI destruction |
 ## 13. Main-loop and callback reentrancy
 
 Plugin callbacks may request changes while the main thread is already inside a plugin method. The design therefore follows these rules:
@@ -699,6 +727,7 @@ Plugin callbacks may request changes while the main thread is already inside a p
 | JACK client and ports | `JackBackend` | Session configuration | After callbacks quiesce |
 | Frozen RT map/arena | `HostSession`, borrowed by `RtEngine` | Before JACK activation | After JACK deactivation |
 | X11 display/window | `X11WindowHost` | GUI creation | GUI destruction |
+| Session-D-Bus connection/object | `DbusTrayIcon` via `TrayController` | Tray startup when a session bus/watcher exists | Tray shutdown or failure |
 | CLAP timer/FD entries | `MainReactor` registry | Plugin request | Unregister or plugin teardown |
 | CLAP main-service table | `PluginServiceRegistry`, borrowed by `ClapHostBridge` | Before plugin creation | After plugin destruction |
 | State temporary file and CLAP stream tables | `StateStore`/`ClapStateCodec` transaction | Synchronous main-thread load/save | Close, rename, or rollback |
@@ -761,12 +790,20 @@ src/
       role_guard.nim
     gui/
       controller.nim
+      icon.nim
+      icon_loader.nim
       window_host.nim
       x11_host.nim
+      tray_controller.nim
+      tray_icon.nim
     platform/x11/
       ffi.nim
       api.nim
       window_host.nim
+    platform/dbus/
+      ffi.nim
+      api.nim
+      tray_icon.nim
     platform/linux/
       reactor.nim
       signals.nim
@@ -928,18 +965,16 @@ The initial `HostSession` deliberately owns one processor. If chains are later r
 
 ### 18.6 Out-of-process isolation
 
-Future sandboxing should introduce a process-boundary adapter and real-time IPC transport. It must not leak IPC concerns into `ClapInstance` or `JackBackend`. This is a separate architectural feature with its own latency and failure requirements.
+Future sandboxing should introduce a process-boundary adapter and real-time IPC
+transport. It must not leak IPC concerns into `ClapInstance` or `JackBackend`.
+This is a separate architectural feature with its own latency and failure
+requirements.
 
 ## 19. Deliberately deferred decisions
 
-The following require prototypes or product decisions before being fixed. The
-CLAP binding, direct minimal JACK FFI, shared Nim safety profile, checked JACK
-loading, audited C11 atomics, and the direct Linux reactor are resolved by ADRs 0001
-through 0006:
+The following remain deferred. Native Wayland GUI support, distribution
+formats, and the project license remain outside the current reviewed scope.
 
-- Xlib versus XCB for the concrete X11 adapter.
-- Exact bounded queue algorithms and capacities beyond the reviewed event and parameter
-  transports.
 - Native Wayland floating support in the initial milestone.
 - Distribution formats and project license.
 
@@ -960,6 +995,7 @@ Initial ADR candidates:
 7. ARC with an allocation-free unmanaged RT data model (resolved by ADR 0003); trace-free lock-free callback atomics are resolved by ADR 0005.
 8. Direct Linux epoll/signalfd reactor with generation tokens (resolved by ADR 0006).
 9. Atomic requests plus bounded queues for cross-thread communication.
+10. Optional StatusNotifierItem session-D-Bus tray integration (ADR 0009).
 
 An ADR is required when changing an architectural invariant, adding a substantial dependency, exposing a public API, or choosing an option listed in the deferred decisions.
 
@@ -971,7 +1007,7 @@ An ADR is required when changing an architectural invariant, adding a substantia
 | CLAP loading and lifecycle | 5.3, 9, 10, 12 |
 | JACK audio and ports | 5.4, 6.2, 11.1 |
 | MIDI and CLAP events | 5.5, 11.2, 11.3 |
-| GUI show/hide and Linux services | 5.6, 5.7, 9.3, 13 |
+| GUI show/hide and Linux services | 5.6, 5.6.1, 5.7, 9.3, 13 |
 | State persistence | 5.8, 10.3, 14 |
 | Thread and real-time safety | 3.1, 5.5, 8, 11 |
 | Nim/FFI correctness | 12, 15, 17 |
@@ -992,6 +1028,9 @@ Implementation reviews must verify:
 - [ ] JACK is loaded only by the checked owned procedure table, never by eager module initialization.
 - [ ] Every successful CLAP entry init, plugin init, GUI create, JACK open, and file transaction has a matching cleanup action.
 - [ ] GUI state changes do not alter audio activation.
+- [ ] Tray activation is dispatched on the main/reactor thread and cannot
+  alter JACK activation or enter the process callback.
+- [ ] Tray and GUI resources close idempotently before reactor/plugin teardown.
 - [ ] Input events are globally sample-sorted and output timestamps are validated.
 - [ ] SysEx pointers are never retained past their specified lifetime.
 - [ ] Structural port changes occur only while JACK is quiescent and CLAP is deactivated.

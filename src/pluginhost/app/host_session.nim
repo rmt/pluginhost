@@ -2,7 +2,8 @@ import std/options
 
 import ./[audio_slice, main_reactor, plugin_services, run_config]
 import ../clap/[event_bridge, ffi, loader, main_thread_services]
-import ../gui/controller
+import ../gui/[controller, icon, icon_loader, tray_controller]
+import ../platform/dbus/tray_icon
 import ../platform/x11/gui_adapter
 import ../domain/[errors, lifecycle, plugin_catalog, reactor, result]
 import ../jack/backend
@@ -24,12 +25,15 @@ type
     state*: SessionState
     audioSlice: InternalAudioSlice
     gui: GuiController
+    tray: TrayController
+    guiIcon: GuiIcon
     reactor: MainReactor
     signalSource: SignalSource
     signalToken: ReactorToken
     pidFile: PidFile
     pluginServices: PluginServiceRegistry
     guiSignalWarnings: set[SignalIntent]
+    trayWarningShown: bool
     lastXruns: uint64
     lastFreewheelChanges: uint64
     stateDirty: bool
@@ -412,6 +416,13 @@ proc serviceGuiFailure(session: var HostSession; config: RunConfig;
       if closed.error.context.len > 0:
         error.context.add(" (" & closed.error.context & ")")
       return failure[Unit](move(error))
+  if session.tray != nil:
+    var trayClosed = session.tray.close()
+    if not trayClosed.isOk:
+      error.context.add("; tray cleanup=" & trayClosed.error.message)
+      if trayClosed.error.context.len > 0:
+        error.context.add(" (" & trayClosed.error.context & ")")
+      return failure[Unit](move(error))
   success()
 
 proc serviceGuiEvents(session: var HostSession; config: RunConfig;
@@ -422,6 +433,39 @@ proc serviceGuiEvents(session: var HostSession; config: RunConfig;
   if not handled.isOk:
     return session.serviceGuiFailure(config, errorOutput, "service",
       move(handled.error))
+  success()
+
+proc serviceTrayFailure(session: var HostSession; errorOutput: File;
+                        operation: string; error: sink HostError): Result[Unit] =
+  var trayFailure = move(error)
+  if not session.trayWarningShown:
+    session.trayWarningShown = true
+    let detail = if trayFailure.context.len == 0: trayFailure.message
+      else: trayFailure.message & " (" & trayFailure.context & ")"
+    warning(errorOutput, "could not " & operation &
+      " tray icon; continuing without tray: " & detail)
+  if session.tray != nil:
+    var closed = session.tray.close()
+    if not closed.isOk:
+      trayFailure.context.add("; tray cleanup=" & closed.error.message)
+      if closed.error.context.len > 0:
+        trayFailure.context.add(" (" & closed.error.context & ")")
+      return failure[Unit](move(trayFailure))
+  success()
+
+proc serviceTrayEvents(session: var HostSession; config: RunConfig;
+                       events: seq[ReactorEvent]; errorOutput: File): Result[Unit] =
+  if session.tray == nil:
+    return success()
+  var handled = session.tray.handleEvents(events)
+  if not handled.isOk:
+    return session.serviceTrayFailure(errorOutput, "service",
+      move(handled.error))
+  if handled.value and session.gui != nil:
+    var toggled = session.gui.toggle()
+    if not toggled.isOk:
+      return session.serviceGuiFailure(
+        config, errorOutput, "toggle", move(toggled.error))
   success()
 
 proc serviceGuiRequests(session: var HostSession; config: RunConfig;
@@ -437,7 +481,15 @@ proc serviceGuiRequests(session: var HostSession; config: RunConfig;
     return session.serviceGuiFailure(config, errorOutput, "service",
       move(handled.error))
   success()
-
+proc loadGuiIcon(session: var HostSession; config: RunConfig): Result[Unit] =
+  if config.iconPath.isSome:
+    var loaded = parsePpm(config.iconPath.get())
+    if not loaded.isOk:
+      return failure[Unit](move(loaded.error))
+    session.guiIcon = loaded.value
+  else:
+    session.guiIcon = defaultGuiIcon()
+  success()
 
 proc openGui(session: var HostSession; config: RunConfig;
                  errorOutput: File): Result[Unit] =
@@ -446,10 +498,22 @@ proc openGui(session: var HostSession; config: RunConfig;
   let title = pluginDisplayName(session.audioSlice.pluginName, "CLAP")
   session.gui = newGuiController(
     session.audioSlice.guiClient(), addr session.reactor, newX11WindowBackend,
-    title, config.guiScale)
+    title, config.guiScale, icon = session.guiIcon)
   var started = session.gui.start(config.guiPolicy == gpShow)
   if not started.isOk:
     return session.serviceGuiFailure(config, errorOutput, "start",
+      move(started.error))
+  success()
+
+proc openTray(session: var HostSession; errorOutput: File): Result[Unit] =
+  if session.gui == nil or not session.gui.isAvailable:
+    return success()
+  let title = pluginDisplayName(session.audioSlice.pluginName, "CLAP")
+  session.tray = newTrayController(
+    addr session.reactor, newDbusTrayIcon, title, session.guiIcon)
+  var started = session.tray.start()
+  if not started.isOk:
+    return session.serviceTrayFailure(errorOutput, "start",
       move(started.error))
   success()
 
@@ -461,6 +525,9 @@ proc run*(session: var HostSession; config: RunConfig;
   var validated = validateAvailableRunOptions(config)
   if not validated.isOk:
     return failSession[Unit](session, move(validated.error))
+  var iconLoaded = session.loadGuiIcon(config)
+  if not iconLoaded.isOk:
+    return failSession[Unit](session, move(iconLoaded.error))
 
   session.saveStatePath = config.saveStatePath
   var processControl = session.openProcessControl()
@@ -495,7 +562,9 @@ proc run*(session: var HostSession; config: RunConfig;
   var guiOpened = session.openGui(config, errorOutput)
   if not guiOpened.isOk:
     return failSession[Unit](session, move(guiOpened.error))
-
+  var trayOpened = session.openTray(errorOutput)
+  if not trayOpened.isOk:
+    return failSession[Unit](session, move(trayOpened.error))
   while session.state == ssRunning:
     var events = session.reactor.wait(monotonicNanos(ControlServiceNanos))
     if not events.isOk:
@@ -511,6 +580,10 @@ proc run*(session: var HostSession; config: RunConfig;
     var guiEvents = session.serviceGuiEvents(config, events.value, errorOutput)
     if not guiEvents.isOk:
       return failSession[Unit](session, move(guiEvents.error))
+    var trayEvents = session.serviceTrayEvents(
+      config, events.value, errorOutput)
+    if not trayEvents.isOk:
+      return failSession[Unit](session, move(trayEvents.error))
     var guiSignals = session.serviceGuiSignalActions(
       config, signals.value.intents, errorOutput)
     if not guiSignals.isOk:
@@ -542,10 +615,12 @@ proc rememberCleanup(first: var HostError; failed: var bool;
       first.context.add(" (" & operation.error.context & ")")
 
 proc close*(session: var HostSession): Result[Unit] =
+
   if session.state == ssStopped and session.audioSlice.state in
       {iassEmpty, iassClosed} and not session.pidFile.isOwned and
       not session.signalSource.isOpen and
-      (session.gui == nil or session.gui.state == gcsClosed):
+      (session.gui == nil or session.gui.state == gcsClosed) and
+      (session.tray == nil or session.tray.state == tcsClosed):
     return success()
 
   var first: HostError
@@ -558,6 +633,8 @@ proc close*(session: var HostSession): Result[Unit] =
         session.saveStatePath.isSome:
       var saved = session.audioSlice.saveState(session.saveStatePath.get())
       rememberCleanup(first, failed, saved)
+  var trayClosed = session.tray.close()
+  rememberCleanup(first, failed, trayClosed)
   var guiClosed = session.gui.close()
   rememberCleanup(first, failed, guiClosed)
   var servicesClosed = session.pluginServices.close()

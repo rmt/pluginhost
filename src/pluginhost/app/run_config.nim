@@ -23,6 +23,7 @@ type
     guiPolicy*: GuiPolicy
     requireGui*: bool
     guiScale*: Option[float]
+    iconPath*: Option[string]
     loadStatePath*: Option[string]
     saveStatePath*: Option[string]
     pidFilePath*: Option[string]

@@ -9,7 +9,7 @@ import std/options
 import ../app/main_reactor
 import ../clap/host_bridge
 import ../domain/[errors, reactor, result]
-import ./[plugin_client, window_backend, window_host]
+import ./[icon, plugin_client, window_backend, window_host]
 
 const
   InitialWindowWidth = 640'u32
@@ -35,6 +35,7 @@ type
     reactor: ptr MainReactor
     factory: WindowHostFactory
     window: WindowHostBackend
+    iconValue: GuiIcon
     token: ReactorToken
     tokenRegistered: bool
     stateValue: GuiControllerState
@@ -59,13 +60,15 @@ proc addCleanupDetail(primary: var HostError; cleanup: Result[Unit]) =
 
 proc newGuiController*(plugin: GuiPluginClient; reactor: ptr MainReactor;
                        factory: WindowHostFactory; title: string;
-                       scale = none(float64); disabled = false): GuiController =
+                       scale = none(float64); disabled = false;
+                       icon: GuiIcon = nil): GuiController =
   new(result)
   result.plugin = plugin
   result.reactor = reactor
   result.factory = factory
   result.titleValue = title
   result.scaleValue = scale
+  result.iconValue = if icon == nil: defaultGuiIcon() else: icon
   result.stateValue = if disabled: gcsDisabled else: gcsUncreated
   result.modeValue = gmNone
 
@@ -217,6 +220,10 @@ proc ensureCreated*(controller: GuiController): Result[Unit] =
     controller.stateValue = gcsUnavailable
     return failure[Unit](move(opened.error))
 
+  var iconSet = controller.window.setIcon(controller.iconValue)
+  if not iconSet.isOk:
+    return controller.failCreation(move(iconSet.error))
+
   var registered = controller.reactor[].registerFd(
     controller.window.fileDescriptor, {riRead, riError, riHangup})
   if not registered.isOk:
@@ -363,6 +370,14 @@ proc hide*(controller: GuiController): Result[Unit] =
     return failure[Unit](move(first))
   controller.stateValue = gcsHidden
   success()
+
+proc toggle*(controller: GuiController): Result[Unit] =
+  if controller == nil:
+    return failure[Unit](controllerError("GUI controller is not initialized"))
+  if controller.isVisible:
+    controller.hide()
+  else:
+    controller.show()
 
 proc resizeFromPlugin(controller: GuiController; size: GuiSize): Result[Unit] =
   if controller.modeValue != gmEmbedded or not controller.pluginCreated:
