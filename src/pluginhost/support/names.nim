@@ -1,5 +1,8 @@
 const DefaultClientNameBytes* = 48
 
+proc pluginDisplayName*(pluginName, pluginFormat: string): string =
+  pluginName & " [" & pluginFormat & "]"
+
 proc defaultJackClientName*(pluginName: string): string =
   ## Produce a deterministic conservative ASCII JACK client name before the
   ## concrete JACK library's limit is available. The backend still validates

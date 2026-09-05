@@ -110,8 +110,17 @@ plugin instance. `scan` recursively discovers canonical `.clap` files, continues
 past per-root and per-candidate failures, reports successful descriptors, and uses
 exit status 3 when any issue occurred. Relative explicit/`CLAP_PATH` roots resolve
 from the current working directory; environment values do not expand `~`.
-The canonical path-only command runs one plugin instance as one JACK client. `SIGINT` and `SIGTERM` request clean
-shutdown; `SIGUSR1` shows and `SIGUSR2` hides the GUI when enabled, while `--no-gui` retains a rate-limited disabled-GUI warning. `--pid-file` atomically publishes the running PID and removes only the entry the process owns. By default the host attempts an embedded X11 GUI, falls back to floating X11 when supported, and otherwise warns and continues headlessly; `--hide-gui` creates it hidden, `--require-gui` makes failure fatal, and `--gui-scale` requests a positive scale.
+The canonical path-only command runs one plugin instance as one JACK client. The
+Linux process name and X11 window title use `$PluginName [$PluginFormat]`, for
+example `Surge XT [CLAP]`. Linux `ps`/`top` `COMM` output is limited to 15 bytes,
+so long process names are UTF-8-safe truncated; the X11 title retains the full
+display name. `SIGINT` and `SIGTERM` request clean shutdown; `SIGUSR1` shows and
+`SIGUSR2` hides the GUI when enabled, while `--no-gui` retains a rate-limited
+disabled-GUI warning. `--pid-file` atomically publishes the running PID and
+removes only the entry the process owns. By default the host attempts an embedded
+X11 GUI, falls back to floating X11 when supported, and otherwise warns and
+continues headlessly; `--hide-gui` creates it hidden, `--require-gui` makes
+failure fatal, and `--gui-scale` requests a positive scale.
 The 10B GUI path is main-thread-only and does not enter JACK processing. `--load-state`
 loads state before audio configuration. `--save-state` saves after JACK/CLAP processing is
 quiesced during clean `SIGINT`/`SIGTERM` shutdown; it writes a mode-0600 same-directory

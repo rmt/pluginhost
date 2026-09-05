@@ -29,6 +29,7 @@ type
     readFd: cint
     writeFd: cint
     stateValue: WindowHostState
+    titleValue: string
     widthValue: uint32
     heightValue: uint32
     resizeCount: int
@@ -130,7 +131,7 @@ proc newFakeWindow(): FakeWindowBackend =
 
 method open*(backend: FakeWindowBackend; title: string;
              width, height: uint32): Result[Unit] {.raises: [].} =
-  discard title
+  backend.titleValue = title
   backend.widthValue = width
   backend.heightValue = height
   backend.stateValue = whHidden
@@ -204,7 +205,7 @@ suite "GUI controller policy and lifecycle":
       produced = newFakeWindow()
       produced
     var controller = newGuiController(
-      plugin, addr reactor, factory, "test", some(1.25))
+      plugin, addr reactor, factory, "Surge XT [CLAP]", some(1.25))
     defer:
       check controller.close().isOk
       check reactor.close().isOk
@@ -216,6 +217,7 @@ suite "GUI controller policy and lifecycle":
     check plugin.createCount == 1
     check plugin.parentCount == 1
     check plugin.scaleCount == 1
+    check produced.titleValue == "Surge XT [CLAP]"
     check produced.resizeCount == 1
     check plugin.showCount == 1
 

@@ -1,7 +1,7 @@
-import std/[os, posix, strutils, unittest]
+import std/[os, posix, strutils, unicode, unittest]
 
 import pluginhost/domain/errors
-import pluginhost/platform/linux/[pid_file, signals]
+import pluginhost/platform/linux/[pid_file, process_name, signals]
 import pluginhost/support/names
 
 proc signalBlocked(signalNumber: cint): bool =
@@ -88,6 +88,26 @@ suite "Linux process control resources":
     check closed.error.kind == hekPidFile
     check readFile(path) == "replacement\n"
     check not owner.isOwned
+
+suite "plugin identity naming":
+  test "display names preserve plugin name and format":
+    check pluginDisplayName("Surge XT", "CLAP") == "Surge XT [CLAP]"
+    check pluginDisplayName("日本語", "CLAP") == "日本語 [CLAP]"
+
+  test "Linux process names are bounded on UTF-8 boundaries":
+    check linuxProcessName("Surge XT [CLAP]") == "Surge XT [CLAP]"
+    check linuxProcessName("A very long plugin name [CLAP]").len <=
+      LinuxProcessNameBytes
+    check linuxProcessName("日本語プラグイン [CLAP]").len <=
+      LinuxProcessNameBytes
+    check validateUtf8(linuxProcessName("日本語プラグイン [CLAP]")) == -1
+
+  test "Linux process comm receives the bounded display name":
+    let originalName = readFile("/proc/self/comm").strip()
+    let displayName = linuxProcessName("Surge XT [CLAP]")
+    require setLinuxProcessName(displayName).isOk
+    check readFile("/proc/self/comm").strip() == displayName
+    discard setLinuxProcessName(originalName)
 
 suite "default JACK client naming":
   test "plugin names become bounded deterministic ASCII names":

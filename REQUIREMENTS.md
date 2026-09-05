@@ -145,6 +145,10 @@ A persistent plugin cache is not required initially.
 
 ### 6.4 Runtime process control
 
+- The Linux process name and X11 window title MUST use
+  `$PluginName [$PluginFormat]`, with `CLAP` as the initial format label.
+- The Linux process `comm` name MUST be truncated to 15 bytes on a valid UTF-8
+  boundary when necessary; X11 MUST retain the full display title.
 - `SIGINT` and `SIGTERM` MUST request orderly shutdown.
 - `SIGUSR1` MUST request that the GUI be shown.
 - `SIGUSR2` MUST request that the GUI be hidden.

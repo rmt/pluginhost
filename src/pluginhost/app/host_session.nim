@@ -6,7 +6,7 @@ import ../gui/controller
 import ../platform/x11/gui_adapter
 import ../domain/[errors, lifecycle, plugin_catalog, reactor, result]
 import ../jack/backend
-import ../platform/linux/[pid_file, reactor as linux_reactor, signals]
+import ../platform/linux/[pid_file, process_name, reactor as linux_reactor, signals]
 import ../support/names
 
 const
@@ -443,7 +443,7 @@ proc openGui(session: var HostSession; config: RunConfig;
                  errorOutput: File): Result[Unit] =
   if config.guiPolicy == gpDisabled:
     return success()
-  let title = "pluginhost: " & session.audioSlice.pluginName
+  let title = pluginDisplayName(session.audioSlice.pluginName, "CLAP")
   session.gui = newGuiController(
     session.audioSlice.guiClient(), addr session.reactor, newX11WindowBackend,
     title, config.guiScale)
@@ -479,6 +479,12 @@ proc run*(session: var HostSession; config: RunConfig;
   var started = session.startInternalAudio()
   if not started.isOk:
     return started
+
+  let processName = setLinuxProcessName(
+    pluginDisplayName(session.audioSlice.pluginName, "CLAP"))
+  if not processName.isOk:
+    var namingError = processName.error
+    return failSession[Unit](session, move(namingError))
 
   if config.pidFilePath.isSome:
     var pidResult = createPidFile(config.pidFilePath.get())
