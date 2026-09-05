@@ -5,6 +5,12 @@ import pluginhost/domain/errors
 import pluginhost/platform/linux/dynlib
 import ./clap/fixture_api
 
+proc isMapped(path: string): bool =
+  let canonicalPath = absolutePath(path)
+  for line in lines("/proc/self/maps"):
+    if line.contains(canonicalPath):
+      return true
+
 static:
   doAssert not compiles(block:
     var original: ClapModule
@@ -90,6 +96,24 @@ suite "CLAP module ownership":
       check api.deinitCalls() == scenario.deinitCalls
       check api.createCalls() == 0
       check observer.close().isOk
+
+  test "runtime retention keeps a CLAP module mapped after close":
+    let source = clapFixturePath("valid")
+    let path = getTempDir() / "pluginhost-retained-clap.clap"
+    if fileExists(path):
+      removeFile(path)
+    copyFile(source, path)
+    defer:
+      if fileExists(path):
+        removeFile(path)
+
+    check not isMapped(path)
+    var opened = openClapModule(path, keepLoaded = true)
+    require opened.isOk
+    var module = move(opened.value)
+    check module.close().isOk
+    check not module.isOpen
+    check isMapped(path)
 
   test "a closed module rejects descriptor access and remains closeable":
     var module: ClapModule

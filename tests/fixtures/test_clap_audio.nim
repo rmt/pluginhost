@@ -216,6 +216,26 @@ suite "internal CLAP float32 audio endpoint":
     check fixture.lifecycleAt(4) == 5
     check fixture.lifecycleAt(5) == 6
 
+  test "closing an active composition quiesces before CLAP destruction":
+    var controls = openControls()
+    var opened = openOwnedSlice("audio_tone")
+    var slice = move(opened.slice)
+    var observer = move(opened.observer)
+    let fixture = opened.fixture
+    var session = initHostSession()
+    defer:
+      doAssert session.close().isOk
+      doAssert observer.close().isOk
+      doAssert controls.close().isOk
+
+    check session.attachInternalAudioSlice(slice).isOk
+    check session.startInternalAudio().isOk
+    check session.close().isOk
+    check session.state == ssStopped
+    check fixture.stopCalls() == 1
+    check fixture.deactivateCalls() == 1
+    check fixture.destroyCalls() == 1
+
   test "control service detects JACK shutdown and closes without invalid client calls":
     var controls = openControls()
     var opened = openOwnedSlice("audio_tone")

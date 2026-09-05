@@ -16,6 +16,11 @@ type
     handle: pointer
     path: string
 
+const
+  # Linux/glibc defines RTLD_NODELETE as 0x1000. Nim's std/posix does not
+  # expose this Linux loader flag.
+  RtldNodelete = 0x1000
+
 proc `=destroy`*(library: var DynamicLibrary) =
   # Foreign close errors cannot be returned from a destructor. Ownership is
   # therefore released only by the checked explicit close operation.
@@ -54,7 +59,8 @@ proc libraryPath*(library: DynamicLibrary): string {.inline.} =
 proc isOpen*(library: DynamicLibrary): bool {.inline.} =
   library.handle != nil
 
-proc openDynamicLibrary*(path: string): Result[DynamicLibrary] =
+proc openDynamicLibrary*(path: string;
+                         keepLoaded = false): Result[DynamicLibrary] =
   if path.len == 0:
     return failure[DynamicLibrary](loaderError(
       hekLibraryOpen,
@@ -64,7 +70,9 @@ proc openDynamicLibrary*(path: string): Result[DynamicLibrary] =
     ))
 
   discard dlerror()
-  let handle = dlopen(path.cstring, RTLD_NOW or RTLD_LOCAL)
+  let flags = RTLD_NOW or RTLD_LOCAL or
+    (if keepLoaded: RtldNodelete else: 0)
+  let handle = dlopen(path.cstring, flags)
   if handle == nil:
     return failure[DynamicLibrary](loaderError(
       hekLibraryOpen,

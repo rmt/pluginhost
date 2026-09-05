@@ -90,6 +90,24 @@ suite "checked Linux dynamic-library ownership":
     check not library.isOpen
     check not isMapped(path)
 
+  test "a retained library stays mapped after explicit close":
+    let path = getTempDir() / "pluginhost-retained-dynlib.so"
+    if fileExists(path):
+      removeFile(path)
+    copyFile(fixturePath(), path)
+    defer:
+      if fileExists(path):
+        removeFile(path)
+
+    check not isMapped(path)
+    var opened = openDynamicLibrary(path, keepLoaded = true)
+    require opened.isOk
+    var library = move(opened.value)
+    check isMapped(path)
+    check library.close().isOk
+    check not library.isOpen
+    check isMapped(path)
+
   test "a closed owner rejects lookup without touching the loader":
     var library: DynamicLibrary
     let missing = library.resolveAddress("clap_entry")

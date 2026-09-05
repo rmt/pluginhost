@@ -93,7 +93,8 @@ proc rollback(module: var ClapModule; primary: HostError): HostError =
   else:
     mergeCleanupError(primary, cleanup.error)
 
-proc openClapModule*(path: string): Result[ClapModule] =
+proc openClapModule*(path: string;
+                     keepLoaded = false): Result[ClapModule] =
   if path.len == 0:
     return failure[ClapModule](clapError(
       hekClapPath,
@@ -119,7 +120,7 @@ proc openClapModule*(path: string): Result[ClapModule] =
       error.msg,
     ))
 
-  var opened = openDynamicLibrary(canonicalPath)
+  var opened = openDynamicLibrary(canonicalPath, keepLoaded)
   if not opened.isOk:
     return failure[ClapModule](wrapPlatformError(
       hekClapEntry,

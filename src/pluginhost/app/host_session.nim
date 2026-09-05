@@ -114,7 +114,9 @@ proc cleanupModuleFailure(module: var ClapModule;
 proc openRunSlice(config: RunConfig;
                   mainServices: ptr ClapMainThreadServices):
     Result[InternalAudioSlice] =
-  var moduleResult = openClapModule(config.pluginPath)
+  # A running plugin may own foreign threads whose code can outlive the host's
+  # orderly teardown. Keep this runtime DSO mapped after its handle is closed.
+  var moduleResult = openClapModule(config.pluginPath, keepLoaded = true)
   if not moduleResult.isOk:
     return failure[InternalAudioSlice](move(moduleResult.error))
   var module = move(moduleResult.value)
@@ -542,20 +544,21 @@ proc close*(session: var HostSession): Result[Unit] =
 
   var first: HostError
   var failed = false
-  if session.state == ssStopping and session.saveStatePath.isSome and
-      session.audioSlice.state == iassActive:
+  # Stop JACK callbacks and CLAP processing before any GUI or plugin teardown.
+  if session.audioSlice.state == iassActive:
     var quiesced = session.audioSlice.quiesce()
     rememberCleanup(first, failed, quiesced)
-    if quiesced.isOk:
+    if quiesced.isOk and session.state == ssStopping and
+        session.saveStatePath.isSome:
       var saved = session.audioSlice.saveState(session.saveStatePath.get())
       rememberCleanup(first, failed, saved)
-  if session.audioSlice.state == iassActive:
-    var audioStopped = session.audioSlice.stop()
-    rememberCleanup(first, failed, audioStopped)
   var guiClosed = session.gui.close()
   rememberCleanup(first, failed, guiClosed)
   var servicesClosed = session.pluginServices.close()
   rememberCleanup(first, failed, servicesClosed)
+  if session.audioSlice.state in {iassActive, iassQuiesced}:
+    var audioStopped = session.audioSlice.stop()
+    rememberCleanup(first, failed, audioStopped)
   var audioClosed = session.audioSlice.close()
   rememberCleanup(first, failed, audioClosed)
   var pidClosed = session.pidFile.close()
