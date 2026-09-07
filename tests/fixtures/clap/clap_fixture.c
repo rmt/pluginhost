@@ -68,6 +68,7 @@ static uint32_t successful_init_count;
 static uint32_t deinit_count;
 static uint32_t create_count;
 static uint32_t plugin_init_count;
+static _Atomic bool plugin_initialized;
 static uint32_t plugin_destroy_count;
 static uint32_t plugin_main_thread_count;
 static _Atomic uint32_t host_contract_failures;
@@ -445,6 +446,7 @@ static bool fixture_plugin_init(const clap_plugin_t *plugin) {
       if (created[index] && pthread_join(workers[index], NULL) != 0)
          atomic_fetch_add(&host_contract_failures, 1U);
    }
+   atomic_store(&plugin_initialized, true);
    return true;
 }
 
@@ -470,6 +472,7 @@ static void fixture_plugin_destroy(const clap_plugin_t *plugin) {
          fixture_host, CLAP_EXT_LOG);
    if (log != NULL)
       log->log(fixture_host, CLAP_LOG_INFO, "fixture destroy");
+   atomic_store(&plugin_initialized, false);
 }
 
 static bool fixture_plugin_activate(const clap_plugin_t *plugin,
@@ -511,6 +514,8 @@ static clap_process_status fixture_plugin_process(
 static const void *fixture_plugin_get_extension(const clap_plugin_t *plugin,
                                                 const char *extension_id) {
    (void)plugin;
+   if (!atomic_load(&plugin_initialized))
+      atomic_fetch_add(&host_contract_failures, 1U);
    if (extension_id == NULL)
       return NULL;
    if (strcmp(extension_id, CLAP_EXT_AUDIO_PORTS) == 0)
@@ -648,6 +653,7 @@ PLUGINHOST_FIXTURE_EXPORT void pluginhost_clap_fixture_reset(void) {
    deinit_count = 0U;
    create_count = 0U;
    plugin_init_count = 0U;
+   atomic_store(&plugin_initialized, false);
    plugin_destroy_count = 0U;
    plugin_main_thread_count = 0U;
    atomic_store(&host_contract_failures, 0U);

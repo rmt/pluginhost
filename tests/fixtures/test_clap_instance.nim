@@ -95,7 +95,7 @@ proc retainBridgesAfterMove(path: string):
   doAssert secondObserver.close().isOk
 
 suite "CLAP instance lifecycle":
-  test "create and init retain the host through destroy":
+  test "create initializes before extension queries and retains host through destroy":
     var opened = openSelectedInstance(clapFixturePath("valid"))
     var instance = move(opened.instance)
     var observer = move(opened.observer)
