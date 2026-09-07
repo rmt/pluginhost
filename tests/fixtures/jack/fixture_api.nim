@@ -120,6 +120,7 @@ type
     forceProcess*: FakeInvokeProcessProc
     invokeProcessOnThread*: FakeInvokeProcessOnThreadProc
     beginBlockedProcess*: FakeInvokeProcessProc
+    releaseBlockedProcess*: FakeGetIntProc
     invokeShutdown*: FakeInvokeShutdownProc
     invokeXrun*: FakeVoidProc
     invokeFreewheel*: FakeSetIntProc
@@ -196,6 +197,7 @@ proc `=sink`*(destination: var FakeJackControls; source: FakeJackControls) =
   destination.forceProcess = source.forceProcess
   destination.invokeProcessOnThread = source.invokeProcessOnThread
   destination.beginBlockedProcess = source.beginBlockedProcess
+  destination.releaseBlockedProcess = source.releaseBlockedProcess
   destination.invokeShutdown = source.invokeShutdown
   destination.invokeXrun = source.invokeXrun
   destination.invokeFreewheel = source.invokeFreewheel
@@ -351,6 +353,8 @@ proc openFakeJackControls*(): Result[FakeJackControls] =
     "pluginhost_fake_jack_invoke_process_on_thread")
   resolve(beginBlockedProcess, FakeInvokeProcessProc,
     "pluginhost_fake_jack_begin_blocked_process")
+  resolve(releaseBlockedProcess, FakeGetIntProc,
+    "pluginhost_fake_jack_release_blocked_process")
   resolve(invokeShutdown, FakeInvokeShutdownProc,
     "pluginhost_fake_jack_invoke_shutdown")
   resolve(invokeXrun, FakeVoidProc, "pluginhost_fake_jack_invoke_xrun")

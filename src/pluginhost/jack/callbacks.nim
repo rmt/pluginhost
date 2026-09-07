@@ -241,6 +241,8 @@ proc enableProcessCallbacks*(context: ptr JackCallbackContext) {.inline.} =
 
 proc disableProcessCallbacks*(context: ptr JackCallbackContext) {.inline.} =
   context.processEnabled.storeRelease(0'u32)
+proc processCallbacksEnabled*(context: ptr JackCallbackContext): bool {.inline.} =
+  context != nil and context.processEnabled.loadAcquire() != 0'u32
 
 proc setRuntimeConfigurationBaseline*(context: ptr JackCallbackContext;
                                         sampleRate, bufferSize: uint32): bool =
@@ -304,8 +306,11 @@ proc audioRolePointer*(context: ptr JackCallbackContext): ptr AudioRoleGuard {.
   addr context.role
 
 proc processCallbacksQuiescent*(context: ptr JackCallbackContext): bool {.inline.} =
-  context == nil or context.processInFlight.loadAcquire() == 0'u32
-
+  ## Include the callback-entry gate so endpoint replacement cannot race a
+  ## callback that entered just before processing was disabled.
+  context == nil or (
+    context.callbacksInFlight.loadAcquire() == 0'u32 and
+    context.processInFlight.loadAcquire() == 0'u32)
 proc callbackContextReadyForRelease*(context: ptr JackCallbackContext): bool =
   context == nil or (
     context.callbacksInFlight.loadAcquire() == 0'u32 and
@@ -415,6 +420,8 @@ proc jackProcessCallback*(nframes: JackNFrames; argument: pointer): cint {.
   discard context.processInFlight.fetchAddAcquire(1'u32)
 
   if context.processEnabled.loadAcquire() == 0'u32:
+    # A callback admitted after suspension must not invoke the replaceable
+    # process endpoint. Keep its current JACK outputs silent, then exit.
     discard bindOutputBuffers(context, nframes)
     discard zeroRtOutputs(addr context.engine, nframes)
     discard context.notifications.lateProcessCalls.fetchAddRelaxed(1'u64)

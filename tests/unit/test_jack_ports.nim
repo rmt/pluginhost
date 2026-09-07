@@ -1,7 +1,7 @@
 import std/[strutils, unittest]
 
 import pluginhost/domain/[errors, port_plan]
-import pluginhost/jack/[backend, ffi]
+import pluginhost/jack/[backend, ffi, ports]
 import pluginhost/rt/engine
 import ../fixtures/jack/fixture_api
 
@@ -56,6 +56,22 @@ proc singleAudioPlan(shortName, alias: string;
   )
 
 suite "transactional JACK port realization":
+  test "JACK layout equivalence ignores plan generations but detects visible changes":
+    check sameJackPortLayout(completePlan(1), completePlan(2))
+    check not sameJackPortLayout(
+      completePlan(),
+      newPortPlan(portPlanVersion(1), @[], @[
+        AudioChannelPlan(direction: pdInput, shortName: "audio_in_1",
+          alias: "Changed Input"),
+        AudioChannelPlan(direction: pdOutput, shortName: "audio_out_1",
+          alias: "Main Output"),
+      ], @[
+        NotePortPlan(direction: pdInput, name: "Note Input",
+          shortName: "midi_in_1"),
+        NotePortPlan(direction: pdOutput, name: "Note Output",
+          shortName: "midi_out_1"),
+      ]))
+
   test "audio and note plans preserve names types directions and aliases":
     var openedControls = openFakeJackControls()
     require openedControls.isOk

@@ -6,9 +6,9 @@
 
 import ../clap/[audio_process, event_bridge, ffi, gui_client, host_bridge, instance, loader,
                 main_thread_services, parameter_transport]
-import ../domain/[errors, plugin_catalog, result]
+import ../domain/[errors, plugin_catalog, port_plan, result]
 import ../gui/plugin_client
-import ../jack/backend
+import ../jack/[backend, ports]
 
 type
   InternalAudioSliceState* = enum
@@ -22,9 +22,9 @@ type
     instance: ClapInstance
     process: ClapAudioProcess
     backend: JackBackend
+    portPlan: PortPlan
     stateValue: InternalAudioSliceState
     reconnectionReport: JackReconnectionReport
-
   PluginLogSeverity* = enum
     plsDebug
     plsInfo
@@ -78,6 +78,7 @@ proc `=sink`*(destination: var InternalAudioSlice;
   `=sink`(destination.instance, source.instance)
   `=sink`(destination.process, source.process)
   `=sink`(destination.backend, source.backend)
+  `=sink`(destination.portPlan, source.portPlan)
   destination.stateValue = source.stateValue
   `=sink`(destination.reconnectionReport, source.reconnectionReport)
 
@@ -267,7 +268,7 @@ proc openInternalAudioSlice*(module: sink ClapModule;
   if not planResult.isOk:
     return failure[InternalAudioSlice](slice.cleanupConstructionFailure(
       move(planResult.error)))
-  let plan = move(planResult.value)
+  var plan = move(planResult.value)
 
   var openedBackend = openJackBackend(backendConfig)
   if not openedBackend.isOk:
@@ -288,6 +289,7 @@ proc openInternalAudioSlice*(module: sink ClapModule;
       move(configured.error)))
 
   slice.stateValue = iassReady
+  slice.portPlan = move(plan)
   success(move(slice))
 
 proc refreshRuntimeConfiguration*(slice: var InternalAudioSlice): Result[Unit]
@@ -388,9 +390,16 @@ proc restart*(slice: var InternalAudioSlice;
     ))
   let wasActive = slice.stateValue == iassActive
   if wasActive:
-    var stopped = slice.stop()
+    var suspended = slice.backend.suspendProcess()
+    if not suspended.isOk:
+      return suspended
+    var stopped = slice.instance.stopProcessing(slice.backend.audioRoleGuard())
     if not stopped.isOk:
       return stopped
+    var deactivated = slice.instance.deactivate()
+    if not deactivated.isOk:
+      return deactivated
+    slice.stateValue = iassReady
 
   let deferredRequests = slice.instance.takeRequests()
   if (deferredRequests and ClapRequestFlush) != 0'u32:
@@ -410,22 +419,42 @@ proc restart*(slice: var InternalAudioSlice;
     var parameters = slice.instance.rescanParameters(ClapParamRescanAll)
     if not parameters.isOk:
       return parameters
-  var connections = slice.backend.snapshotConnections()
-  if not connections.isOk:
-    return failure[Unit](move(connections.error))
-  slice.reconnectionReport = JackReconnectionReport()
   # Rescan notifications produced during deactivate belong to this rebuild.
   discard slice.instance.takeAudioPortsRescan()
   discard slice.instance.takeNotePortsRescan()
   var planResult = slice.instance.inspectPortPlan()
   if not planResult.isOk:
     return failure[Unit](move(planResult.error))
-  let plan = move(planResult.value)
+  var plan = move(planResult.value)
   var created = slice.instance.newAudioProcess(
     plan, slice.backend.bufferSize, slice.backend.audioRoleGuard())
   if not created.isOk:
     return failure[Unit](move(created.error))
   var replacement = move(created.value)
+  if sameJackPortLayout(slice.portPlan, plan):
+    var updated = slice.backend.updateProcessEndpoint(replacement.endpoint)
+    if not updated.isOk:
+      discard replacement.close()
+      return updated
+    var previous = move(slice.process)
+    var previousClosed = previous.close()
+    slice.process = move(replacement)
+    slice.portPlan = move(plan)
+    if not previousClosed.isOk:
+      return previousClosed
+    if wasActive:
+      return slice.start()
+    return success()
+  var connections = slice.backend.snapshotConnections()
+  if not connections.isOk:
+    discard replacement.close()
+    return failure[Unit](move(connections.error))
+  if wasActive:
+    var jackDeactivated = slice.backend.deactivate()
+    if not jackDeactivated.isOk:
+      discard replacement.close()
+      return jackDeactivated
+  slice.reconnectionReport = JackReconnectionReport()
   var previous = move(slice.process)
   var rebuilt = slice.backend.reconfigure(plan, replacement.endpoint)
   if not rebuilt.isOk:
@@ -445,6 +474,7 @@ proc restart*(slice: var InternalAudioSlice;
     slice.process = move(replacement)
     return previousClosed
   slice.process = move(replacement)
+  slice.portPlan = move(plan)
   slice.reconnectionReport = move(restored.value)
   if wasActive:
     return slice.start()

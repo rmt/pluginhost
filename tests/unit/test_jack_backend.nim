@@ -1,9 +1,23 @@
-import std/[options, strutils, unittest]
+import std/[options, os, strutils, unittest]
 
 import pluginhost/domain/[errors, port_plan]
 import pluginhost/jack/[backend, ffi]
-import pluginhost/rt/engine
+import pluginhost/rt/[atomic_pod, engine]
 import ../fixtures/jack/fixture_api
+
+type
+  SuspendThreadAttempt = object
+    backend: ptr JackBackend
+    started: RtAtomicU32
+    succeeded: bool
+    errorKind: HostErrorKind
+
+proc suspendBackendOnThread(attempt: ptr SuspendThreadAttempt) {.thread.} =
+  attempt.started.storeRelease(1'u32)
+  let suspended = attempt.backend[].suspendProcess()
+  attempt.succeeded = suspended.isOk
+  if not suspended.isOk:
+    attempt.errorKind = suspended.error.kind
 
 proc oneInOneOutPlan(version = 1'u64): PortPlan =
   newPortPlan(
@@ -280,7 +294,7 @@ suite "checked JACK backend lifecycle and callbacks":
     check quiesced.lateProcessCalls == 1
     check backend.deactivate().isOk
 
-  test "deactivation waits for an in-flight process callback to quiesce":
+  test "suspension waits for an in-flight process callback to quiesce":
     var openedControls = openFakeJackControls()
     require openedControls.isOk
     var controls = move(openedControls.value)
@@ -296,12 +310,27 @@ suite "checked JACK backend lifecycle and callbacks":
     require backend.activate().isOk
     require controls.beginBlockedProcess(64) == 0
 
-    let stopped = backend.deactivate()
+    var attempt = SuspendThreadAttempt(backend: addr backend)
+    var worker: Thread[ptr SuspendThreadAttempt]
+    createThread(worker, suspendBackendOnThread, addr attempt)
+    for ignored in 0 ..< 100:
+      discard ignored
+      if attempt.started.loadAcquire() != 0'u32:
+        break
+      sleep(1)
+    check attempt.started.loadAcquire() != 0'u32
+    for ignored in 0 ..< 100:
+      discard ignored
+      if not backend.processCallbacksEnabled:
+        break
+      sleep(1)
+    check not backend.processCallbacksEnabled
 
-    check stopped.isOk
-    check backend.state == jbsConfigured
-    check backend.notifications().processCycles == 1
-    check controls.isActive() == 0
+    check controls.releaseBlockedProcess() == 0
+    joinThread(worker)
+    check attempt.succeeded
+    check backend.state == jbsActive
+    require backend.activate().isOk
 
   test "activation and deactivation failures are typed and cleanup continues":
     var openedControls = openFakeJackControls()

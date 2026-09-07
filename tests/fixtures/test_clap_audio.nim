@@ -388,9 +388,9 @@ suite "internal CLAP float32 audio endpoint":
     check controls.audioSample(1, 255) == 2_255.0
     check fixture.contractFailures() == 0
 
-  test "port rebuild restores compatible connections and reports external losses":
+  test "port rebuild restores compatible connections":
     var controls = openControls()
-    var opened = openOwnedSlice("audio_tone")
+    var opened = openOwnedSlice("audio_port_rescan")
     var slice = move(opened.slice)
     var observer = move(opened.observer)
     defer:
@@ -398,8 +398,9 @@ suite "internal CLAP float32 audio endpoint":
       doAssert observer.close().isOk
       doAssert controls.close().isOk
     require slice.start().isOk
-    controls.setPortConnection(0, "external:capture-left")
-    controls.setPortConnection(1, "external:capture-right")
+    opened.fixture.triggerPortRestart()
+    controls.setPortConnection(2, "external:capture-left")
+    controls.setPortConnection(3, "external:capture-right")
     require slice.restart().isOk
     let restored = slice.takeReconnectionReport()
     check restored.restored == 2
@@ -407,12 +408,27 @@ suite "internal CLAP float32 audio endpoint":
     check controls.connectCount() == 2
     check ($controls.lastConnectSource()).startsWith("fixture-client:")
     check $controls.lastConnectDestination() == "external:capture-right"
+    check slice.state == iassActive
+
+  test "structural rebuild reports failed compatible reconnections":
+    var controls = openControls()
+    var opened = openOwnedSlice("audio_port_rescan")
+    var slice = move(opened.slice)
+    var observer = move(opened.observer)
+    defer:
+      doAssert slice.close().isOk
+      doAssert observer.close().isOk
+      doAssert controls.close().isOk
+    require slice.start().isOk
+    opened.fixture.triggerPortRestart()
+    controls.setPortConnection(2, "external:capture-left")
+    controls.setPortConnection(3, "external:capture-right")
     controls.setConnectStatus(-1)
     require slice.restart().isOk
-    let lost = slice.takeReconnectionReport()
-    check lost.restored == 0
-    check lost.lost.len == 2
-    check controls.connectCount() == 4
+    let report = slice.takeReconnectionReport()
+    check report.restored == 0
+    check report.lost.len == 2
+    check controls.connectCount() == 2
     check slice.state == iassActive
 
   test "CLAP state loads and saves through bounded stream transactions":
@@ -623,12 +639,16 @@ suite "internal CLAP float32 audio endpoint":
       doAssert controls.close().isOk
     require session.attachInternalAudioSlice(slice).isOk
     require session.startInternalAudio().isOk
+    let unregistersBefore = controls.unregisterCount()
+    let connectsBefore = controls.connectCount()
     var config = defaultRunConfig()
     for ignored in 0 ..< 4:
       discard ignored
       fixture.triggerRestart()
       require session.serviceInternalControlOnce(config, stderr).isOk
     check fixture.activateCalls() == 5
+    check controls.unregisterCount() == unregistersBefore
+    check controls.connectCount() == connectsBefore
     fixture.triggerRestart()
     let limited = session.serviceInternalControlOnce(config, stderr)
     check not limited.isOk

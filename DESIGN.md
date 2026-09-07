@@ -576,14 +576,19 @@ Every step registers its acquired resource with the session's explicit cleanup p
 ### 10.2 Restart or structural port rescan
 
 1. Coalesce restart and rescan flags on the main thread.
-2. Deactivate JACK and wait until process callbacks are quiescent.
+2. Suspend host JACK processing and wait until process callbacks are quiescent;
+   keep the JACK client active while the new CLAP port plan is inspected.
 3. Under `AudioRoleGuard`, call `stop_processing()` if needed.
 4. Deactivate the CLAP plugin.
 5. Apply rescans and build a new immutable `PortPlan`.
-6. Rebuild affected JACK ports; optionally reconnect compatible saved connections.
+6. If the JACK-visible layout is unchanged, replace only the real-time process
+   endpoint and preserve every JACK port and external connection. If the layout
+   changed, snapshot connections, deactivate JACK, rebuild affected ports, and
+   optionally reconnect exact compatible saved connections.
 7. Replace the inactive `RtPortMap` and event workspace.
 8. Reactivate CLAP and start processing under the role guard.
-9. Reactivate JACK.
+9. Resume JACK processing; reactivate the JACK client only after a structural
+   rebuild deactivated it.
 10. Update latency and report connection losses outside the real-time path.
 
 Requests arriving during restart remain set and are handled in a subsequent coalesced pass. A restart has a bounded retry/coalescing policy to prevent a misbehaving plugin from creating a tight restart loop.

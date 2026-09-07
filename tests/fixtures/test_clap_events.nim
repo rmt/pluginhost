@@ -113,6 +113,32 @@ suite "fixed-capacity JACK and CLAP event bridge":
     check controls.midiEventCount(2) == 0
     check controls.midiEventCount(3) == 0
 
+  test "unchanged restart preserves connected JACK MIDI ports":
+    var controls = openControls()
+    var opened = openEventSlice("events_raw")
+    var slice = move(opened.slice)
+    var observer = move(opened.observer)
+    let fixture = opened.fixture
+    defer:
+      doAssert slice.close().isOk
+      doAssert observer.close().isOk
+      doAssert controls.close().isOk
+
+    require slice.start().isOk
+    controls.setPortConnection(0, "external:midi-source")
+    let unregisters = controls.unregisterCount()
+    let connects = controls.connectCount()
+    require slice.restart().isOk
+    check controls.unregisterCount() == unregisters
+    check controls.connectCount() == connects
+    check slice.takeReconnectionReport().lost.len == 0
+    check slice.state == iassActive
+    check controls.addMidi(0, 7, [0x90'u8, 60'u8, 100'u8]) == 0
+    check controls.invokeProcess(64) == 0
+    check fixture.observedCount() == 1
+    check fixture.port(0) == 0
+    check controls.midiEventCount(2) == 1
+
   test "CLAP-only ports translate note velocity-zero and polyphonic pressure":
     var controls = openControls()
     var opened = openEventSlice("events_clap")

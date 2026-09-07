@@ -3,7 +3,7 @@
 ## One backend owns one JackApi, one JACK client, all realized ports, and one
 ## stable callback context. Public plugin execution does not use this backend yet.
 
-import std/[options, strutils]
+import std/[options, os, strutils]
 
 import ../domain/[errors, port_plan, result]
 import ../rt/[engine, role_guard]
@@ -12,6 +12,8 @@ import ./[api, callbacks, ffi, ports]
 
 const
   RuntimeConfigurationReadAttempts = 8
+  ProcessQuiescenceWaitAttempts = 1_000
+  ProcessQuiescenceWaitMilliseconds = 1
   MaxConnectionsPerPortSnapshot = 1_024
 
 type
@@ -152,16 +154,26 @@ proc audioRoleGuard*(backend: JackBackend): ptr AudioRoleGuard {.inline.} =
 proc configurationChangePending*(backend: JackBackend): bool {.inline.} =
   backend.callbackContext.configurationChangePending()
 
+proc processCallbacksEnabled*(backend: JackBackend): bool {.inline.} =
+  backend.callbackContext.processCallbacksEnabled()
+
 proc realizedPortCount*(backend: JackBackend): int {.inline.} =
   backend.portOwner.registeredPortCount
 
 proc snapshotConnections*(backend: JackBackend):
     Result[seq[JackConnectionCandidate]] =
-  if backend.stateValue != jbsConfigured or backend.client == nil:
+  if backend.stateValue notin {jbsConfigured, jbsActive} or backend.client == nil:
     return failure[seq[JackConnectionCandidate]](backendError(
       hekJackPortRegistration,
-      "JACK connections can only be captured from an inactive configured backend",
+      "JACK connections can only be captured from a configured backend",
       backend, "state=" & $backend.stateValue))
+  if backend.stateValue == jbsActive and
+      (backend.callbackContext.processCallbacksEnabled or
+       not backend.callbackContext.processCallbacksQuiescent()):
+    return failure[seq[JackConnectionCandidate]](backendError(
+      hekJackQuiescence,
+      "JACK connections require suspended process callbacks",
+      backend))
   var candidates: seq[JackConnectionCandidate]
   for owned in backend.portOwner.ownedPorts:
     let ownName = copiedJackName(
@@ -386,6 +398,19 @@ proc registerCallbacks(backend: var JackBackend): Result[Unit] =
   success()
 
 proc activate*(backend: var JackBackend): Result[Unit] =
+  if backend.stateValue == jbsActive:
+    if backend.callbackContext.processCallbacksEnabled:
+      return failure[Unit](backendError(
+        hekJackActivation,
+        "JACK backend is already processing",
+        backend))
+    if backend.callbackContext.configurationChangePending():
+      return failure[Unit](backendError(
+        hekJackActivation,
+        "JACK activation is blocked by a pending runtime configuration change",
+        backend))
+    backend.callbackContext.enableProcessCallbacks()
+    return success()
   if backend.stateValue != jbsConfigured:
     return failure[Unit](backendError(
       hekJackActivation,
@@ -417,6 +442,25 @@ proc activate*(backend: var JackBackend): Result[Unit] =
       "status=" & $status,
     ))
   backend.stateValue = jbsActive
+  success()
+
+proc waitForProcessCallbacks(backend: var JackBackend): bool =
+  for ignored in 0 ..< ProcessQuiescenceWaitAttempts:
+    discard ignored
+    if backend.callbackContext.processCallbacksQuiescent():
+      return true
+    sleep(ProcessQuiescenceWaitMilliseconds)
+  backend.callbackContext.processCallbacksQuiescent()
+
+proc suspendProcess*(backend: var JackBackend): Result[Unit] =
+  if backend.stateValue != jbsActive:
+    return success()
+  backend.callbackContext.disableProcessCallbacks()
+  if not backend.waitForProcessCallbacks():
+    return failure[Unit](backendError(
+      hekJackQuiescence,
+      "JACK process callback did not quiesce after suspension",
+      backend))
   success()
 
 proc serverShutdownObserved(backend: JackBackend): bool {.inline.} =
@@ -800,10 +844,13 @@ proc pluginLatency*(backend: JackBackend): uint32 =
   backend.callbackContext.pluginLatency()
 
 proc setPluginLatency*(backend: var JackBackend; frames: uint32): Result[Unit] =
-  if backend.stateValue != jbsConfigured or backend.callbackContext == nil:
+  if backend.stateValue notin {jbsConfigured, jbsActive} or
+      backend.callbackContext == nil or
+      (backend.stateValue == jbsActive and
+       backend.callbackContext.processCallbacksEnabled):
     return failure[Unit](backendError(
       hekJackLatency,
-      "JACK plugin latency can only be set before backend activation",
+      "JACK plugin latency requires a configured or suspended backend",
       backend,
       "frames=" & $frames & "; state=" & $backend.stateValue,
     ))
@@ -829,17 +876,18 @@ proc recomputeLatencies*(backend: var JackBackend): Result[Unit] =
 
 proc updateProcessEndpoint*(backend: var JackBackend;
                              endpoint: RtProcessEndpoint): Result[Unit] =
-  if backend.stateValue != jbsConfigured or backend.callbackContext == nil:
+  if backend.stateValue notin {jbsConfigured, jbsActive} or
+      backend.callbackContext == nil:
     return failure[Unit](backendError(
       hekJackActivation,
-      "JACK process endpoint can only be updated while configured",
+      "JACK process endpoint can only be updated by a configured backend",
       backend,
       "state=" & $backend.stateValue,
     ))
   if not backend.callbackContext.updateProcessEndpoint(endpoint):
     return failure[Unit](backendError(
       hekJackQuiescence,
-      "could not update the JACK process endpoint while inactive",
+      "could not update the JACK process endpoint while callbacks were suspended",
       backend,
     ))
   success()
@@ -847,20 +895,25 @@ proc updateProcessEndpoint*(backend: var JackBackend;
 proc refreshRuntimeConfiguration*(backend: var JackBackend):
     Result[JackRuntimeConfiguration] =
   if backend.client == nil or backend.callbackContext == nil or
-      backend.stateValue == jbsClosed or backend.stateValue == jbsActive:
+      backend.stateValue == jbsClosed or
+      (backend.stateValue == jbsActive and
+       backend.callbackContext.processCallbacksEnabled):
     return failure[JackRuntimeConfiguration](backendError(
       hekJackActivation,
-      "JACK runtime configuration can only be refreshed while inactive",
+      "JACK runtime configuration requires suspended process callbacks",
       backend,
       "state=" & $backend.stateValue,
     ))
   backend.readStableRuntimeConfiguration()
 
 proc acknowledgeConfigurationChange*(backend: var JackBackend): Result[Unit] =
-  if backend.stateValue != jbsConfigured or backend.callbackContext == nil:
+  if backend.stateValue notin {jbsConfigured, jbsActive} or
+      backend.callbackContext == nil or
+      (backend.stateValue == jbsActive and
+       backend.callbackContext.processCallbacksEnabled):
     return failure[Unit](backendError(
       hekJackActivation,
-      "JACK configuration changes can only be acknowledged while configured",
+      "JACK configuration changes require suspended process callbacks",
       backend,
       "state=" & $backend.stateValue,
     ))

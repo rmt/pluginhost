@@ -562,6 +562,10 @@ pluginhost_fake_jack_begin_blocked_process(uint32_t frames) {
    (void)pthread_mutex_unlock(&process_gate_mutex);
    return 0;
 }
+PLUGINHOST_FIXTURE_EXPORT int
+pluginhost_fake_jack_release_blocked_process(void) {
+   return finish_blocked_process();
+}
 
 PLUGINHOST_FIXTURE_EXPORT int pluginhost_fake_jack_invoke_process_on_thread(
    uint32_t frames, int force, int *callback_result) {

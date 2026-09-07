@@ -39,6 +39,26 @@ type
   JackPortOwner* = object
     registered: seq[JackOwnedPort]
 
+proc sameJackPortLayout*(left, right: PortPlan): bool =
+  ## True when replacing the CLAP process endpoint need not replace JACK ports.
+  if left.audioChannelCount != right.audioChannelCount or
+      left.notePortCount != right.notePortCount:
+    return false
+  for index in 0 ..< left.audioChannelCount:
+    let a = left.audioChannel(index)
+    let b = right.audioChannel(index)
+    if a.groupId != b.groupId or a.channelIndex != b.channelIndex or
+        a.direction != b.direction or a.shortName != b.shortName or
+        a.alias != b.alias:
+      return false
+  for index in 0 ..< left.notePortCount:
+    let a = left.notePort(index)
+    let b = right.notePort(index)
+    if a.id != b.id or a.direction != b.direction or a.name != b.name or
+        a.shortName != b.shortName:
+      return false
+  true
+
 static:
   doAssert supportsCopyMem(RtPortMap)
 
