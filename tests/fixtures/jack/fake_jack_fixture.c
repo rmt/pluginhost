@@ -156,6 +156,13 @@ PLUGINHOST_FIXTURE_EXPORT void pluginhost_fake_jack_reset(void) {
              "fixture-client");
 }
 
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((constructor))
+static void pluginhost_fake_jack_initialize(void) {
+   pluginhost_fake_jack_reset();
+}
+#endif
+
 PLUGINHOST_FIXTURE_EXPORT void
 pluginhost_fake_jack_set_open_failure(int status) {
    state.open_failure_status = (jack_status_t)status;

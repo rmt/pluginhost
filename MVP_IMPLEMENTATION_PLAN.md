@@ -3,7 +3,7 @@
 **Plan version:** 1.0.0  
 **Target product release:** `pluginhost` 0.1.0  
 **Initial development version:** 0.0.1-dev  
-**Status:** Increments 0–10A approved; review units 10B and 10C are implemented in the current review worktree and pending review
+**Status:** Increments 0–10 approved; review units 11A, 11B, and 11C are planned and not started
 **Companion documents:** [`REQUIREMENTS.md`](REQUIREMENTS.md), [`DESIGN.md`](DESIGN.md)
 
 ## 1. Purpose
@@ -113,7 +113,7 @@ An increment may be split into smaller review units if its diff becomes difficul
 
 ### 5.1 Stubs and incomplete capabilities
 
-- Stubs return a typed `NotImplemented` error or are available only to tests.
+- Unsupported capabilities return an explicit typed failure; test-only seams may model unavailable operations.
 - A stub must never return success for work it did not perform.
 - The host must not advertise a CLAP extension until its required callback contract is implemented and tested.
 - Unsupported CLI paths fail clearly; they do not silently do nothing.
@@ -677,7 +677,7 @@ The 10A review gate is complete; unit 10B is a separate review unit.
 
 
 ### Review unit 10B — CLAP GUI integration
-**Current review unit status:** Implemented in the current worktree; pending human review gate 10B.
+**Review unit status:** Approved after the 10B review gate.
 
 - Add `GuiController` state machine.
 - Negotiate embedded X11 first, then supported floating fallback.
@@ -717,7 +717,7 @@ Run the fixture and at least two independent real plugin GUIs under X11/XWayland
 Review X11 ownership/error handling, CLAP GUI call order, callback reentrancy, headless policy, timer/FD cleanup, and evidence that audio is unaffected.
 
 ### Review unit 10C — StatusNotifierItem tray icon
-**Current review unit status:** Implemented in the current worktree; pending human review gate 10C.
+**Review unit status:** Approved after the 10C review gate.
 
 - Replace the legacy XEmbed tray path with a backend-neutral optional
   `TrayIconBackend` and main-thread `TrayController` backed by a separately
@@ -749,40 +749,224 @@ proof that tray activation remains a main-thread GUI operation.
 ## 18. Increment 11 — Feature-complete hardening and release candidate
 
 **Planned version:** 0.1.0-rc.1
+**Status:** 11A in progress; 11B and 11C remain planned for sequential handoff
 
 ### Goal
 
-Stop adding features. Close requirement/test gaps, validate independent plugins and JACK implementations, and prepare a release candidate.
+Stop adding product features. Close requirement and invariant gaps, prove
+failure and resource behavior, exercise independent plugins and JACK
+implementations, and prepare a reviewable `0.1.0-rc.1`.
 
-### Implementation and verification
+Increment 11 is hardening and release preparation only. A compatibility defect
+may change production code when a focused reproduction demonstrates it. New
+capabilities, new CLI options, broad refactors, and silent requirement changes
+are out of scope.
 
-- Audit every MUST statement in `REQUIREMENTS.md` and every invariant checklist item in `DESIGN.md`.
-- Complete stable exit statuses and diagnostics.
-- Run failure injection at every lifecycle acquisition point.
-- Add malformed plugin/event/state/path fuzz/property tests.
-- Run generated-C sanitizers and leak/resource checks.
-- Run sustained RT stress with allocation/lock/I/O instrumentation.
-- Measure and document host overhead on a reference system.
-- Test JACK1/JACK2 and PipeWire-JACK according to available CI/manual environments.
-- Smoke-test at least three independently implemented CLAP plugins, including an instrument and effect.
-- Repeat startup/restart/show/hide/save/shutdown loops.
-- Finish README/manual, examples, troubleshooting, dependencies, licenses, security warning, and known Wayland limitations.
-- Record all deferred SHOULD requirements explicitly.
-- Remove obsolete stubs, debug-only public options, and dead code.
-- Freeze the 0.1.0 CLI unless the human approves a breaking correction.
+### Handoff contract
 
-### Required acceptance evidence
+The review units run in order:
 
-- Full automated command output.
-- Manual acceptance checklist corresponding to all scenarios in requirements section 17.2.
-- Supported environment matrix.
-- Performance/RT instrumentation report.
-- Known issues and deferred requirements.
-- Release artifact build and version output.
+1. 11A freezes the public diagnostic/status contract and records the MUST and
+   invariant audit.
+2. 11B consumes 11A's contract, adds hostile-input/failure/resource evidence,
+   and wires deterministic sanitizer and hardening commands.
+3. 11C consumes both reports, runs the public acceptance and compatibility
+   matrix, and assembles the release-candidate documentation and artifact.
+
+Each handoff must include exact commands, exit status, test counts, changed
+files, generated/transient files, unresolved risks, and the next unit's
+prerequisites. Agents must not commit, change branches, update the progress
+table, or start the next review unit. Unit-owned files are exclusive while a
+unit is active; later units may consume prior reports but must not rewrite
+their evidence without identifying the correction.
+
+Cross-unit constraints:
+
+- No new third-party dependency without owner approval and an ADR.
+- No new public CLI option or undocumented behavior.
+- The shared ARC/thread/panic/signal profile remains unchanged.
+- JACK callbacks and CLAP process-reachable callbacks retain the existing
+  generated-C audit and live instrumentation requirements.
+- Sanitizers and resource checkers must distinguish host-owned failures from
+  allocations performed by external JACK, X11, D-Bus, or plugin code.
+- Version, license, and release-artifact changes occur only in 11C after 11A
+  and 11B evidence is complete.
+
+### Review unit 11A — Public contract and requirement closure
+
+**Status:** In progress; review gate pending.
+
+**Owner boundary:**
+
+- Production changes in `src/pluginhost/app/host_session.nim`,
+  `src/pluginhost/domain/errors.nim`, and
+  `src/pluginhost/support/diagnostics.nim`.
+- Contract tests in `tests/unit/test_errors.nim`,
+  `tests/unit/test_event_diagnostics.nim`, `tests/unit/test_main.nim`, and
+  any directly affected unit test.
+- Direct contract consumers required by this unit are
+  `src/pluginhost/app/commands.nim` and the existing
+  `tests/fixtures/test_clap_audio.nim` session fixture.
+- Test-only process-status support may initialize the existing fake JACK
+  fixture in `tests/fixtures/jack/fake_jack_fixture.c`; it must not add a
+  production seam or a new fixture failure mode.
+
+- Audit report: `docs/release/11A-contract-audit.md`.
+
+**Change:**
+
+- Audit every MUST in `REQUIREMENTS.md` and every checklist invariant in
+  `DESIGN.md`; classify each as verified, intentionally deferred SHOULD, or
+  defect requiring a focused fix.
+- Complete the documented exit-status mapping for CLI, CLAP, JACK, required
+  GUI, state, platform, and internal failures. Preserve clean JSON stdout.
+- Add deterministic monotonic rate limiting for repeated control-plane
+  warnings. The first warning is immediate; suppressed occurrences are
+  counted; an aggregate includes the suppressed count at the next permitted
+  report and during orderly shutdown. Quiet mode remains quiet except for
+  errors.
+- Verify diagnostics identify subsystem and relevant path/plugin ID without
+  allowing plugin text to inject control characters.
+- Remove obsolete production `NotImplemented` paths, debug-only public
+  behavior, and dead compatibility code only when references and tests prove
+  they are unused.
+
+**Acceptance:**
+
+- Unit tests prove first-warning, suppression, recovery, quiet-mode, and final
+  aggregate behavior using a deterministic clock; no warning path allocates or
+  blocks JACK callbacks.
+- Unit and process tests prove every documented exit status and stderr/stdout
+  contract.
+- The audit report names every unresolved MUST, every deferred SHOULD, and
+  every design invariant with evidence or a precise blocker.
+- No sanitizer, third-party compatibility, license, or release-version work
+  is included in this unit.
+
+**Handoff:** 11B receives the approved status/diagnostic contract and the
+machine-readable list of remaining hardening cases from
+`docs/release/11A-contract-audit.md`.
+
+### Review unit 11B — Fault injection, hostile inputs, and sanitizer evidence
+
+**Status:** Planned; depends on the 11A handoff.
+
+**Owner boundary:**
+
+- New focused hardening tests under `tests/hardening/`.
+- Controlled fixture failure modes and APIs under `tests/fixtures/` only when
+  an acquisition or callback boundary lacks deterministic coverage.
+- Generated-C audit/sanitizer scripts under `tests/rt/`.
+- Verification-task wiring in `pluginhost.nimble`; do not alter production
+  behavior merely to make a checker pass.
+- Hardening report: `docs/release/11B-hardening-report.md`.
+
+**Change:**
+
+- Build a failure-injection matrix for every acquired CLAP entry/module,
+  plugin, JACK API/client/port/callback, reactor FD/timer, X11 window,
+  D-Bus tray object, state transaction, and PID-file resource.
+- Add bounded malformed-input/property cases for descriptor and port metadata,
+  UTF-8/path traversal and symlink cycles, MIDI/event headers/sizes/timestamps,
+  state short/error I/O, and stale reactor/service tokens. Fuzz only
+  host-owned values or controlled fixture responses; never dereference
+  arbitrary fuzz bytes as live CLAP pointers.
+- Add deterministic repeated load/start/restart/show/hide/save/shutdown/unload
+  loops with fixture counters, `/proc/self/fd`, mapped-DSO, JACK-port, GUI,
+  timer, FD, and temporary-file checks.
+- Add `nimble testHardening` and `nimble sanitize`. Sanitizer coverage must
+  include generated C reachable from production callbacks under the shared
+  profile and retain the negative callback canary.
+- Run ASan/UBSan and Valgrind/resource checks where they can distinguish
+  host-owned leaks from external library/plugin allocations. Record tool
+  versions and any narrowly justified suppressions.
+
+**Acceptance:**
+
+- Every failure-injection row has an observable typed failure, complete
+  independent cleanup, and an idempotent repeated-close result.
+- Malformed and boundary cases reject safely without memory corruption,
+  unbounded work, callback-thread logging, or false success.
+- `nimble testHardening`, `nimble sanitize`, `nimble testRt`, and the focused
+  fixture/ABI tasks pass; the negative canary is rejected.
+- The report lists command output, tool versions, seeds/cases, resource
+  observations, suppressions, and any environment-dependent gaps.
+
+**Handoff:** 11C receives the hardening report, sanitizer/resource artifacts,
+  and a list of acceptance scenarios that still require live or manual
+  evidence.
+
+### Review unit 11C — Public acceptance, compatibility, and release candidate
+
+**Status:** Planned; depends on approved 11A and 11B reports.
+
+**Owner boundary:**
+
+- Public-process and compatibility scenarios under `tests/integration/`.
+- Release documentation in `README.md` and `docs/release/`.
+- Release artifact/version checks and any final verification-task wiring;
+  avoid editing 11A/11B implementation or evidence files except to record a
+  clearly identified correction.
+- No license file is added until the owner selects the project license.
+
+**Change and evidence:**
+
+- Execute every release acceptance scenario in REQUIREMENTS.md §17.2,
+  including synth, effect, multiple ports, MIDI timing, GUI/tray, headless,
+  GUI services, parameters, state, restart, JACK loss, error paths, real-time
+  instrumentation, and compatibility.
+- Run at least three independently implemented Linux CLAP plugins, including
+  an instrument and an effect. The local candidate set includes Surge XT,
+  Vital, and ZamComp; each run is process-isolated and records plugin path,
+  selected ID, JACK environment, GUI policy, state paths, and result.
+- Measure no-event host overhead at the fixed reference JACK quantum and
+  report cycles, frames, process CPU time, microseconds per cycle, CPU
+  percentage, xruns, and instrumentation counters. The measurement must not
+  claim plugin DSP time as host overhead.
+- Run PipeWire-JACK locally and document separate JACK1/JACK2 results or
+  explicit environment blockers; do not claim untested compatibility.
+- Complete README/manual coverage for commands, every option, signals, exit
+  statuses, environment variables, examples, troubleshooting, dependencies,
+  supported matrix, security, tray limitations, icon policy, and deferred
+  SHOULD requirements.
+- Build and inspect the `0.1.0-rc.1` artifact, verify version output and
+  architecture, check for forbidden eager platform dependencies, and record a
+  checksum. Update `VERSION`, Nimble metadata, fixtures, and tests together
+  only after all prior evidence passes.
+- Obtain an explicit project-license decision before claiming the source is
+  distributable; document CLAP, Nimble, and runtime dependency licenses.
+
+**Acceptance:**
+
+- The 14-scenario checklist has a concrete pass, fail, or documented
+  environment blocker for every scenario; blockers do not become passes.
+- Public process runs show clean stdout/stderr separation, expected exit
+  statuses, no leaked PID/temp/resource entries, and no prohibited callback
+  operations.
+- The compatibility matrix identifies plugin versions, IDs, backend/runtime
+  versions, display/session-bus conditions, and limitations.
+- The RC report contains full automated output references, manual recipe
+  results, supported-environment matrix, performance/RT report, known issues,
+  deferred SHOULD list, artifact path/checksum, and license status.
+
+### Required review package for Human review gate 11
+
+- `docs/release/11A-contract-audit.md`
+- `docs/release/11B-hardening-report.md`
+- `docs/release/11C-rc-report.md`
+- Complete automated command output and focused logs
+- Manual acceptance checklist for REQUIREMENTS.md §17.2
+- Compatibility/environment matrix
+- Performance and RT instrumentation report
+- Known issues and deferred SHOULD requirements
+- Release artifact, `--version` output, and checksum
 
 ### Human review gate 11
 
-Perform release-candidate code, test, behavior, dependency/license, documentation, and security review. Only defect fixes and approved requirement corrections follow this gate.
+Perform release-candidate code, test, behavior, dependency/license,
+documentation, and security review. Only defect fixes and owner-approved
+requirement corrections follow this gate. No MVP release version or tag is
+created here; those belong to Increment 12 after explicit acceptance.
 
 ## 19. Increment 12 — MVP release
 
@@ -822,8 +1006,8 @@ This table is updated only when work is reviewed.
 | 7 — Reactor/signals | Approved | Increment 7 review | Public headless run, epoll/signalfd reactor, orderly shutdown, main-thread callbacks, and atomic PID files accepted |
 | 8 — Host extensions/restart | Approved | Review units 8A and 8B | Main-thread timer/FD services, dirty notification, JACK latency, bounded parameter transport, restart/rescan, sleep/wake, and compatible reconnection/loss evidence accepted |
 | 9 — State | Approved | Increment 9 review | Bounded 64 KiB/64 MiB CLAP streams, pre-configuration load, clean-signal transactional save, rollback, and live evidence accepted |
-| 10 — GUI | In progress | Review units 10B and 10C pending | 10A Xlib window-host spike approved; 10B CLAP GUI negotiation/controller and 10C StatusNotifierItem D-Bus tray toggle/icon are implemented in the current review worktree with unit, ABI, fixture, and Xvfb/session-bus evidence |
-| 11 — Release candidate | Not started | — | — |
+| 10 — GUI | Approved | Review units 10A, 10B, and 10C | X11 window host, CLAP GUI controller, StatusNotifierItem D-Bus tray toggle/icon, unit/ABI/fixture, Xvfb, and session-bus evidence accepted |
+| 11 — Release candidate | Not started | Planned review units 11A, 11B, and 11C | Sequential hardening, failure-injection, sanitizer, acceptance, compatibility, documentation, and RC-artifact handoff plan |
 | 12 — MVP release | Not started | — | Target 0.1.0 |
 
 Allowed statuses: `Not started`, `In progress`, `Changes requested`, `Approved`, and `Deferred`.
@@ -869,4 +1053,4 @@ Each candidate requires requirements/design updates and, where architectural, an
 
 ## 23. First action after each review gate
 
-After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 9 and review unit 10A are approved. Review units 10B and 10C are implemented in the current review worktree and await review of the CLAP GUI/tray call order, callback transport, controller ownership, X11 window and D-Bus integration, icon policy, and focused/full verification evidence.
+After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 10 and review units 10A, 10B, and 10C are approved. The latest explicit baseline was `env PLUGINHOST_CLAP_SMOKE_PLUGIN=/usr/lib/clap/ZamComp.clap nimble all`: 258 passing cases, zero failures, 31.65 seconds, with ZamComp selected for the independent CLAP smoke. Increment 11 is not started; the next gate is review unit 11A. Native Wayland, JACK1/JACK2 validation where unavailable, aarch64 release support, richer compatible-port reconnection, and the project-license decision remain explicit constraints or owner decisions rather than silently accepted release claims.

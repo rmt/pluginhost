@@ -1,4 +1,4 @@
-import std/[options, os, strutils, unittest]
+import std/[options, os, osproc, streams, strutils, unittest]
 
 import pluginhost/app/audio_slice
 import pluginhost/app/[host_session, main_reactor, plugin_services, run_config]
@@ -11,6 +11,77 @@ import pluginhost/rt/role_guard
 import pluginhost/platform/linux/[dynlib, reactor as linux_reactor]
 import ./jack/fixture_api
 import ./clap/audio_fixture_api
+
+type
+  ProcessResult = object
+    output: string
+    errorOutput: string
+    exitCode: int
+
+const ProcessTimeoutMillis = 5_000
+
+proc restoreEnvironment(name, previous: string) =
+  if previous.len > 0:
+    putEnv(name, previous)
+  else:
+    delEnv(name)
+
+proc runHost(args: seq[string]; libraryDirectory = "";
+             clearDisplayEnvironment = false): ProcessResult =
+  let executable = getEnv("PLUGINHOST_TEST_BIN")
+  doAssert executable.len > 0,
+    "PLUGINHOST_TEST_BIN must identify the test executable"
+  doAssert fileExists(executable),
+    "test executable does not exist: " & executable
+
+  let previousLibraryPath = getEnv("LD_LIBRARY_PATH")
+  let previousDisplay = getEnv("DISPLAY")
+  let previousWaylandDisplay = getEnv("WAYLAND_DISPLAY")
+  if libraryDirectory.len > 0:
+    putEnv("LD_LIBRARY_PATH", libraryDirectory)
+  if clearDisplayEnvironment:
+    delEnv("DISPLAY")
+    delEnv("WAYLAND_DISPLAY")
+  defer:
+    restoreEnvironment("LD_LIBRARY_PATH", previousLibraryPath)
+    restoreEnvironment("DISPLAY", previousDisplay)
+    restoreEnvironment("WAYLAND_DISPLAY", previousWaylandDisplay)
+
+  let process = startProcess(executable, args = args, options = {})
+  result.exitCode = process.waitForExit(ProcessTimeoutMillis)
+  result.output = process.outputStream.readAll()
+  result.errorOutput = process.errorStream.readAll()
+  process.close()
+
+proc runHostWithLibrary(args: seq[string]; source: string;
+                        clearDisplayEnvironment = false): ProcessResult =
+  doAssert fileExists(source), "test library does not exist: " & source
+  let directory = getTempDir() / ("pluginhost-process-jack-" &
+    $getCurrentProcessId())
+  if dirExists(directory):
+    removeDir(directory)
+  createDir(directory)
+  let library = directory / "libjack.so.0"
+  copyFile(source, library)
+  defer:
+    if fileExists(library):
+      removeFile(library)
+    if dirExists(directory):
+      removeDir(directory)
+  runHost(args, directory, clearDisplayEnvironment)
+
+proc requireCleanProcessFailure(process: ProcessResult; expectedCode: int;
+                                subsystem, context: string) =
+  check process.exitCode == expectedCode
+  check process.output.len == 0
+  check process.errorOutput.contains(subsystem)
+  check process.errorOutput.contains(context)
+
+proc missingStatePath(): string =
+  result = getTempDir() / ("pluginhost-process-state-" &
+    $getCurrentProcessId() & ".missing")
+  if fileExists(result):
+    removeFile(result)
 
 proc fakeConfig(name = "audio-fixture"): JackBackendOpenConfig =
   initJackBackendOpenConfig(
@@ -140,6 +211,54 @@ proc openBackend(): JackBackend =
   var opened = openJackBackend(fakeConfig())
   require opened.isOk
   result = move(opened.value)
+
+suite "public process status contract":
+  test "platform startup failures use status one and clean streams":
+    let process = runHostWithLibrary(@[
+      "--no-gui",
+      "--pid-file", "/dev/null/pluginhost.pid",
+      audioFixturePath("audio_tone"),
+    ], jackFakeFixturePath())
+    requireCleanProcessFailure(process, 1, "platform error", "PID")
+
+  test "JACK startup failures use status four and clean streams":
+    let process = runHostWithLibrary(@[
+      "--no-gui",
+      audioFixturePath("audio_tone"),
+    ], audioFixturePath("audio_tone"))
+    requireCleanProcessFailure(process, 4, "JACK error", "libjack.so.0")
+
+  test "required GUI failures use status five without display access":
+    let process = runHostWithLibrary(@[
+      "--require-gui",
+      audioFixturePath("audio_tone"),
+    ], jackFakeFixturePath(), clearDisplayEnvironment = true)
+    requireCleanProcessFailure(
+      process, 5, "GUI error", "usable GUI")
+
+  test "missing and invalid state loads use status six and clean streams":
+    let missing = missingStatePath()
+    let missingProcess = runHost(@[
+      "--no-gui",
+      "--load-state", missing,
+      audioFixturePath("audio_state"),
+    ])
+    requireCleanProcessFailure(missingProcess, 6, "state error", missing)
+
+    let invalid = getTempDir() / ("pluginhost-process-state-dir-" &
+      $getCurrentProcessId())
+    if dirExists(invalid):
+      removeDir(invalid)
+    createDir(invalid)
+    defer:
+      if dirExists(invalid):
+        removeDir(invalid)
+    let invalidProcess = runHost(@[
+      "--no-gui",
+      "--load-state", invalid,
+      audioFixturePath("audio_state"),
+    ])
+    requireCleanProcessFailure(invalidProcess, 6, "state error", invalid)
 
 suite "internal CLAP float32 audio endpoint":
   test "construction failure closes every acquired owner":
@@ -280,7 +399,7 @@ suite "internal CLAP float32 audio endpoint":
     check serviced.error.kind == hekClapProcess
     check controls.audioSample(0, 0) == 0.0
 
-  test "control service reports output event rejection categories without double count":
+  test "control service rate-limits event warnings and flushes shutdown counts":
     var controls = openControls()
     var opened = openOwnedSlice("audio_tone")
     var slice = move(opened.slice)
@@ -293,18 +412,45 @@ suite "internal CLAP float32 audio endpoint":
     require session.attachInternalAudioSlice(slice).isOk
     require session.startInternalAudio().isOk
     check controls.invokeProcess(4) == 0
-    check controls.invokeProcess(4) == 0
     var config = defaultRunConfig()
     config.guiPolicy = gpDisabled
     let diagnosticPath = getTempDir() / "pluginhost-event-warning.log"
     var diagnostic = open(diagnosticPath, fmWrite)
     require session.serviceInternalControlOnce(config, diagnostic).isOk
+    check controls.invokeProcess(4) == 0
+    require session.serviceInternalControlOnce(config, diagnostic).isOk
+    require session.close(diagnostic).isOk
     diagnostic.close()
     let text = readFile(diagnosticPath)
     removeFile(diagnosticPath)
     check text.contains(
-      "audio event bridge dropped or rejected 2 events (output-invalid=2)")
-    check not text.contains("audio event bridge dropped or rejected 4 events")
+      "audio event bridge dropped or rejected 1 events")
+    check text.contains("suppressed=1 repeated audio event warning(s)")
+    check not text.contains("audio event bridge dropped or rejected 2 events")
+
+  test "quiet control service suppresses event warnings":
+    var controls = openControls()
+    var opened = openOwnedSlice("audio_tone")
+    var slice = move(opened.slice)
+    var observer = move(opened.observer)
+    var session = initHostSession()
+    defer:
+      doAssert session.close().isOk
+      doAssert observer.close().isOk
+      doAssert controls.close().isOk
+    require session.attachInternalAudioSlice(slice).isOk
+    require session.startInternalAudio().isOk
+    check controls.invokeProcess(4) == 0
+    var config = defaultRunConfig()
+    config.guiPolicy = gpDisabled
+    config.verbosity = vbQuiet
+    let diagnosticPath = getTempDir() / "pluginhost-event-warning-quiet.log"
+    var diagnostic = open(diagnosticPath, fmWrite)
+    require session.serviceInternalControlOnce(config, diagnostic).isOk
+    diagnostic.close()
+    let text = readFile(diagnosticPath)
+    removeFile(diagnosticPath)
+    check text.len == 0
 
   test "rejected session attachment retains caller ownership":
     var controls = openControls()

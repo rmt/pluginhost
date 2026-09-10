@@ -12,7 +12,6 @@ type
 
   HostErrorKind* = enum
     hekUsage
-    hekNotImplemented
     hekInvalidTransition
     hekInternal
     hekLibraryOpen
@@ -85,9 +84,6 @@ proc hostError*(subsystem: HostSubsystem; kind: HostErrorKind;
 proc usageError*(message: string; context = ""): HostError =
   hostError(hsCli, hekUsage, message, context)
 
-proc notImplementedError*(message: string; context = ""): HostError =
-  hostError(hsApplication, hekNotImplemented, message, context)
-
 proc transitionError*(message: string; context = ""): HostError =
   hostError(hsInternal, hekInvalidTransition, message, context)
 
@@ -116,7 +112,7 @@ proc exitCode*(error: HostError): int =
     ExitGui
   of hekState:
     ExitState
-  of hekNotImplemented, hekInvalidTransition, hekInternal, hekLibraryOpen,
+  of hekInvalidTransition, hekInternal, hekLibraryOpen,
       hekSymbolLookup, hekLibraryClose, hekJackLibraryOpen, hekJackSymbol,
       hekJackLibraryClose, hekJackClientOpen, hekJackClientClose,
       hekJackCallbackRegistration, hekJackPortName, hekJackPortRegistration,

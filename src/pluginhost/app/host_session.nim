@@ -1,4 +1,4 @@
-import std/options
+import std/[monotimes, options]
 
 import ./[audio_slice, main_reactor, plugin_services, run_config]
 import ../clap/[event_bridge, ffi, loader, main_thread_services]
@@ -8,7 +8,7 @@ import ../platform/x11/gui_adapter
 import ../domain/[errors, lifecycle, plugin_catalog, reactor, result]
 import ../jack/backend
 import ../platform/linux/[pid_file, process_name, reactor as linux_reactor, signals]
-import ../support/names
+import ../support/[diagnostics, names, utf8]
 
 const
   ControlServiceNanos = 16_000_000'i64
@@ -32,8 +32,7 @@ type
     signalToken: ReactorToken
     pidFile: PidFile
     pluginServices: PluginServiceRegistry
-    guiSignalWarnings: set[SignalIntent]
-    trayWarningShown: bool
+    warningLimiter: WarningLimiter
     lastXruns: uint64
     lastFreewheelChanges: uint64
     stateDirty: bool
@@ -41,7 +40,7 @@ type
     saveStatePath: Option[string]
 
 proc initHostSession*(): HostSession =
-  HostSession(state: ssNew)
+  HostSession(state: ssNew, warningLimiter: initWarningLimiter())
 
 proc hasDirtyState*(session: HostSession): bool {.inline.} =
   session.stateDirty
@@ -148,8 +147,23 @@ proc openRunSlice(config: RunConfig;
     if config.loadStatePath.isSome: config.loadStatePath.get() else: "",
     config.guiPolicy != gpDisabled)
 
-proc warning(errorOutput: File; message: string) =
-  errorOutput.write("pluginhost: warning: " & message & "\n")
+proc writeWarning(errorOutput: File; message: string) =
+  errorOutput.write("pluginhost: warning: " & escapeControlText(message) & "\n")
+
+proc emitWarning(session: var HostSession; kind: WarningKind;
+                 errorOutput: File; message: string) =
+  let emission = session.warningLimiter.reportWarning(
+    kind, getMonoTime().ticks, message)
+  if not emission.emitted:
+    return
+  var rendered = emission.message
+  if emission.suppressed > 0'u64:
+    rendered.add(" (suppressed=" & $emission.suppressed & ")")
+  errorOutput.writeWarning(rendered)
+
+proc flushWarnings(session: var HostSession; errorOutput: File) =
+  for emission in session.warningLimiter.flushWarnings():
+    errorOutput.writeWarning(emission.message)
 
 proc saturatingAdd(left, right: uint64): uint64 =
   if high(uint64) - left < right:
@@ -206,11 +220,13 @@ proc drainPluginLogs(session: var HostSession; config: RunConfig;
         message.severity in {plsError, plsFatal, plsHostMisbehaving,
                              plsPluginMisbehaving}:
       errorOutput.write("pluginhost: CLAP " & message.severity.pluginLogSeverity &
-        " [" & session.audioSlice.pluginId & "]: " & message.text & "\n")
+        " [" & escapeControlText(session.audioSlice.pluginId) & "]: " &
+        escapeControlText(message.text) & "\n")
     inc count
   let dropped = session.audioSlice.takeDroppedPluginLogs()
   if dropped > 0'u64 and config.verbosity != vbQuiet:
-    warning(errorOutput, "CLAP log queue dropped " & $dropped & " messages")
+    session.emitWarning(wkPluginLogDrops, errorOutput,
+      "CLAP log queue dropped " & $dropped & " messages")
 
 proc drainSignals(session: var HostSession; events: seq[ReactorEvent]):
     Result[SignalTurn] =
@@ -245,10 +261,10 @@ proc serviceGuiSignalActions(session: var HostSession; config: RunConfig;
       discard
     of siShowGui, siHideGui:
       let operation = if intent == siShowGui: "show" else: "hide"
+      let kind = if intent == siShowGui: wkGuiShow else: wkGuiHide
       if session.gui == nil:
-        if intent notin session.guiSignalWarnings:
-          session.guiSignalWarnings.incl(intent)
-          warning(errorOutput, "SIGUSR request to " & operation &
+        if config.verbosity != vbQuiet:
+          session.emitWarning(kind, errorOutput, "SIGUSR request to " & operation &
             " the GUI is unavailable while GUI hosting is disabled")
       else:
         var action = if intent == siShowGui: session.gui.show()
@@ -256,9 +272,9 @@ proc serviceGuiSignalActions(session: var HostSession; config: RunConfig;
         if not action.isOk:
           if config.requireGui:
             return failure[Unit](move(action.error))
-          if intent notin session.guiSignalWarnings:
-            session.guiSignalWarnings.incl(intent)
-            warning(errorOutput, "could not " & operation &
+          if config.verbosity != vbQuiet:
+            session.emitWarning(wkGuiFailure, errorOutput,
+              "could not " & operation &
               " the plugin GUI; continuing headless: " & action.error.message)
   success()
 
@@ -326,7 +342,8 @@ proc serviceAudioControl(session: var HostSession; config: RunConfig;
       return restarted
     let reconnection = session.audioSlice.takeReconnectionReport()
     if reconnection.lost.len > 0 and config.verbosity != vbQuiet:
-      warning(errorOutput, "JACK port rebuild could not restore " &
+      session.emitWarning(wkConnectionLoss, errorOutput,
+        "JACK port rebuild could not restore " &
         $reconnection.lost.len & " external connection(s)")
   else:
     session.consecutiveRestarts = 0'u32
@@ -345,22 +362,24 @@ proc serviceAudioControl(session: var HostSession; config: RunConfig;
   discard requests.flush
 
   if snapshot.xrunCount > session.lastXruns and config.verbosity != vbQuiet:
-    warning(errorOutput, "JACK reported " &
+    session.emitWarning(wkXruns, errorOutput, "JACK reported " &
       $(snapshot.xrunCount - session.lastXruns) & " new xruns")
   session.lastXruns = snapshot.xrunCount
   if snapshot.freewheelCount > session.lastFreewheelChanges and
       config.verbosity == vbVerbose:
-    warning(errorOutput, "JACK freewheel state changed to " & $snapshot.freewheel)
+    session.emitWarning(wkFreewheel, errorOutput,
+      "JACK freewheel state changed to " & $snapshot.freewheel)
   session.lastFreewheelChanges = snapshot.freewheelCount
 
   let eventMetrics = session.audioSlice.takeEventMetrics()
   let eventWarning = eventMetrics.eventMetricsWarningMessage()
   if eventWarning.len > 0 and config.verbosity != vbQuiet:
-    warning(errorOutput, eventWarning)
+    session.emitWarning(wkEventDrops, errorOutput, eventWarning)
   let parameterEvents = session.audioSlice.drainParameterEvents()
   let parameterMetrics = session.audioSlice.takeParameterMetrics()
   if parameterMetrics.dropped > 0'u64 and config.verbosity != vbQuiet:
-    warning(errorOutput, "CLAP parameter transport dropped or rejected " &
+    session.emitWarning(wkParameterDrops, errorOutput,
+      "CLAP parameter transport dropped or rejected " &
       $parameterMetrics.dropped & " events")
   if parameterEvents.valueChanges > 0'u32:
     session.stateDirty = true
@@ -405,9 +424,9 @@ proc serviceGuiFailure(session: var HostSession; config: RunConfig;
                        error: sink HostError): Result[Unit] =
   if config.requireGui:
     return failure[Unit](move(error))
-  if siShowGui notin session.guiSignalWarnings:
-    session.guiSignalWarnings.incl(siShowGui)
-    warning(errorOutput, "could not " & operation &
+  if config.verbosity != vbQuiet:
+    session.emitWarning(wkGuiFailure, errorOutput,
+      "could not " & operation &
       " the plugin GUI; continuing headless: " & error.message)
   if session.gui != nil:
     var closed = session.gui.close()
@@ -435,14 +454,15 @@ proc serviceGuiEvents(session: var HostSession; config: RunConfig;
       move(handled.error))
   success()
 
-proc serviceTrayFailure(session: var HostSession; errorOutput: File;
-                        operation: string; error: sink HostError): Result[Unit] =
+proc serviceTrayFailure(session: var HostSession; config: RunConfig;
+                        errorOutput: File; operation: string;
+                        error: sink HostError): Result[Unit] =
   var trayFailure = move(error)
-  if not session.trayWarningShown:
-    session.trayWarningShown = true
+  if config.verbosity != vbQuiet:
     let detail = if trayFailure.context.len == 0: trayFailure.message
       else: trayFailure.message & " (" & trayFailure.context & ")"
-    warning(errorOutput, "could not " & operation &
+    session.emitWarning(wkTrayFailure, errorOutput,
+      "could not " & operation &
       " tray icon; continuing without tray: " & detail)
   if session.tray != nil:
     var closed = session.tray.close()
@@ -459,7 +479,7 @@ proc serviceTrayEvents(session: var HostSession; config: RunConfig;
     return success()
   var handled = session.tray.handleEvents(events)
   if not handled.isOk:
-    return session.serviceTrayFailure(errorOutput, "service",
+    return session.serviceTrayFailure(config, errorOutput, "service",
       move(handled.error))
   if handled.value and session.gui != nil:
     var toggled = session.gui.toggle()
@@ -505,7 +525,8 @@ proc openGui(session: var HostSession; config: RunConfig;
       move(started.error))
   success()
 
-proc openTray(session: var HostSession; errorOutput: File): Result[Unit] =
+proc openTray(session: var HostSession; config: RunConfig;
+              errorOutput: File): Result[Unit] =
   if session.gui == nil or not session.gui.isAvailable:
     return success()
   let title = pluginDisplayName(session.audioSlice.pluginName, "CLAP")
@@ -513,7 +534,7 @@ proc openTray(session: var HostSession; errorOutput: File): Result[Unit] =
     addr session.reactor, newDbusTrayIcon, title, session.guiIcon)
   var started = session.tray.start()
   if not started.isOk:
-    return session.serviceTrayFailure(errorOutput, "start",
+    return session.serviceTrayFailure(config, errorOutput, "start",
       move(started.error))
   success()
 
@@ -562,7 +583,7 @@ proc run*(session: var HostSession; config: RunConfig;
   var guiOpened = session.openGui(config, errorOutput)
   if not guiOpened.isOk:
     return failSession[Unit](session, move(guiOpened.error))
-  var trayOpened = session.openTray(errorOutput)
+  var trayOpened = session.openTray(config, errorOutput)
   if not trayOpened.isOk:
     return failSession[Unit](session, move(trayOpened.error))
   while session.state == ssRunning:
@@ -614,8 +635,9 @@ proc rememberCleanup(first: var HostError; failed: var bool;
     if operation.error.context.len > 0:
       first.context.add(" (" & operation.error.context & ")")
 
-proc close*(session: var HostSession): Result[Unit] =
+proc close*(session: var HostSession; errorOutput: File): Result[Unit] =
 
+  session.flushWarnings(errorOutput)
   if session.state == ssStopped and session.audioSlice.state in
       {iassEmpty, iassClosed} and not session.pidFile.isOwned and
       not session.signalSource.isOpen and
@@ -670,3 +692,6 @@ proc close*(session: var HostSession): Result[Unit] =
     discard session.state.transition(ssStopping)
     discard session.state.transition(ssStopped)
   success()
+
+proc close*(session: var HostSession): Result[Unit] =
+  session.close(stderr)
