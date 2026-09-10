@@ -389,18 +389,20 @@ proc guiGetSize*(instance: var ClapInstance): Result[GuiSize] =
     return failure[GuiSize](instanceError(hekClapPlugin,
       "CLAP GUI extension has no get_size callback",
       instance.module.modulePath, "id=" & instance.descriptor.id))
-  var width, height: uint32
+  var width, height: cuint
   if not gui.value.getSize(instance.plugin, addr width, addr height):
     return failure[GuiSize](instanceError(hekClapPlugin,
       "CLAP plugin could not report its GUI size",
       instance.module.modulePath, "id=" & instance.descriptor.id))
-  if width == 0'u32 or height == 0'u32 or width > uint32(high(int32)) or
-      height > uint32(high(int32)):
+  let resultWidth = uint32(width)
+  let resultHeight = uint32(height)
+  if resultWidth == 0'u32 or resultHeight == 0'u32 or
+      resultWidth > uint32(high(int32)) or resultHeight > uint32(high(int32)):
     return failure[GuiSize](instanceError(hekClapPlugin,
       "CLAP plugin reported an invalid GUI size",
       instance.module.modulePath, "id=" & instance.descriptor.id &
-        "; width=" & $width & "; height=" & $height))
-  success(GuiSize(width: width, height: height))
+        "; width=" & $resultWidth & "; height=" & $resultHeight))
+  success(GuiSize(width: resultWidth, height: resultHeight))
 
 proc guiCanResize*(instance: var ClapInstance): Result[bool] =
   var gui = instance.requireGui("can_resize")
@@ -445,16 +447,19 @@ proc guiAdjustSize*(instance: var ClapInstance; size: var GuiSize): Result[bool]
     return failure[bool](instanceError(hekClapPlugin,
       "CLAP GUI extension has no adjust_size callback",
       instance.module.modulePath, "id=" & instance.descriptor.id))
-  var width = size.width
-  var height = size.height
+  var width = cuint(size.width)
+  var height = cuint(size.height)
   let adjusted = gui.value.adjustSize(instance.plugin, addr width, addr height)
-  if adjusted and (width == 0'u32 or height == 0'u32 or
-      width > uint32(high(int32)) or height > uint32(high(int32))):
+  let resultWidth = uint32(width)
+  let resultHeight = uint32(height)
+  if adjusted and (resultWidth == 0'u32 or resultHeight == 0'u32 or
+      resultWidth > uint32(high(int32)) or
+      resultHeight > uint32(high(int32))):
     return failure[bool](instanceError(hekClapPlugin,
       "CLAP plugin reported an invalid adjusted GUI size",
       instance.module.modulePath, "id=" & instance.descriptor.id))
   if adjusted:
-    size = GuiSize(width: width, height: height)
+    size = GuiSize(width: resultWidth, height: resultHeight)
   success(adjusted)
 
 proc guiSetSize*(instance: var ClapInstance; size: GuiSize): Result[bool] =

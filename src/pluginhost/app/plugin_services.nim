@@ -77,7 +77,7 @@ proc fdSlot(registry: PluginServiceRegistry; fd: int32): int =
   -1
 
 proc registerTimerCallback(context: pointer; periodMs: uint32;
-                           timerId: ptr uint32): bool {.
+                           timerId: ptr cuint): bool {.
     cdecl, gcsafe, raises: [].} =
   let registry = cast[PluginServiceRegistry](context)
   if registry == nil or registry.closing or registry.reactor == nil or
@@ -107,7 +107,7 @@ proc registerTimerCallback(context: pointer; periodMs: uint32;
   registry.timers[slot] = TimerRegistration(
     active: true, id: id, periodNanos: periodNanos,
     token: registered.value)
-  timerId[] = id
+  timerId[] = cuint(id)
   true
 
 proc unregisterTimerCallback(context: pointer; timerId: uint32): bool {.

@@ -7,7 +7,7 @@ type
   ClapMainThreadServices* {.bycopy.} = object
     context*: pointer
     registerTimer*: proc(context: pointer; periodMs: uint32;
-                         timerId: ptr uint32): bool {.
+                         timerId: ptr cuint): bool {.
       cdecl, gcsafe, raises: [].}
     unregisterTimer*: proc(context: pointer; timerId: uint32): bool {.
       cdecl, gcsafe, raises: [].}

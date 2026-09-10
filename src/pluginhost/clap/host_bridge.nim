@@ -393,7 +393,7 @@ proc hostNotePortsRescan(host: ptr ClapHost; flags: uint32) {.
 
 
 proc hostRegisterTimer(host: ptr ClapHost; periodMs: uint32;
-                       timerId: ptr ClapId): bool {.
+                       timerId: ptr cuint): bool {.
     exportc: "pluginhost_clap_host_register_timer", cdecl, gcsafe, raises: [].} =
   let data = callbackData(host)
   if data == nil or timerId == nil or periodMs == 0'u32 or
@@ -401,7 +401,7 @@ proc hostRegisterTimer(host: ptr ClapHost; periodMs: uint32;
       not data.mainServices.isComplete:
     return false
   data.mainServices.registerTimer(
-    data.mainServices.context, periodMs, cast[ptr uint32](timerId))
+    data.mainServices.context, periodMs, cast[ptr cuint](timerId))
 
 proc hostUnregisterTimer(host: ptr ClapHost; timerId: ClapId): bool {.
     exportc: "pluginhost_clap_host_unregister_timer", cdecl, gcsafe, raises: [].} =

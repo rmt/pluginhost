@@ -3,7 +3,7 @@
 **Plan version:** 1.0.0  
 **Target product release:** `pluginhost` 0.1.0  
 **Initial development version:** 0.0.1-dev  
-**Status:** Increments 0–10 approved; review units 11A, 11B, and 11C are planned and not started
+**Status:** Increments 0–10 approved; 11A and 11B approved, with 11C next
 **Companion documents:** [`REQUIREMENTS.md`](REQUIREMENTS.md), [`DESIGN.md`](DESIGN.md)
 
 ## 1. Purpose
@@ -749,7 +749,7 @@ proof that tray activation remains a main-thread GUI operation.
 ## 18. Increment 11 — Feature-complete hardening and release candidate
 
 **Planned version:** 0.1.0-rc.1
-**Status:** 11A in progress; 11B and 11C remain planned for sequential handoff
+**Status:** 11B in progress; 11C remains planned for sequential handoff
 
 ### Goal
 
@@ -794,7 +794,7 @@ Cross-unit constraints:
 
 ### Review unit 11A — Public contract and requirement closure
 
-**Status:** In progress; review gate pending.
+**Status:** Approved after the 11A review gate.
 
 **Owner boundary:**
 
@@ -849,7 +849,7 @@ machine-readable list of remaining hardening cases from
 
 ### Review unit 11B — Fault injection, hostile inputs, and sanitizer evidence
 
-**Status:** Planned; depends on the 11A handoff.
+**Status:** Approved after the 11B review gate.
 
 **Owner boundary:**
 
@@ -1007,7 +1007,7 @@ This table is updated only when work is reviewed.
 | 8 — Host extensions/restart | Approved | Review units 8A and 8B | Main-thread timer/FD services, dirty notification, JACK latency, bounded parameter transport, restart/rescan, sleep/wake, and compatible reconnection/loss evidence accepted |
 | 9 — State | Approved | Increment 9 review | Bounded 64 KiB/64 MiB CLAP streams, pre-configuration load, clean-signal transactional save, rollback, and live evidence accepted |
 | 10 — GUI | Approved | Review units 10A, 10B, and 10C | X11 window host, CLAP GUI controller, StatusNotifierItem D-Bus tray toggle/icon, unit/ABI/fixture, Xvfb, and session-bus evidence accepted |
-| 11 — Release candidate | Not started | Planned review units 11A, 11B, and 11C | Sequential hardening, failure-injection, sanitizer, acceptance, compatibility, documentation, and RC-artifact handoff plan |
+| 11 — Release candidate | In progress | Review units 11A, 11B, and 11C | 11A and 11B approved; 11C is the next review unit |
 | 12 — MVP release | Not started | — | Target 0.1.0 |
 
 Allowed statuses: `Not started`, `In progress`, `Changes requested`, `Approved`, and `Deferred`.
@@ -1053,4 +1053,4 @@ Each candidate requires requirements/design updates and, where architectural, an
 
 ## 23. First action after each review gate
 
-After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 10 and review units 10A, 10B, and 10C are approved. The latest explicit baseline was `env PLUGINHOST_CLAP_SMOKE_PLUGIN=/usr/lib/clap/ZamComp.clap nimble all`: 258 passing cases, zero failures, 31.65 seconds, with ZamComp selected for the independent CLAP smoke. Increment 11 is not started; the next gate is review unit 11A. Native Wayland, JACK1/JACK2 validation where unavailable, aarch64 release support, richer compatible-port reconnection, and the project-license decision remain explicit constraints or owner decisions rather than silently accepted release claims.
+After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 10 and review units 10A, 10B, and 10C are approved; review units 11A and 11B are approved and 11C is next. The latest explicit baseline is `env PLUGINHOST_CLAP_SMOKE_PLUGIN=/usr/lib/clap/ZamComp.clap nimble all`: 279 passing cases, zero failures, with ZamComp selected for the independent CLAP smoke and the 12 focused 11B hardening cases included. The next gate is review unit 11C. Native Wayland, JACK1/JACK2 validation where unavailable, aarch64 release support, richer compatible-port reconnection, and the project-license decision remain explicit constraints or owner decisions rather than silently accepted release claims.

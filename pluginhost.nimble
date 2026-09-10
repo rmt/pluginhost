@@ -332,7 +332,7 @@ proc runAbiTests() =
        "tests/abi/all_abi_tests.nim"
   verifyNoEagerPlatformDependency("build/test/all_abi_tests")
 
-proc runGeneratedCallbackAudit() =
+proc runGeneratedCallbackAudit(probeCache = "build/nimcache/rt-alloc") =
   exec "rm -rf build/nimcache/rt-product && " &
        "mkdir -p build/nimcache/rt-product"
   exec "nim c --compileOnly --hints:off --path:src --path:tests " &
@@ -341,7 +341,7 @@ proc runGeneratedCallbackAudit() =
   exec "python3 tests/rt/audit_generated_callback.py " &
        "build/nimcache/rt-product"
   exec "python3 tests/rt/audit_generated_callback.py --probes " &
-       "build/nimcache/rt-alloc"
+       probeCache
   exec "rm -rf build/nimcache/rt-canary && mkdir -p build/nimcache/rt-canary"
   exec "nim c --compileOnly --hints:off --path:src --path:tests " &
        dependencyPathsClause() & " --nimcache:build/nimcache/rt-canary " &
@@ -387,6 +387,61 @@ proc runClapFixtureTests() =
        "nim c -r --hints:off --path:src --path:tests " &
        dependencyPathsClause() & " --nimcache:build/nimcache/fixtures " &
        "--out:build/test/all_fixture_tests tests/fixtures/all_fixture_tests.nim"
+proc compileHardeningTests() =
+  compileFfiFixture()
+  compilePartialJackFixture()
+  compileFakeJackFixture()
+  compileClapFixtures()
+  exec "mkdir -p build/nimcache/hardening build/test"
+  exec "nim c --hints:off --path:src --path:tests " &
+       dependencyPathsClause() & " --nimcache:build/nimcache/hardening " &
+       "--out:build/test/all_hardening_tests " &
+       "tests/hardening/all_hardening_tests.nim"
+
+proc runHardeningTests() =
+  exec "PLUGINHOST_FFI_FIXTURE=$PWD/build/fixtures/" &
+       "libpluginhost_ffi_fixture.so " &
+       "PLUGINHOST_JACK_PARTIAL_FIXTURE=$PWD/build/fixtures/" &
+       "libpluginhost_jack_partial_fixture.so " &
+       "PLUGINHOST_JACK_FAKE_FIXTURE=$PWD/build/fixtures/" &
+       "libpluginhost_jack_fake_fixture.so " &
+       "PLUGINHOST_CLAP_FIXTURE_DIR=$PWD/build/fixtures/clap " &
+       "build/test/all_hardening_tests"
+
+proc compileSanitizedRt() =
+  exec "rm -rf build/nimcache/sanitize-rt && " &
+       "mkdir -p build/nimcache/sanitize-rt build/test"
+  exec "nim c --cc:clang --hints:off -d:nimAllocStats " &
+       "--passC:-fsanitize=address,undefined " &
+       "--passL:-fsanitize=address,undefined --path:src --path:tests " &
+       dependencyPathsClause() & " --nimcache:build/nimcache/sanitize-rt " &
+       "--out:build/test/sanitize_rt tests/rt/all_rt_tests.nim"
+
+proc runSanitizedChecks() =
+  exec "PLUGINHOST_FFI_FIXTURE=$PWD/build/fixtures/" &
+       "libpluginhost_ffi_fixture.so " &
+       "PLUGINHOST_JACK_PARTIAL_FIXTURE=$PWD/build/fixtures/" &
+       "libpluginhost_jack_partial_fixture.so " &
+       "PLUGINHOST_JACK_FAKE_FIXTURE=$PWD/build/fixtures/" &
+       "libpluginhost_jack_fake_fixture.so " &
+       "PLUGINHOST_CLAP_EVENT_FIXTURE_DIR=$PWD/build/fixtures/clap " &
+       "PLUGINHOST_CLAP_FIXTURE_DIR=$PWD/build/fixtures/clap " &
+       "python3 tests/rt/run_sanitizers.py " &
+       "--asan build/test/sanitize_rt " &
+       "--valgrind build/test/all_hardening_tests"
+
+proc runSanitizeTask() =
+  exec "command -v clang >/dev/null 2>&1 || { " &
+       "echo 'clang is required for sanitizer checks' >&2; exit 1; }"
+  exec "command -v valgrind >/dev/null 2>&1 || { " &
+       "echo 'valgrind is required for ownership checks' >&2; exit 1; }"
+  compileSanitizedRt()
+  compileHardeningTests()
+  compileEventFixtureVariant("events_raw", 0)
+  compileEventFixtureVariant("events_note_end", 4)
+  runGeneratedCallbackAudit("build/nimcache/sanitize-rt")
+  runSanitizedChecks()
+
 
 proc runGuiTests() =
   exec "mkdir -p build/test build/integration build/nimcache/integration build/fixtures/clap"
@@ -446,6 +501,13 @@ task testIntegration, "Run isolated live PipeWire-JACK integration tests":
 task testGui, "Run the X11 GUI and D-Bus tray tests under Xvfb":
   runGuiTests()
 
+task testHardening, "Run hostile-input and resource-ownership checks":
+  compileHardeningTests()
+  runHardeningTests()
+
+task sanitize, "Run generated-C sanitizers and ownership checks":
+  runSanitizeTask()
+
 task all, "Run compile checks, build the executable, and run tests":
   checkIntegrationPrerequisites()
   checkClapSmokePrerequisite()
@@ -457,5 +519,7 @@ task all, "Run compile checks, build the executable, and run tests":
   runAbiTests()
   runRtTests()
   runClapFixtureTests()
+  compileHardeningTests()
+  runHardeningTests()
   runIntegrationTests(false)
   runGuiTests()

@@ -8,7 +8,7 @@ when not defined(nimAllocStats):
   {.error: "host bridge safety tests require -d:nimAllocStats".}
 
 proc rejectTimerRegistration(context: pointer; periodMs: uint32;
-                             timerId: ptr uint32): bool {.
+                             timerId: ptr cuint): bool {.
     cdecl, gcsafe, raises: [].} =
   discard context
   discard periodMs

@@ -8,13 +8,13 @@ type TestMainServices = object
   fd: int32
   fdFlags: uint32
 
-proc registerTimer(context: pointer; periodMs: uint32; timerId: ptr uint32): bool {.cdecl, gcsafe, raises: [].} =
+proc registerTimer(context: pointer; periodMs: uint32; timerId: ptr cuint): bool {.cdecl, gcsafe, raises: [].} =
   let state = cast[ptr TestMainServices](context)
   if state == nil or timerId == nil or periodMs != 34'u32:
     return false
   state.timerId = 17'u32
   state.timerRegistered = true
-  timerId[] = state.timerId
+  timerId[] = cuint(state.timerId)
   true
 
 proc unregisterTimer(context: pointer; timerId: uint32): bool {.cdecl, gcsafe, raises: [].} =

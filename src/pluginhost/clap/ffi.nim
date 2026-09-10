@@ -311,7 +311,11 @@ type
   ClapPluginTimerOnTimerProc* = proc(plugin: ptr ClapPlugin; timerId: ClapId) {.cdecl, gcsafe, raises: [].}
   ClapPluginTimerSupport* {.bycopy.} = object
     onTimer*: ClapPluginTimerOnTimerProc
-  ClapHostTimerRegisterProc* = proc(host: ptr ClapHost; periodMs: uint32; timerId: ptr ClapId): bool {.cdecl, gcsafe, raises: [].}
+  # Keep these C callback pointer arguments as `cuint`: in modules that also
+  # import the host atomic type, Nim's C backend can otherwise emit `ptr
+  # uint32` as a pointer to the atomic C type.
+  ClapHostTimerRegisterProc* = proc(host: ptr ClapHost; periodMs: uint32;
+      timerId: ptr cuint): bool {.cdecl, gcsafe, raises: [].}
   ClapHostTimerUnregisterProc* = proc(host: ptr ClapHost; timerId: ClapId): bool {.cdecl, gcsafe, raises: [].}
   ClapHostTimerSupport* {.bycopy.} = object
     registerTimer*: ClapHostTimerRegisterProc
@@ -439,10 +443,10 @@ type
       isFloating: bool): bool {.cdecl, gcsafe, raises: [].}
   ClapPluginGuiDestroyProc* = proc(plugin: ptr ClapPlugin) {.cdecl, gcsafe, raises: [].}
   ClapPluginGuiSetScaleProc* = proc(plugin: ptr ClapPlugin; scale: cdouble): bool {.cdecl, gcsafe, raises: [].}
-  ClapPluginGuiGetSizeProc* = proc(plugin: ptr ClapPlugin; width, height: ptr uint32): bool {.cdecl, gcsafe, raises: [].}
+  ClapPluginGuiGetSizeProc* = proc(plugin: ptr ClapPlugin; width, height: ptr cuint): bool {.cdecl, gcsafe, raises: [].}
   ClapPluginGuiCanResizeProc* = proc(plugin: ptr ClapPlugin): bool {.cdecl, gcsafe, raises: [].}
   ClapPluginGuiGetResizeHintsProc* = proc(plugin: ptr ClapPlugin; hints: ptr ClapGuiResizeHints): bool {.cdecl, gcsafe, raises: [].}
-  ClapPluginGuiAdjustSizeProc* = proc(plugin: ptr ClapPlugin; width, height: ptr uint32): bool {.cdecl, gcsafe, raises: [].}
+  ClapPluginGuiAdjustSizeProc* = proc(plugin: ptr ClapPlugin; width, height: ptr cuint): bool {.cdecl, gcsafe, raises: [].}
   ClapPluginGuiSetSizeProc* = proc(plugin: ptr ClapPlugin; width, height: uint32): bool {.cdecl, gcsafe, raises: [].}
   ClapPluginGuiSetParentProc* = proc(plugin: ptr ClapPlugin; window: ptr ClapWindow): bool {.cdecl, gcsafe, raises: [].}
   ClapPluginGuiSetTransientProc* = proc(plugin: ptr ClapPlugin; window: ptr ClapWindow): bool {.cdecl, gcsafe, raises: [].}
