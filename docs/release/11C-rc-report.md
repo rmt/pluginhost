@@ -1,7 +1,8 @@
 # Increment 11C Public Acceptance and Release-Candidate Report
 
 **Review unit:** 11C — Public acceptance, compatibility, and release candidate  
-**Status:** Implementation complete; pending human review gate 11. The release candidate is blocked and no release version or artifact was created.  
+**Status:** Approved at human review gate 11 on 2026-09-11. The release
+candidate remains blocked and no release version or artifact was created.
 **Date:** 2026-09-11  
 **Scope:** Public-process acceptance, installed-plugin compatibility, foreign-thread teardown evidence, no-event host overhead, release documentation, and fail-closed release-candidate task wiring.
 
@@ -385,7 +386,7 @@ vendored source.
 
 After completion of all blocked acceptance evidence (or an owner-approved
 requirements correction that changes the applicable acceptance contract),
-resolution of the remaining license/environment blockers, and subsequent
-explicit human acceptance of review gate 11, begin **Increment 12 — MVP release
-and post-review corrections**. Increment 12, not this review unit, owns the final
+resolution of the remaining license/environment blockers, and a clean
+release-candidate verification, begin **Increment 12 — MVP release and
+post-review corrections**. Increment 12, not this review unit, owns the final
 release version/tag decision under the implementation plan.

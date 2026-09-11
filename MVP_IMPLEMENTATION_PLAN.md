@@ -749,7 +749,7 @@ proof that tray activation remains a main-thread GUI operation.
 ## 18. Increment 11 — Feature-complete hardening and release candidate
 
 **Planned version:** 0.1.0-rc.1
-**Status:** 11C in progress; review gate 11 pending.
+**Status:** 11C approved after human review gate 11; the release candidate remains blocked by the documented acceptance, environment, and license prerequisites, and Increment 12 has not started.
 
 ### Goal
 
@@ -898,7 +898,7 @@ machine-readable list of remaining hardening cases from
 
 ### Review unit 11C — Public acceptance, compatibility, and release candidate
 
-**Status:** In progress; depends on approved 11A and 11B reports.
+**Status:** Approved after the 11C review gate; the RC artifact remains blocked by the explicit rows and prerequisites in `docs/release/11C-rc-report.md`.
 
 **Owner boundary:**
 
@@ -968,6 +968,12 @@ documentation, and security review. Only defect fixes and owner-approved
 requirement corrections follow this gate. No MVP release version or tag is
 created here; those belong to Increment 12 after explicit acceptance.
 
+**Gate status:** Approved by the owner on 2026-09-11. This approval records
+review of the 11C implementation and review package; it does not convert
+blocked §17.2 rows into passes or authorize Increment 12. The RC artifact,
+release version, and checksum remain pending completion of the blocked evidence
+and remaining environment/license prerequisites.
+
 ## 19. Increment 12 — MVP release
 
 **Planned version:** 0.1.0
@@ -1007,7 +1013,7 @@ This table is updated only when work is reviewed.
 | 8 — Host extensions/restart | Approved | Review units 8A and 8B | Main-thread timer/FD services, dirty notification, JACK latency, bounded parameter transport, restart/rescan, sleep/wake, and compatible reconnection/loss evidence accepted |
 | 9 — State | Approved | Increment 9 review | Bounded 64 KiB/64 MiB CLAP streams, pre-configuration load, clean-signal transactional save, rollback, and live evidence accepted |
 | 10 — GUI | Approved | Review units 10A, 10B, and 10C | X11 window host, CLAP GUI controller, StatusNotifierItem D-Bus tray toggle/icon, unit/ABI/fixture, Xvfb, and session-bus evidence accepted |
-| 11 — Release candidate | In progress | Review units 11A, 11B, and 11C | 11A and 11B approved; 11C is the next review unit |
+| 11 — Release candidate | Approved | Review units 11A, 11B, and 11C; human review gate 11 | 11C package accepted by owner; the 279-case baseline plus eight focused 11C cases passed. Scenarios 5, 7, 8, and 9, Memcheck, JACK1/JACK2, and project-license evidence remain explicit blockers; no RC artifact/version and Increment 12 cannot start. |
 | 12 — MVP release | Not started | — | Target 0.1.0 |
 
 Allowed statuses: `Not started`, `In progress`, `Changes requested`, `Approved`, and `Deferred`.
@@ -1053,4 +1059,4 @@ Each candidate requires requirements/design updates and, where architectural, an
 
 ## 23. First action after each review gate
 
-After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 10 and review units 10A, 10B, and 10C are approved; review units 11A and 11B are approved and 11C is next. The latest explicit baseline is `env PLUGINHOST_CLAP_SMOKE_PLUGIN=/usr/lib/clap/ZamComp.clap nimble all`: 279 passing cases, zero failures, with ZamComp selected for the independent CLAP smoke and the 12 focused 11B hardening cases included. The next gate is review unit 11C. Native Wayland, JACK1/JACK2 validation where unavailable, aarch64 release support, richer compatible-port reconnection, and the project-license decision remain explicit constraints or owner decisions rather than silently accepted release claims.
+After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 10 and review units 10A, 10B, and 10C are approved; review units 11A and 11B and review unit 11C are approved after human review gate 11. The latest 11C verification is `nimble all`: the pre-existing 279-case baseline plus eight focused 11C cases passed; `nimble sanitize` passed generated auditing, ASan/UBSan, and the negative canary but remains blocked at Valgrind startup by the stripped loader. No release version, RC artifact, or checksum was created. The next-session gate is Increment 12 release work only after completion of all blocked acceptance evidence (or an owner-approved requirements correction that changes the applicable acceptance contract), resolution of the remaining environment/license blockers, and a clean release-candidate verification. Native Wayland, JACK1/JACK2 validation where unavailable, aarch64 release support, richer compatible-port reconnection, and the project-license decision remain explicit constraints or owner decisions rather than silently accepted release claims.
