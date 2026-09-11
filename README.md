@@ -360,7 +360,7 @@ CLAP_PATH="$HOME/.local/lib/clap:/opt/clap" pluginhost scan
 | GUI | X11 embedded/floating fallback; optional D-Bus StatusNotifierItem tray. |
 | Wayland | Native Wayland is deferred. |
 | Isolation | In-process only; third-party plugin code is trusted input. |
-| License | Project license not selected; source is not claimed distributable. |
+| License | MIT; project terms are in `LICENSE`. |
 
 The JACK process callback has a fixed, bounded path: no host allocation,
 managed-memory operation, blocking, file/console/network I/O, GUI call, dynamic
@@ -380,8 +380,9 @@ libraries (MIT/X11), and D-Bus (`AFL-2.1 or GPL-2.0-or-later`). On the common
 glibc target these C-runtime components are LGPL-2.1-or-later; musl-based
 targets use musl's MIT license. Exact system-library/package licenses vary by
 distribution and must be verified from the target system before redistributing
-a binary. These libraries are not bundled by this repository. CLAP plugins are
-third-party works with their own licenses and are not distributed here.
+a binary. These libraries are not bundled by this repository. The project source
+is MIT-licensed under `LICENSE`; CLAP plugins are third-party works with their
+own licenses and are not distributed here.
 
 ## Project documents
 
@@ -391,4 +392,6 @@ third-party works with their own licenses and are not distributed here.
 
 ## License
 
-No project license has been selected yet. Until a license is added, no permission is granted to copy, modify, or distribute the source code.
+The project is licensed under the MIT License; see [`LICENSE`](LICENSE). CLAP
+plugins and system dependencies remain third-party works with their own
+licenses.

@@ -749,7 +749,7 @@ proof that tray activation remains a main-thread GUI operation.
 ## 18. Increment 11 — Feature-complete hardening and release candidate
 
 **Planned version:** 0.1.0-rc.1
-**Status:** 11C approved after human review gate 11; the release candidate remains blocked by the documented acceptance, environment, and license prerequisites, and Increment 12 has not started.
+**Status:** 11C approved after human review gate 11; release-candidate prerequisites remain blocked by scenario 7, Memcheck, and documented environment limitations, and Increment 12 has not started.
 
 ### Goal
 
@@ -907,7 +907,8 @@ machine-readable list of remaining hardening cases from
 - Release artifact/version checks and any final verification-task wiring;
   avoid editing 11A/11B implementation or evidence files except to record a
   clearly identified correction.
-- No license file is added until the owner selects the project license.
+- The owner-selected MIT project license is recorded in the root `LICENSE`; no
+  alternate license is added without explicit owner decision.
 
 **Change and evidence:**
 
@@ -933,8 +934,9 @@ machine-readable list of remaining hardening cases from
   architecture, check for forbidden eager platform dependencies, and record a
   checksum. Update `VERSION`, Nimble metadata, fixtures, and tests together
   only after all prior evidence passes.
-- Obtain an explicit project-license decision before claiming the source is
-  distributable; document CLAP, Nimble, and runtime dependency licenses.
+- The owner-selected MIT project license is recorded in `LICENSE`; document
+  CLAP, Nimble, and runtime dependency licenses before claiming source
+  distribution.
 
 **Acceptance:**
 
@@ -1013,7 +1015,7 @@ This table is updated only when work is reviewed.
 | 8 — Host extensions/restart | Approved | Review units 8A and 8B | Main-thread timer/FD services, dirty notification, JACK latency, bounded parameter transport, restart/rescan, sleep/wake, and compatible reconnection/loss evidence accepted |
 | 9 — State | Approved | Increment 9 review | Bounded 64 KiB/64 MiB CLAP streams, pre-configuration load, clean-signal transactional save, rollback, and live evidence accepted |
 | 10 — GUI | Approved | Review units 10A, 10B, and 10C | X11 window host, CLAP GUI controller, StatusNotifierItem D-Bus tray toggle/icon, unit/ABI/fixture, Xvfb, and session-bus evidence accepted |
-| 11 — Release candidate | Approved | Review units 11A, 11B, and 11C; human review gate 11 | 11C package accepted by owner; the 279-case baseline plus eight focused 11C cases passed. Scenarios 5, 7, 8, and 9, Memcheck, JACK1/JACK2, and project-license evidence remain explicit blockers; no RC artifact/version and Increment 12 cannot start. |
+| 11 — Release candidate | Approved | Review units 11A, 11B, and 11C; human review gate 11 | 11C package accepted by owner; the 279-case baseline plus eight focused 11C cases passed. Scenario 7 and Memcheck remain explicit RC blockers; JACK1/JACK2 remain documented environment limitations; the project license is MIT; no RC artifact/version and Increment 12 cannot start. |
 | 12 — MVP release | Not started | — | Target 0.1.0 |
 
 Allowed statuses: `Not started`, `In progress`, `Changes requested`, `Approved`, and `Deferred`.
@@ -1059,4 +1061,4 @@ Each candidate requires requirements/design updates and, where architectural, an
 
 ## 23. First action after each review gate
 
-After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 10 and review units 10A, 10B, and 10C are approved; review units 11A and 11B and review unit 11C are approved after human review gate 11. The latest 11C verification is `nimble all`: the pre-existing 279-case baseline plus eight focused 11C cases passed; `nimble sanitize` passed generated auditing, ASan/UBSan, and the negative canary but remains blocked at Valgrind startup by the stripped loader. No release version, RC artifact, or checksum was created. The next-session gate is Increment 12 release work only after completion of all blocked acceptance evidence (or an owner-approved requirements correction that changes the applicable acceptance contract), resolution of the remaining environment/license blockers, and a clean release-candidate verification. Native Wayland, JACK1/JACK2 validation where unavailable, aarch64 release support, richer compatible-port reconnection, and the project-license decision remain explicit constraints or owner decisions rather than silently accepted release claims.
+After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 10 and review units 10A, 10B, and 10C are approved; review units 11A and 11B and review unit 11C are approved after human review gate 11. The latest 11C verification is `nimble all`: the pre-existing 279-case baseline plus eight focused 11C cases passed; `nimble sanitize` passed generated auditing, ASan/UBSan, and the negative canary but remains blocked at Valgrind startup by the stripped loader. The owner-selected project license is MIT and is recorded in `LICENSE`. No release version, RC artifact, or checksum was created. The next-session gate is Increment 12 release work only after completion of scenario 7 and the Memcheck prerequisite (or an owner-approved requirements correction that changes the applicable acceptance contract), resolution of remaining environment blockers, and a clean release-candidate verification. Native Wayland, JACK1/JACK2 validation where unavailable, aarch64 release support, and richer compatible-port reconnection remain explicit constraints rather than silently accepted release claims.

@@ -32,14 +32,11 @@ release-preparation work. Section 11C adds the stricter requirement that
 `VERSION`, Nimble metadata, fixtures, and tests change only after all prior
 evidence passes.
 
-The current evidence is not complete: scenarios 5, 7, 8, and 9 remain blocked.
-The missing witnesses are the full manual public GUI/tray row, the combined
-GUI-service witness, an installed-plugin GUI parameter action, and the
-two-process changed-state restore row. The required Memcheck run is also
-blocked by the workstation's stripped dynamic loader. The
-worktree therefore remains on the development version
-(`VERSION=0.0.10-dev`, Nimble package version `0.0.10`) and no release
-candidate binary or checksum was created.
+The current evidence is not complete: scenario 7's combined GUI-service
+witness remains unexecuted. The required Memcheck run is also blocked by the
+workstation's stripped dynamic loader. The worktree therefore remains on the
+development version (`VERSION=0.0.10-dev`, Nimble package version `0.0.10`)
+and no release candidate binary or checksum was created.
 
 With the required plugin environment set, `nimble releaseCandidate` fails closed
 before compilation with:
@@ -63,16 +60,20 @@ a pass.
 | 2 | Effect | **VERIFIED** | Public process with Surge XT Effects 1.3.4 processed generated stereo input. The peer reported `audio-inputs=4 audio-outputs=2 outputs=12288 nonzero=12160 changed=12288 channel-errors=0 errors=0`. Both output channels were checked independently. |
 | 3 | Multiple ports | **VERIFIED** | `build/fixtures/clap/ports_valid.clap`, ID `org.pluginhost.fixture.ports`, realized exactly three audio inputs, five audio outputs, two MIDI/note inputs, and one MIDI/note output. `release_peer.c` sorts JACK discovery results before comparison, so this public row verifies the exact name set/count/type/direction, not JACK enumeration or registration order. Plan and realization ordering are covered separately by `tests/unit/test_port_plan.nim`, `tests/unit/test_jack_ports.nim`, and `tests/fixtures/test_clap_ports.nim`. |
 | 4 | MIDI timing | **VERIFIED** | `nimble testIntegration` passed the isolated live JACK MIDI/CLAP event case for multiple offsets, ordering, SysEx lifetime, lifecycle, quiescence, and instrumentation. |
-| 5 | GUI | **BLOCKED for the full manual public row** | `nimble testGui` passed Xvfb window lifecycle, resize, WM-close hide/reopen, controller negotiation, and StatusNotifierWatcher registration. A manual desktop run of a public installed plugin covering signal hide/show and a real tray click was not executed in this review run; those actions remain a documented recipe, not a release pass. |
+| 5 | GUI | **VERIFIED — owner-confirmed** | The owner confirmed completion of the public installed-plugin GUI/tray sequence, including signal hide/show, resize, WM close/reopen, tray activation, and audio continuity. `nimble testGui` independently passed the Xvfb window lifecycle, controller negotiation, and StatusNotifierWatcher registration paths. |
 | 6 | Headless | **VERIFIED** | Public acceptance and foreign-thread public-process tests used `--no-gui --no-start-server` with no `DISPLAY` or session-bus address in the invoking environment. Audio/MIDI and clean signal shutdown completed normally. |
 | 7 | GUI services | **BLOCKED for the full conjunction** | `tests/fixtures/test_clap_audio.nim` verifies CLAP timer/POSIX-FD dispatch, while `tests/integration/test_x11_window_host.nim` verifies X11 FD responsiveness. The GUI fixture does not request CLAP timers/POSIX FDs, so no single GUI-service witness proves both CLAP services and GUI responsiveness together. |
-| 8 | Parameters | **BLOCKED for the full GUI-initiated row** | Existing fixture, unit, hardening, and complete regression suites passed parameter flush, output-event, rescan, dirty-state, bounded transport, and no-deadlock paths. They programmatically trigger the parameter boundary; no installed-plugin GUI control change was witnessed in this review run, so the §17.2 GUI-initiation requirement is not claimed. |
-| 9 | State | **BLOCKED for the full cross-process restore row** | Existing state fixtures and `nimble testIntegration` passed bounded streams, clean signal save after quiescence, rollback, and preservation of an existing destination. The public test starts one process with prewritten `PHST9` bytes and saves the same bytes; it does not save changed settings from host A, restart into host B, and observe restored settings. |
+| 8 | Parameters | **VERIFIED — owner-confirmed** | The owner confirmed an installed-plugin GUI control change and the resulting parameter behavior. Existing fixture, unit, hardening, and complete regression suites passed parameter flush, output-event, rescan, dirty-state, bounded transport, and no-deadlock paths. |
+| 9 | State | **VERIFIED — owner-confirmed** | The owner confirmed the cross-process changed-state save/reload witness: host A saves changed settings and host B restores them. Existing state fixtures and `nimble testIntegration` passed bounded streams, clean signal save after quiescence, rollback, and preservation of an existing destination. |
 | 10 | Restart | **VERIFIED** | Existing fixture, live integration, and complete regression suites passed coalesced restart/rescan, buffer-size reactivation, silence during transition, quiescence, and compatible connection rebuild paths. |
 | 11 | JACK loss | **VERIFIED** | New public test stopped the private PipeWire server and observed exit status `4`, empty stdout, a clear JACK-shutdown diagnostic on stderr, and PID-file removal. Output: `11C JACK loss exit=4 stdout-bytes=0 stderr-bytes=110`. |
 | 12 | Errors | **VERIFIED** | Existing ABI, fixture, hardening, process-status, and complete regression suites passed missing-library, missing-entry, incompatible/invalid descriptor, plugin-init, activation, process-error, and cleanup paths. |
 | 13 | Real time | **VERIFIED for the exercised paths** | `nimble testRt` passed the generated callback audit and negative allocation canary. The no-event live overhead run reported zero allocations, deallocations, locks, prints, and prohibited I/O. Memcheck remains blocked as described in §§7 and 12. |
 | 14 | Compatibility | **VERIFIED with an auxiliary-output limitation** | Vital, Surge XT, Surge XT Effects, and ZamComp ran as separate public processes through the PipeWire-JACK matrix. The compatibility row checks aggregate output/error behavior; Surge XT has two silent auxiliary outputs, so its separate channel metric was `channel-errors=2` and is reported rather than treated as a runtime error. |
+
+The owner confirmed scenarios 5, 8, and 9 in the review conversation on
+2026-09-11. Those confirmations close the previously missing manual/public
+witnesses; the remaining blocked checklist row is scenario 7.
 
 ## 4. Installed-plugin compatibility matrix
 
@@ -277,11 +278,11 @@ pluginhost --no-gui --load-state ./preset.state \
 CLAP_PATH="$HOME/.local/lib/clap:/opt/clap" pluginhost scan
 ```
 
-The manual desktop recipe was **not executed** in this review run. Its
-component-level equivalents passed under disposable Xvfb/D-Bus: window map,
-resize, hide/show, WM-close recovery, controller recreation, and compatible
-StatusNotifierWatcher registration. No manual tray-click or installed-plugin
-GUI result is claimed.
+The owner confirmed completion of the manual desktop GUI/tray sequence for this
+review unit, including signal hide/show, resize, WM close/reopen, tray
+activation, and continued audio. The automated Xvfb/D-Bus component evidence
+also passed: window map, resize, hide/show, WM-close recovery, controller
+recreation, and compatible StatusNotifierWatcher registration.
 
 ## 10. Documentation, dependency, and support status
 
@@ -310,8 +311,9 @@ Direct project/dependency status:
   licensing varies by distribution and must be checked on the target.
 - JACK: distribution-provided LGPL-2.1-or-later; PipeWire: MIT; X11 libraries:
   MIT/X11; D-Bus: AFL-2.1 or GPL-2.0-or-later. These are not bundled here.
-- No project license has been selected. The source is not claimed distributable,
-  and third-party CLAP plugins are not distributed.
+- The project source is MIT-licensed under the root `LICENSE` file. CLAP
+  plugins and system dependencies remain third-party works with their own
+  licenses and are not distributed here.
 
 Supported and deferred matrix:
 
@@ -323,7 +325,7 @@ Supported and deferred matrix:
 | GUI | X11 embedded/floating fallback and optional D-Bus StatusNotifierItem. |
 | Wayland | Native Wayland deferred. |
 | Isolation | In-process trusted-plugin model; no crash sandbox. |
-| License | Project license decision pending. |
+| License | MIT; project terms are in the root `LICENSE` file. |
 
 ## 11. Changed and excluded sources
 
@@ -331,6 +333,7 @@ Changed implementation/test/documentation files:
 
 - `README.md` — complete manual, environment, dependency, support, and example
   coverage.
+- `LICENSE` — owner-selected MIT project license.
 - `MVP_IMPLEMENTATION_PLAN.md` — corrected 11C status metadata to distinguish
   implementation/review state from approval.
 - `pluginhost.nimble` — release acceptance, integration-only fixture, overhead,
@@ -358,35 +361,25 @@ vendored source.
 
 ## 12. Known blockers and limitations
 
-1. Release metadata remains at `VERSION=0.0.10-dev` and no RC artifact exists
-   until the missing required evidence is complete.
+1. Scenario 7's combined GUI-service witness remains outstanding: one fixture
+   must prove CLAP timer/POSIX-FD dispatch and X11 GUI responsiveness together.
 2. Valgrind Memcheck cannot start on this workstation because the stripped
    dynamic loader lacks the mandatory `memcmp` redirection symbol. The ASan/UBSan
    and generated-C portions pass; matching glibc debug symbols or a compatible
    loader is required for Memcheck.
 3. JACK1 and JACK2 were not separately run. The live compatibility claim is
-   limited to PipeWire-JACK.
-4. The full manual public GUI/tray row was not executed; automated X11/D-Bus
-   component evidence passes.
-5. The installed-plugin GUI parameter-control interaction was not witnessed;
-   programmatic parameter/flush/dirty-state paths pass.
-6. The GUI-service conjunction remains unwitnessed in one fixture: CLAP timer/
-   POSIX-FD dispatch and X11 GUI responsiveness pass separately.
-7. A two-process changed-state save/reload witness remains outstanding; current
-   state tests prove bounded transaction and rollback behavior.
-8. Native Wayland is deferred.
-9. x86_64 is the only release-validated architecture; aarch64 remains open.
-10. Plugins execute in-process and are not sandboxed; hostile native plugin code,
-    plugin-owned threads, TLS destructors, and exit handlers can terminate the
-    host or make unload unsafe.
-11. No project license was selected, so no source-distribution permission is
-    claimed.
+   limited to PipeWire-JACK; no untested JACK compatibility is claimed.
+4. Native Wayland is deferred.
+5. x86_64 is the only release-validated architecture; aarch64 remains open.
+6. Plugins execute in-process and are not sandboxed; hostile native plugin code,
+   plugin-owned threads, TLS destructors, and exit handlers can terminate the
+   host or make unload unsafe.
 
 ## 13. Proposed next increment
 
 After completion of all blocked acceptance evidence (or an owner-approved
 requirements correction that changes the applicable acceptance contract),
-resolution of the remaining license/environment blockers, and a clean
-release-candidate verification, begin **Increment 12 — MVP release and
-post-review corrections**. Increment 12, not this review unit, owns the final
-release version/tag decision under the implementation plan.
+resolution of the remaining environment blockers, and a clean release-candidate
+verification, begin **Increment 12 — MVP release and post-review corrections**.
+Increment 12, not this review unit, owns the final release version/tag decision
+under the implementation plan.

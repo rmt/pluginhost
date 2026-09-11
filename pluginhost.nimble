@@ -4,7 +4,7 @@
 version       = "0.0.10"
 author        = "pluginhost contributors"
 description   = "A standalone Linux JACK host for CLAP plugins"
-license       = "UNLICENSED"
+license       = "MIT"
 srcDir        = "src"
 bin           = @["pluginhost"]
 
