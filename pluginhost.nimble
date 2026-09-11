@@ -25,6 +25,35 @@ proc verifyNoEagerPlatformDependency(path: string) =
        "echo 'unexpected eager platform dependency: " & path & "' >&2; " &
        "exit 1; fi"
 
+proc checkReleaseCandidateVersion() =
+  let version = readFile("VERSION").strip()
+  if version != "0.1.0-rc.1":
+    echo "release candidate version is not selected: " & version
+    quit(1)
+  let packageVersion = version.split('-', maxsplit = 1)[0]
+  let nimbleText = readFile("pluginhost.nimble")
+  if not nimbleText.contains("version       = \"" & packageVersion & "\""):
+    echo "Nimble package version does not match release candidate: " &
+      packageVersion
+    quit(1)
+
+proc compileReleaseCandidateArtifact() =
+  exec "mkdir -p build/release build/nimcache/release"
+  exec "nim c --hints:off -d:release --path:src " &
+       dependencyPathsClause() &
+       " --nimcache:build/nimcache/release " &
+       "--out:build/release/pluginhost src/pluginhost.nim"
+  verifyNoEagerPlatformDependency("build/release/pluginhost")
+  exec "first_line=$(build/release/pluginhost --version | " &
+       "{ IFS= read -r line; printf '%s' \"$line\"; }); " &
+       "test \"$first_line\" = 'pluginhost 0.1.0-rc.1'"
+  exec "python3 -c 'import subprocess,sys; " &
+       "text=subprocess.check_output([\"file\", \"build/release/pluginhost\"], " &
+       "text=True); " &
+       "sys.exit(0 if \"ELF 64-bit\" in text and \"x86-64\" in text else 1)'"
+  exec "sha256sum build/release/pluginhost > build/release/pluginhost.sha256"
+  exec "test -s build/release/pluginhost.sha256"
+
 proc compileTestBinary() =
   exec "mkdir -p build/test build/nimcache/test-app"
   exec "nim c --hints:off --path:src " & dependencyPathsClause() &
@@ -97,6 +126,10 @@ proc compileLiveIntegrationSupport() =
        "$(pkg-config --cflags jack) tests/integration/jack_midi_peer.c " &
        "$(pkg-config --libs jack) -ldl -Wl,-z,defs " &
        "-o build/integration/jack_midi_peer"
+  exec "cc -std=gnu11 -fno-builtin -Wall -Wextra -Werror -pthread " &
+       "$(pkg-config --cflags jack) tests/integration/release_peer.c " &
+       "$(pkg-config --libs jack) -ldl -Wl,-z,defs " &
+       "-o build/integration/release_peer"
   exec "cc -std=gnu11 -fPIC -shared -fvisibility=hidden " &
        "-Wall -Wextra -Werror -Wl,-z,defs -Ivendor/clap/include " &
        "-DPLUGINHOST_EVENT_FIXTURE_MODE=0 " &
@@ -137,6 +170,37 @@ proc checkClapSmokePrerequisite() =
     echo "CLAP smoke prerequisite does not exist: " & path
     quit(1)
 
+proc checkRequiredReleasePath(name: string) =
+  let path = getEnv(name)
+  if path.len == 0:
+    echo "release acceptance prerequisite missing: set " & name &
+      " to an absolute plugin path"
+    quit(1)
+  if path[0] != '/':
+    echo "release acceptance prerequisite must be absolute: " & name
+    quit(1)
+  if not fileExists(path):
+    echo "release acceptance prerequisite does not exist: " & path
+    quit(1)
+
+proc checkReleaseAcceptancePrerequisites() =
+  for name in [
+      "PLUGINHOST_RELEASE_INSTRUMENT_PLUGIN",
+      "PLUGINHOST_RELEASE_SECOND_INSTRUMENT_PLUGIN",
+      "PLUGINHOST_RELEASE_EFFECT_PLUGIN",
+      "PLUGINHOST_RELEASE_COMPATIBILITY_PLUGIN",
+    ]:
+    checkRequiredReleasePath(name)
+  for name in [
+      "PLUGINHOST_RELEASE_INSTRUMENT_ID",
+      "PLUGINHOST_RELEASE_SECOND_INSTRUMENT_ID",
+      "PLUGINHOST_RELEASE_EFFECT_ID",
+      "PLUGINHOST_RELEASE_COMPATIBILITY_ID",
+    ]:
+    if getEnv(name).len == 0:
+      echo "release acceptance prerequisite missing: set " & name
+      quit(1)
+
 proc checkIntegrationPrerequisites() =
   verifyIntegrationPrerequisiteFailure()
   exec "python3 tests/integration/run_pipewire_jack.py --check-only"
@@ -155,6 +219,18 @@ proc compileControlIntegrationTest(source, output: string) =
        " --nimcache:build/nimcache/integration/" & output &
        " --out:build/test/" & output & " " & source
 
+proc compileForeignThreadRaceFixture() =
+  exec "cc -std=gnu11 -fPIC -shared -fvisibility=hidden " &
+       "-Wall -Wextra -Werror -pthread -Wl,-z,defs -Ivendor/clap/include " &
+       "tests/integration/foreign_thread_race_fixture.c " &
+       "-o build/fixtures/clap/foreign_thread_race.clap"
+
+proc compileForeignThreadTeardownTest() =
+  exec "nim c --hints:off -d:nimAllocStats --path:src --path:tests " &
+       dependencyPathsClause() &
+       " --nimcache:build/nimcache/integration/foreign_thread_teardown " &
+       " --out:build/test/foreign_thread_teardown " &
+       "tests/integration/test_foreign_thread_teardown.nim"
 proc runIntegrationTests(checkPrerequisites = true) =
   if checkPrerequisites:
     checkIntegrationPrerequisites()
@@ -183,6 +259,7 @@ proc runIntegrationTests(checkPrerequisites = true) =
   exec "python3 tests/integration/run_pipewire_jack.py " &
        "--test build/test/all_integration_tests " &
        "--peer build/integration/jack_peer"
+
 
 proc compileClapFixtureVariant(name: string; mode: int) =
   exec "cc -std=gnu11 -fPIC -shared -fvisibility=hidden " &
@@ -304,6 +381,40 @@ proc compileClapFixtures() =
        "-Wall -Wextra -Werror -Wl,-z,defs " &
        "tests/fixtures/clap/no_entry_fixture.c " &
        "-o build/fixtures/clap/no_entry.clap"
+proc runReleaseAcceptanceTests(checkPrerequisites = true) =
+  if checkPrerequisites:
+    checkIntegrationPrerequisites()
+    checkReleaseAcceptancePrerequisites()
+  compileTestBinary()
+  compileClapFixtures()
+  compileForeignThreadRaceFixture()
+  compileLiveIntegrationSupport()
+  compileLiveIntegrationTest(
+    "tests/integration/test_host_overhead.nim", "host_overhead")
+  compileControlIntegrationTest(
+    "tests/integration/test_release_acceptance.nim", "release_acceptance")
+  compileControlIntegrationTest(
+    "tests/integration/test_jack_loss.nim", "jack_loss")
+  compileForeignThreadTeardownTest()
+  exec "PLUGINHOST_TEST_BIN=$PWD/build/test/pluginhost " &
+       "PLUGINHOST_CLAP_FIXTURE_DIR=$PWD/build/fixtures/clap " &
+       "PLUGINHOST_RELEASE_PEER=$PWD/build/integration/release_peer " &
+       "python3 tests/integration/run_pipewire_jack.py " &
+       "--test build/test/release_acceptance " &
+       "--peer build/integration/release_peer"
+  exec "PLUGINHOST_TEST_BIN=$PWD/build/test/pluginhost " &
+       "PLUGINHOST_CLAP_FIXTURE_DIR=$PWD/build/fixtures/clap " &
+       "python3 tests/integration/run_pipewire_jack.py " &
+       "--test build/test/foreign_thread_teardown " &
+       "--peer build/integration/jack_peer"
+  exec "python3 tests/integration/run_pipewire_jack.py " &
+       "--test build/test/host_overhead " &
+       "--peer build/integration/jack_peer"
+  exec "PLUGINHOST_TEST_BIN=$PWD/build/test/pluginhost " &
+       "PLUGINHOST_CLAP_FIXTURE_DIR=$PWD/build/fixtures/clap " &
+       "python3 tests/integration/run_pipewire_jack.py " &
+       "--test build/test/jack_loss " &
+       "--peer build/integration/jack_peer"
 
 proc runUnitTests() =
   compileFakeJackFixture()
@@ -498,6 +609,9 @@ task testIntegration, "Run isolated live PipeWire-JACK integration tests":
   compileTestBinary()
   runIntegrationTests()
 
+task testAcceptance, "Run the public release acceptance matrix":
+  runReleaseAcceptanceTests()
+
 task testGui, "Run the X11 GUI and D-Bus tray tests under Xvfb":
   runGuiTests()
 
@@ -511,6 +625,7 @@ task sanitize, "Run generated-C sanitizers and ownership checks":
 task all, "Run compile checks, build the executable, and run tests":
   checkIntegrationPrerequisites()
   checkClapSmokePrerequisite()
+  checkReleaseAcceptancePrerequisites()
   exec "mkdir -p build/nimcache/check"
   exec "nim check --hints:off --path:src " & dependencyPathsClause() &
        " --nimcache:build/nimcache/check src/pluginhost.nim"
@@ -522,4 +637,11 @@ task all, "Run compile checks, build the executable, and run tests":
   compileHardeningTests()
   runHardeningTests()
   runIntegrationTests(false)
+  runReleaseAcceptanceTests(false)
   runGuiTests()
+
+task releaseCandidate, "Build and inspect the selected release candidate":
+  checkClapSmokePrerequisite()
+  checkReleaseAcceptancePrerequisites()
+  checkReleaseCandidateVersion()
+  compileReleaseCandidateArtifact()

@@ -199,11 +199,13 @@ def terminate_group(process: subprocess.Popen[bytes], timeout: float) -> None:
 
 
 def run_test(test_binary: Path, peer_binary: Path,
-             environment: dict[str, str], remote: str) -> int:
+             environment: dict[str, str], remote: str,
+             server_pid: int) -> int:
     test_environment = environment.copy()
     test_environment.update({
         "PLUGINHOST_INTEGRATION_ISOLATED": "1",
         "PLUGINHOST_JACK_PEER": str(peer_binary),
+        "PLUGINHOST_PIPEWIRE_PID": str(server_pid),
     })
     command = [
         "pw-jack", "-r", remote, "-s", "48000", "-p", "64",
@@ -266,7 +268,8 @@ def run_integration(config: Path, test_binary: Path, peer_binary: Path) -> int:
                 if not socket_path.exists() or not stat.S_ISSOCK(socket_path.stat().st_mode):
                     raise RuntimeError(f"private PipeWire socket is missing: {socket_path}")
                 require_dummy_driver(environment, remote)
-                result = run_test(test_binary, peer_binary, environment, remote)
+                result = run_test(
+                    test_binary, peer_binary, environment, remote, server.pid)
             except (OSError, RuntimeError, ValueError, json.JSONDecodeError,
                     subprocess.SubprocessError) as error:
                 print(f"isolated PipeWire-JACK integration failed: {error}",

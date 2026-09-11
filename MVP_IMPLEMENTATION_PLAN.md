@@ -749,7 +749,7 @@ proof that tray activation remains a main-thread GUI operation.
 ## 18. Increment 11 — Feature-complete hardening and release candidate
 
 **Planned version:** 0.1.0-rc.1
-**Status:** 11B in progress; 11C remains planned for sequential handoff
+**Status:** 11C in progress; review gate 11 pending.
 
 ### Goal
 
@@ -898,7 +898,7 @@ machine-readable list of remaining hardening cases from
 
 ### Review unit 11C — Public acceptance, compatibility, and release candidate
 
-**Status:** Planned; depends on approved 11A and 11B reports.
+**Status:** In progress; depends on approved 11A and 11B reports.
 
 **Owner boundary:**
 
