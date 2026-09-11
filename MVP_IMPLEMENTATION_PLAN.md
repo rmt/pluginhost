@@ -3,7 +3,7 @@
 **Plan version:** 1.0.0  
 **Target product release:** `pluginhost` 0.1.0  
 **Initial development version:** 0.0.1-dev  
-**Status:** Increments 0–10 approved; 11A and 11B approved, with 11C next
+**Status:** Increments 0–10 and review units 11A–11C approved; release-candidate prerequisites remain blocked, with Increment 12 not started
 **Companion documents:** [`REQUIREMENTS.md`](REQUIREMENTS.md), [`DESIGN.md`](DESIGN.md)
 
 ## 1. Purpose
