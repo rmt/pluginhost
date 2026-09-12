@@ -579,7 +579,8 @@ The requirements above proceed with these working decisions:
 5. JACK connections remain externally managed; there is no auto-connect behavior initially.
 6. JACK transport and tempo are deferred.
 7. One plugin instance per process is intentional.
-8. `pluginhost` is a working name. The final product name and project license remain undecided.
+8. `pluginhost` is a working name. The project is MIT-licensed; the final
+   product name remains undecided.
 9. StatusNotifierItem over session D-Bus is the optional tray protocol. A missing
    watcher is a non-fatal warning; the legacy XEmbed tray protocol is removed.
 

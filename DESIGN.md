@@ -977,11 +977,12 @@ requirements.
 
 ## 19. Deliberately deferred decisions
 
-The following remain deferred. Native Wayland GUI support, distribution
-formats, and the project license remain outside the current reviewed scope.
+The following remain deferred. Native Wayland GUI support and distribution
+formats remain outside the current reviewed scope. The project license is MIT
+and is recorded in the repository root `LICENSE`.
 
 - Native Wayland floating support in the initial milestone.
-- Distribution formats and project license.
+- Distribution formats.
 
 These choices must not violate dependency, ownership, thread, or ABI boundaries described here.
 
