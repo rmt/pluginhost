@@ -1,7 +1,7 @@
 # Increment 11C Public Acceptance and Release-Candidate Report
 
 **Review unit:** 11C — Public acceptance, compatibility, and release candidate
-**Status:** RC completion follow-up implemented; final artifact evidence is pending owner review.
+**Status:** Approved; the owner accepted the final RC completion evidence on 2026-09-12.
 **Date:** 2026-09-12
 **Scope:** Public-process acceptance, installed-plugin compatibility, foreign-thread teardown evidence, no-event host overhead, release documentation, release-candidate artifact construction, and verification.
 
@@ -419,7 +419,8 @@ or vendored source.
 
 ## 13. Proposed next increment
 
-Review the selected RC metadata, artifact facts, checksum, and final matrix.
-After explicit acceptance, begin **Increment 12 — MVP release and post-review
-corrections**. Increment 12, not this review unit, owns the final `0.1.0`
-version and tag decision.
+The owner accepted the selected RC metadata, artifact facts, checksum, and final
+matrix on 2026-09-12. Increment 11 is closed. **Increment 12 — MVP release and
+post-review corrections** is the proposed next increment but has not started;
+it requires explicit owner direction and owns the final `0.1.0` version and tag
+decision.
