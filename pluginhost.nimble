@@ -1,7 +1,7 @@
 # Nimble 0.20 accepts only dotted numeric package versions and requires a
 # literal assignment. tests/unit/test_version.nim verifies this value against
 # the numeric core of VERSION.
-version       = "0.0.10"
+version       = "0.1.0"
 author        = "pluginhost contributors"
 description   = "A standalone Linux JACK host for CLAP plugins"
 license       = "MIT"

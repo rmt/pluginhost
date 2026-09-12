@@ -1,9 +1,16 @@
+#define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <clap/entry.h>
 #include <clap/ext/gui.h>
+#include <clap/ext/posix-fd-support.h>
+#include <clap/ext/thread-check.h>
+#include <clap/ext/timer-support.h>
 #include <clap/factory/plugin-factory.h>
 #include <clap/plugin-features.h>
 
@@ -12,6 +19,12 @@
 #else
 #define PLUGINHOST_FIXTURE_EXPORT
 #endif
+
+#define SERVICE_FAILURE_NONE 0U
+#define SERVICE_FAILURE_AFTER_TIMER 1U
+#define SERVICE_FAILURE_AFTER_PIPE 2U
+#define SERVICE_FAILURE_FD_REGISTRATION 3U
+#define SERVICE_FAILURE_AFTER_FD 4U
 
 static uint32_t create_count;
 static uint32_t destroy_count;
@@ -23,7 +36,26 @@ static uint32_t suggest_title_count;
 static uint32_t show_count;
 static uint32_t hide_count;
 static uint32_t contract_failures;
+static uint32_t main_thread_failures;
+static uint32_t timer_callback_count;
+static uint32_t fd_callback_count;
+static uint32_t timer_register_count;
+static uint32_t timer_unregister_count;
+static uint32_t fd_register_count;
+static uint32_t fd_unregister_count;
+static uint32_t pipe_create_count;
+static uint32_t pipe_close_count;
+static uint32_t service_setup_failures;
+static uint32_t service_cleanup_failures;
 static const clap_host_t *fixture_host;
+static const clap_host_timer_support_t *fixture_host_timers;
+static const clap_host_posix_fd_support_t *fixture_host_fds;
+static clap_id fixture_timer_id = CLAP_INVALID_ID;
+static int fixture_pipe[2] = {-1, -1};
+static bool fixture_timer_registered;
+static bool fixture_fd_registered;
+static bool fixture_services_enabled;
+static uint32_t fixture_service_failure_step;
 
 static const char *features[] = {
    CLAP_PLUGIN_FEATURE_AUDIO_EFFECT,
@@ -40,6 +72,195 @@ static const clap_plugin_descriptor_t descriptor = {
    .description = "Synthetic CLAP GUI fixture",
    .features = features,
 };
+
+static bool thread_is_main(void) {
+   if (fixture_host == NULL || fixture_host->get_extension == NULL)
+      return false;
+   const clap_host_thread_check_t *check =
+      (const clap_host_thread_check_t *)fixture_host->get_extension(
+         fixture_host, CLAP_EXT_THREAD_CHECK);
+   return check != NULL && check->is_main_thread != NULL &&
+      check->is_main_thread(fixture_host);
+}
+
+static bool thread_is_audio(void) {
+   if (fixture_host == NULL || fixture_host->get_extension == NULL)
+      return false;
+   const clap_host_thread_check_t *check =
+      (const clap_host_thread_check_t *)fixture_host->get_extension(
+         fixture_host, CLAP_EXT_THREAD_CHECK);
+   return check != NULL && check->is_audio_thread != NULL &&
+      check->is_audio_thread(fixture_host);
+}
+
+static void require_main_not_audio(void) {
+   if (!thread_is_main() || thread_is_audio()) {
+      ++contract_failures;
+      ++main_thread_failures;
+   }
+}
+
+static bool close_pipe_ends(void) {
+   bool success = true;
+   for (size_t index = 0U; index < 2U; ++index) {
+      if (fixture_pipe[index] < 0)
+         continue;
+      if (close(fixture_pipe[index]) != 0) {
+         ++contract_failures;
+         ++service_cleanup_failures;
+         success = false;
+         continue;
+      }
+      ++pipe_close_count;
+      fixture_pipe[index] = -1;
+   }
+   return success;
+}
+
+static bool unregister_fixture_fd(void) {
+   if (!fixture_fd_registered)
+      return true;
+   if (fixture_host_fds == NULL ||
+       fixture_host_fds->unregister_fd == NULL ||
+       fixture_pipe[0] < 0 ||
+       !fixture_host_fds->unregister_fd(fixture_host, fixture_pipe[0])) {
+      ++contract_failures;
+      ++service_cleanup_failures;
+      return false;
+   }
+   fixture_fd_registered = false;
+   ++fd_unregister_count;
+   return true;
+}
+
+static bool unregister_fixture_timer(void) {
+   if (!fixture_timer_registered)
+      return true;
+   if (fixture_host_timers == NULL ||
+       fixture_host_timers->unregister_timer == NULL ||
+       !fixture_host_timers->unregister_timer(fixture_host, fixture_timer_id)) {
+      ++contract_failures;
+      ++service_cleanup_failures;
+      return false;
+   }
+   fixture_timer_registered = false;
+   fixture_timer_id = CLAP_INVALID_ID;
+   ++timer_unregister_count;
+   return true;
+}
+
+static bool rollback_services(void) {
+   bool success = true;
+   if (!unregister_fixture_fd())
+      success = false;
+   if (!unregister_fixture_timer())
+      success = false;
+   if (fixture_fd_registered || fixture_timer_registered)
+      return false;
+   if (!close_pipe_ends())
+      success = false;
+   fixture_timer_id = CLAP_INVALID_ID;
+   return success;
+}
+
+static void fixture_on_timer(const clap_plugin_t *plugin, clap_id timer_id) {
+   (void)plugin;
+   require_main_not_audio();
+   if (!fixture_timer_registered || timer_id != fixture_timer_id ||
+       fixture_pipe[1] < 0)
+      ++contract_failures;
+   ++timer_callback_count;
+   const char byte = 'g';
+   if (fixture_pipe[1] < 0 || write(fixture_pipe[1], &byte, 1U) != 1)
+      ++contract_failures;
+}
+
+static const clap_plugin_timer_support_t fixture_timer_support = {
+   .on_timer = fixture_on_timer,
+};
+
+static void fixture_on_fd(const clap_plugin_t *plugin, int fd,
+                          clap_posix_fd_flags_t flags) {
+   (void)plugin;
+   require_main_not_audio();
+   if (!fixture_fd_registered || fd != fixture_pipe[0] ||
+       (flags & CLAP_POSIX_FD_READ) == 0U)
+      ++contract_failures;
+   bool consumed = false;
+   for (;;) {
+      char bytes[64];
+      ssize_t count = read(fd, bytes, sizeof(bytes));
+      if (count > 0) {
+         consumed = true;
+         for (ssize_t index = 0; index < count; ++index) {
+            if (bytes[index] != 'g')
+               ++contract_failures;
+         }
+         continue;
+      }
+      if (count == 0)
+         break;
+      if (errno == EAGAIN || errno == EWOULDBLOCK)
+         break;
+      ++contract_failures;
+      break;
+   }
+   if (!consumed)
+      ++contract_failures;
+   ++fd_callback_count;
+}
+
+static const clap_plugin_posix_fd_support_t fixture_posix_fd_support = {
+   .on_fd = fixture_on_fd,
+};
+
+static bool setup_services(void) {
+   if (!fixture_services_enabled)
+      return true;
+   if (fixture_host_timers == NULL || fixture_host_timers->register_timer == NULL ||
+       fixture_host_fds == NULL || fixture_host_fds->register_fd == NULL) {
+      ++service_setup_failures;
+      ++contract_failures;
+      return false;
+   }
+
+   fixture_timer_id = CLAP_INVALID_ID;
+   fixture_pipe[0] = -1;
+   fixture_pipe[1] = -1;
+   fixture_timer_registered = false;
+   fixture_fd_registered = false;
+
+   uint32_t timer_period = 34U;
+   if (!fixture_host_timers->register_timer(
+          fixture_host, timer_period, &fixture_timer_id))
+      goto failed;
+   fixture_timer_registered = true;
+   ++timer_register_count;
+   if (fixture_service_failure_step == SERVICE_FAILURE_AFTER_TIMER)
+      goto failed;
+
+   if (pipe2(fixture_pipe, O_NONBLOCK | O_CLOEXEC) != 0)
+      goto failed;
+   ++pipe_create_count;
+   if (fixture_service_failure_step == SERVICE_FAILURE_AFTER_PIPE)
+      goto failed;
+
+   uint32_t flags = CLAP_POSIX_FD_READ | CLAP_POSIX_FD_ERROR;
+   if (fixture_service_failure_step == SERVICE_FAILURE_FD_REGISTRATION)
+      flags = 0U;
+   if (!fixture_host_fds->register_fd(fixture_host, fixture_pipe[0], flags))
+      goto failed;
+   fixture_fd_registered = true;
+   ++fd_register_count;
+   if (fixture_service_failure_step == SERVICE_FAILURE_AFTER_FD)
+      goto failed;
+   return true;
+
+failed:
+   ++service_setup_failures;
+   (void)rollback_services();
+   return false;
+}
 
 static bool gui_is_api_supported(const clap_plugin_t *plugin,
                                  const char *api,
@@ -66,12 +287,16 @@ static bool gui_create(const clap_plugin_t *plugin, const char *api,
    (void)is_floating;
    if (api == NULL || strcmp(api, CLAP_WINDOW_API_X11) != 0)
       return false;
+   if (!setup_services())
+      return false;
    ++create_count;
    return true;
 }
 
 static void gui_destroy(const clap_plugin_t *plugin) {
    (void)plugin;
+   require_main_not_audio();
+   (void)rollback_services();
    ++destroy_count;
 }
 
@@ -192,11 +417,29 @@ static const clap_plugin_gui_t gui_extension = {
 
 static bool plugin_init(const clap_plugin_t *plugin) {
    (void)plugin;
-   return fixture_host != NULL;
+   require_main_not_audio();
+   if (fixture_host == NULL || fixture_host->get_extension == NULL)
+      return false;
+   fixture_host_timers = NULL;
+   fixture_host_fds = NULL;
+   if (!fixture_services_enabled)
+      return true;
+   fixture_host_timers = (const clap_host_timer_support_t *)
+      fixture_host->get_extension(fixture_host, CLAP_EXT_TIMER_SUPPORT);
+   fixture_host_fds = (const clap_host_posix_fd_support_t *)
+      fixture_host->get_extension(fixture_host, CLAP_EXT_POSIX_FD_SUPPORT);
+   if (fixture_host_timers == NULL || fixture_host_timers->register_timer == NULL ||
+       fixture_host_timers->unregister_timer == NULL ||
+       fixture_host_fds == NULL || fixture_host_fds->register_fd == NULL ||
+       fixture_host_fds->unregister_fd == NULL)
+      return false;
+   return true;
 }
 
 static void plugin_destroy(const clap_plugin_t *plugin) {
    (void)plugin;
+   require_main_not_audio();
+   (void)rollback_services();
 }
 
 static bool plugin_activate(const clap_plugin_t *plugin, double sample_rate,
@@ -228,6 +471,12 @@ static const void *plugin_get_extension(const clap_plugin_t *plugin,
    (void)plugin;
    if (extension_id != NULL && strcmp(extension_id, CLAP_EXT_GUI) == 0)
       return &gui_extension;
+   if (fixture_services_enabled && extension_id != NULL &&
+       strcmp(extension_id, CLAP_EXT_TIMER_SUPPORT) == 0)
+      return &fixture_timer_support;
+   if (fixture_services_enabled && extension_id != NULL &&
+       strcmp(extension_id, CLAP_EXT_POSIX_FD_SUPPORT) == 0)
+      return &fixture_posix_fd_support;
    return NULL;
 }
 
@@ -305,7 +554,17 @@ PLUGINHOST_FIXTURE_EXPORT void pluginhost_gui_fixture_reset(void) {
    show_count = 0U;
    hide_count = 0U;
    contract_failures = 0U;
-   fixture_host = NULL;
+   main_thread_failures = 0U;
+   timer_callback_count = 0U;
+   fd_callback_count = 0U;
+   timer_register_count = 0U;
+   timer_unregister_count = 0U;
+   fd_register_count = 0U;
+   fd_unregister_count = 0U;
+   pipe_create_count = 0U;
+   pipe_close_count = 0U;
+   service_setup_failures = 0U;
+   service_cleanup_failures = 0U;
 }
 
 #define COUNTER(name) \
@@ -321,6 +580,31 @@ COUNTER(set_transient)
 COUNTER(suggest_title)
 COUNTER(show)
 COUNTER(hide)
+#define SERVICE_COUNTER(name, value) \
+   PLUGINHOST_FIXTURE_EXPORT uint32_t pluginhost_gui_fixture_##name(void) { \
+      return (value); \
+   }
+SERVICE_COUNTER(timer_callback, timer_callback_count)
+SERVICE_COUNTER(fd_callback, fd_callback_count)
+SERVICE_COUNTER(timer_register, timer_register_count)
+SERVICE_COUNTER(timer_unregister, timer_unregister_count)
+SERVICE_COUNTER(fd_register, fd_register_count)
+SERVICE_COUNTER(fd_unregister, fd_unregister_count)
+SERVICE_COUNTER(pipe_create, pipe_create_count)
+SERVICE_COUNTER(pipe_close, pipe_close_count)
+SERVICE_COUNTER(service_setup_failure, service_setup_failures)
+SERVICE_COUNTER(service_cleanup_failure, service_cleanup_failures)
+SERVICE_COUNTER(main_thread_failure, main_thread_failures)
+
+PLUGINHOST_FIXTURE_EXPORT void pluginhost_gui_fixture_enable_services(
+   uint32_t enabled) {
+   fixture_services_enabled = enabled != 0U;
+}
+
+PLUGINHOST_FIXTURE_EXPORT void pluginhost_gui_fixture_set_service_failure_step(
+   uint32_t step) {
+   fixture_service_failure_step = step;
+}
 
 PLUGINHOST_FIXTURE_EXPORT uint32_t pluginhost_gui_fixture_contract_failures(void) {
    return contract_failures;

@@ -116,7 +116,7 @@ suite "CLAP instance lifecycle":
 
     let host = instance.hostBridge.hostPointer
     check $host.name == "pluginhost"
-    check $host.version == "0.0.10-dev"
+    check $host.version == "0.1.0-rc.1"
 
     let requests = instance.takeRequests()
     check (requests and ClapRequestRestart) != 0

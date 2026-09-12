@@ -3,7 +3,7 @@
 **Plan version:** 1.0.0  
 **Target product release:** `pluginhost` 0.1.0  
 **Initial development version:** 0.0.1-dev  
-**Status:** Increments 0–10 and review units 11A–11C approved; release-candidate prerequisites remain blocked, with Increment 12 not started
+**Status:** Increments 0–10 and review units 11A–11C approved; the `0.1.0-rc.1` completion follow-up is implemented and pending owner review, with Increment 12 not started
 **Companion documents:** [`REQUIREMENTS.md`](REQUIREMENTS.md), [`DESIGN.md`](DESIGN.md)
 
 ## 1. Purpose
@@ -749,7 +749,7 @@ proof that tray activation remains a main-thread GUI operation.
 ## 18. Increment 11 — Feature-complete hardening and release candidate
 
 **Planned version:** 0.1.0-rc.1
-**Status:** 11C approved after human review gate 11; release-candidate prerequisites remain blocked by scenario 7, Memcheck, and documented environment limitations, and Increment 12 has not started.
+**Status:** 11C approved after human review gate 11; all acceptance and sanitizer prerequisites are verified, the `0.1.0-rc.1` artifact and checksum are built, and the RC completion follow-up is pending owner review before Increment 12.
 
 ### Goal
 
@@ -898,7 +898,7 @@ machine-readable list of remaining hardening cases from
 
 ### Review unit 11C — Public acceptance, compatibility, and release candidate
 
-**Status:** Approved after the 11C review gate; the RC artifact remains blocked by the explicit rows and prerequisites in `docs/release/11C-rc-report.md`.
+**Status:** Approved after the 11C and scenario 7 review gates; the selected RC metadata, artifact, checksum, and final verification evidence are pending owner review.
 
 **Owner boundary:**
 
@@ -970,11 +970,11 @@ documentation, and security review. Only defect fixes and owner-approved
 requirement corrections follow this gate. No MVP release version or tag is
 created here; those belong to Increment 12 after explicit acceptance.
 
-**Gate status:** Approved by the owner on 2026-09-11. This approval records
-review of the 11C implementation and review package; it does not convert
-blocked §17.2 rows into passes or authorize Increment 12. The RC artifact,
-release version, and checksum remain pending completion of the blocked evidence
-and remaining environment/license prerequisites.
+**Gate status:** Approved by the owner on 2026-09-11; the owner accepted
+the scenario 7 follow-up and supplied successful Memcheck evidence on
+2026-09-12. The `0.1.0-rc.1` completion follow-up is implemented and pending
+owner review. This does not authorize Increment 12 or the final `0.1.0`
+version/tag.
 
 ## 19. Increment 12 — MVP release
 
@@ -1015,7 +1015,7 @@ This table is updated only when work is reviewed.
 | 8 — Host extensions/restart | Approved | Review units 8A and 8B | Main-thread timer/FD services, dirty notification, JACK latency, bounded parameter transport, restart/rescan, sleep/wake, and compatible reconnection/loss evidence accepted |
 | 9 — State | Approved | Increment 9 review | Bounded 64 KiB/64 MiB CLAP streams, pre-configuration load, clean-signal transactional save, rollback, and live evidence accepted |
 | 10 — GUI | Approved | Review units 10A, 10B, and 10C | X11 window host, CLAP GUI controller, StatusNotifierItem D-Bus tray toggle/icon, unit/ABI/fixture, Xvfb, and session-bus evidence accepted |
-| 11 — Release candidate | Approved | Review units 11A, 11B, and 11C; human review gate 11 | 11C package accepted by owner; the 279-case baseline plus eight focused 11C cases passed. Scenario 7 and Memcheck remain explicit RC blockers; JACK1/JACK2 remain documented environment limitations; the project license is MIT; no RC artifact/version and Increment 12 cannot start. |
+| 11 — Release candidate | Approved | Review units 11A, 11B, and 11C; human review gate 11; scenario 7 and Memcheck follow-ups | All acceptance scenarios and sanitizer prerequisites have passing evidence. The selected `0.1.0-rc.1` x86_64 artifact is 1,094,232 bytes with SHA-256 `dc0229a41de0800aa499f574151800218cd79d8be05f6932870cafe996d7ac8c`; the final version-sensitive `nimble all` matrix passed. The RC completion follow-up is pending owner review, JACK1/JACK2 remain documented limitations, and Increment 12 has not started. |
 | 12 — MVP release | Not started | — | Target 0.1.0 |
 
 Allowed statuses: `Not started`, `In progress`, `Changes requested`, `Approved`, and `Deferred`.
@@ -1034,7 +1034,7 @@ Allowed statuses: `Not started`, `In progress`, `Changes requested`, `Approved`,
 | Restart races/use-after-free | Increments 4, 5, and 8 quiescence tests | Repeated restart stress |
 | X11/XEmbed incompatibility | Increment 10A isolated spike | Xvfb, GUI fixture, and real-plugin matrix |
 | StatusNotifierItem availability | Increment 10C optional backend and warning policy | Session-bus fake watcher, D-Bus property/activation test, and desktop matrix |
-| GUI timer/FD leaks | Increments 8 and 10 | Repeated GUI lifecycle checks |
+| GUI timer/FD leaks | Increments 8 and 10 | Repeated GUI lifecycle checks plus the shared-reactor GUI-services and partial-registration rollback witnesses |
 | State-file corruption | Increment 9 transaction design | Failure-injection tests |
 | Scope growth obscures review | Review-size rule and per-increment non-goals | Progress/review record |
 | Null CLAP transport crashes a non-conforming plugin | Increment 5 fixture/independent-plugin smoke tests; retain approved null policy | Compatibility matrix and documented limitation |
@@ -1061,4 +1061,4 @@ Each candidate requires requirements/design updates and, where architectural, an
 
 ## 23. First action after each review gate
 
-After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 10 and review units 10A, 10B, and 10C are approved; review units 11A and 11B and review unit 11C are approved after human review gate 11. The latest 11C verification is `nimble all`: the pre-existing 279-case baseline plus eight focused 11C cases passed; `nimble sanitize` passed generated auditing, ASan/UBSan, and the negative canary but remains blocked at Valgrind startup by the stripped loader. The owner-selected project license is MIT and is recorded in `LICENSE`. No release version, RC artifact, or checksum was created. The next-session gate is Increment 12 release work only after completion of scenario 7 and the Memcheck prerequisite (or an owner-approved requirements correction that changes the applicable acceptance contract), resolution of remaining environment blockers, and a clean release-candidate verification. Native Wayland, JACK1/JACK2 validation where unavailable, aarch64 release support, and richer compatible-port reconnection remain explicit constraints rather than silently accepted release claims.
+After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 10 and review units 10A, 10B, and 10C are approved; review units 11A and 11B, review unit 11C, and the scenario 7 follow-up are approved after human review. The final selected-version `nimble all` run passed the pre-existing 279-case baseline plus ten focused 11C cases. The owner-supplied 2026-09-12 `nimble sanitize` run passed generated auditing, all nine ASan/UBSan RT cases, the required negative canary, and all twelve Valgrind hardening cases; Memcheck reported 619 allocations and 619 frees, zero bytes in use at exit, three inherited descriptors only, zero errors, and zero suppressions. The `0.1.0-rc.1` x86_64 artifact is 1,094,232 bytes, depends eagerly only on `libm.so.6` and `libc.so.6`, and has SHA-256 `dc0229a41de0800aa499f574151800218cd79d8be05f6932870cafe996d7ac8c`. The RC completion follow-up is pending owner review. Increment 12 remains blocked until that evidence is accepted. Native Wayland, JACK1/JACK2 validation where unavailable, aarch64 release support, and richer compatible-port reconnection remain explicit constraints rather than silently accepted release claims.

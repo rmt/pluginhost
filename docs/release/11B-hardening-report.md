@@ -35,7 +35,7 @@ their previous meanings.
 | H-04 | Stale and reused reactor tokens, injected add/modify/remove/close failures, timer/FD capacity and retry cleanup. | VERIFIED. | Hardening reactor driver and plugin-service tests; existing main-reactor generation and stale-event tests. |
 | H-05 | Repeated DSO load/unload, CLAP create/destroy, JACK activation/deactivation/close, Linux reactor FD loops, state/PID temporary allocation, GUI/tray close. | VERIFIED for host-owned resources covered here and by the existing live GUI/integration suites. | 16 DSO iterations, 12 CLAP iterations, 12 JACK iterations, 24 Linux-reactor FD iterations, 64 state and 64 PID temporary-name slots, repeated close assertions, `/proc/self/fd`, `/proc/self/maps`, fixture counters, and GUI/D-Bus integration. |
 | H-06 | ASan/UBSan over the RT callback executable, C-created-thread callbacks, event paths, and fake JACK callbacks. | VERIFIED. | Clang ASan/UBSan executable passed all 9 RT cases with no sanitizer finding. |
-| H-07 | Valgrind Memcheck and host-resource ownership observations. | BLOCKED by the workstation Valgrind prerequisite. | `/proc/self/fd`, `/proc/self/maps`, JACK-port, timer/FD, fixture-counter, and temporary-file observations passed. Valgrind 3.25.1 aborts before target startup because the stripped `ld-linux-x86-64.so.2` does not export the mandatory `memcmp` redirection symbol. Installing matching glibc debug symbols or using a non-stripped loader is required; no suppression was used. |
+| H-07 | Valgrind Memcheck and host-resource ownership observations. | VERIFIED by the 2026-09-12 follow-up. | Valgrind 3.25.1 ran all 12 hardening cases: 619 allocations and 619 frees, zero bytes in use at exit, three inherited descriptors only, zero errors, and zero suppressions. No suppression was added. |
 | H-08 | Generated-C forbidden-operation audit and negative allocation canary. | VERIFIED. | Existing audit passed for 49 CLAP callback/helper functions and the negative canary was rejected for C allocation/deallocation. |
 | H-09 | Typed failures, cleanup/internal precedence, repeated close/shutdown, and warning/status contract beyond the baseline status cases. | VERIFIED for covered paths. | Hardening typed-failure and repeated-close assertions, 11A status/diagnostic tests, fixture subprocess status cases, and the complete regression run. |
 | H-10 | C-created-thread host callbacks and teardown ownership. | BLOCKED for the exact repeated-request-during-shutdown race row. | C-created-thread callback safety and live callback instrumentation passed; a dedicated repeated foreign-thread request/logging race concurrent with teardown is not separately executed and is handed to 11C. |
@@ -111,16 +111,18 @@ The task ran the generated callback audit first:
 - the negative canary was rejected for C allocation/deallocation;
 - the Clang ASan/UBSan RT executable passed all 9 cases.
 
-The task then exited `1` before the target process entered Valgrind. Valgrind
-reported:
+The initial run exited `1` before the target process entered Valgrind because
+the stripped dynamic loader lacked Valgrind's mandatory `memcmp` redirection
+symbol. After the environment prerequisite was corrected, the owner reran
+`nimble sanitize` on 2026-09-12. The complete task exited `0`:
 
-```text
-Fatal error at startup: a function redirection which is mandatory for this
-platform-tool combination cannot be set up: memcmp in ld-linux-x86-64.so.2
-```
-
-This is an environment blocker, not a suppressed target finding. The required
-rerun needs matching glibc debug symbols or a non-stripped dynamic loader.
+- all 9 Clang ASan/UBSan RT cases passed;
+- all 12 hardening cases passed under Valgrind 3.25.1;
+- file-descriptor tracking reported three open inherited descriptors and no
+  host-owned descriptor leak;
+- all 619 allocations were freed, leaving zero bytes in zero blocks;
+- Memcheck reported `ERROR SUMMARY: 0 errors from 0 contexts`;
+- no suppression was used.
 
 ### 5.3 Regression matrix
 
@@ -151,13 +153,13 @@ zero failures**:
 
 The 12 hardening cases are included in that `all` total. The explicit
 sanitizer task adds the same 9 RT behaviors under Clang ASan/UBSan and the
-Valgrind attempt described above.
+successful 12-case Valgrind Memcheck run described above.
 
 ### 5.4 Tool versions
 
 ```text
 Nim Compiler Version 2.2.10 [Linux: amd64]
-clang version 22.1.6
+clang version 22.1.8
 valgrind-3.25.1
 Python 3.14.6
 ```
@@ -180,22 +182,20 @@ assuming a machine-global count:
 - state and PID exhaustion left no target or temporary file; PID symlink targets
   were not replaced;
 - no external plugin/JACK/X11/D-Bus allocation is attributed as a host-owned
-  leak by these observations. Full Memcheck attribution remains blocked by the
-  loader prerequisite above.
+  leak by these observations. The Memcheck follow-up confirmed zero bytes in
+  use at exit and zero errors for the controlled hardening executable.
 
 ## 7. Known gaps and explicit limitations
 
-1. Valgrind Memcheck must be rerun on a workstation with matching glibc debug
-   symbols or a non-stripped loader. The current task intentionally fails rather
-   than reporting a false pass.
-2. The exact H-10 race of repeated C-created-thread host requests/logging while
-   teardown is concurrently progressing remains a 11C acceptance scenario.
-3. JACK1 and JACK2 implementations remain unavailable; the passing live matrix
+The later 11C foreign-thread teardown evidence closed H-10, and the 2026-09-12
+Memcheck follow-up closed H-07. Remaining limitations:
+
+1. JACK1 and JACK2 implementations remain unavailable; the passing live matrix
    is PipeWire-JACK only.
-4. Native Wayland remains deferred by the approved product scope.
-5. Third-party plugin allocations and loader-internal ownership require a
+2. Native Wayland remains deferred by the approved product scope.
+3. Third-party plugin allocations and loader-internal ownership require a
    separate attribution policy even when Valgrind is available.
-6. No new artificial `dlclose` fault seam was added; OS loader failures and all
+4. No new artificial `dlclose` fault seam was added; OS loader failures and all
    existing checked rollback seams are exercised without weakening production
    ownership.
 
@@ -253,13 +253,12 @@ Do not convert a Valgrind startup failure into a pass by adding a suppression.
 With explicit 11B approval, begin **11C — Public acceptance,
 compatibility, and release candidate**. Carry forward:
 
-- the glibc-debug-symbol/non-stripped-loader Valgrind rerun;
 - the H-10 concurrent foreign-thread teardown scenario;
 - JACK1/JACK2 compatibility blockers;
 - independent instrument/effect plugin runs, performance measurement, complete
   README/manual closure, release artifact/version checks, and the project
   license decision.
 
-Increment 11B is approved after owner review. H-07 and H-10 remain explicit
-11C acceptance prerequisites; the blocked Valgrind environment does not become
-a release claim.
+Increment 11B is approved after owner review. H-07 was closed by the successful
+2026-09-12 Memcheck follow-up; H-10 was carried into 11C and closed by its
+foreign-thread teardown evidence.

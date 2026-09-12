@@ -1,10 +1,9 @@
 # Increment 11C Public Acceptance and Release-Candidate Report
 
-**Review unit:** 11C — Public acceptance, compatibility, and release candidate  
-**Status:** Approved at human review gate 11 on 2026-09-11. The release
-candidate remains blocked and no release version or artifact was created.
-**Date:** 2026-09-11  
-**Scope:** Public-process acceptance, installed-plugin compatibility, foreign-thread teardown evidence, no-event host overhead, release documentation, and fail-closed release-candidate task wiring.
+**Review unit:** 11C — Public acceptance, compatibility, and release candidate
+**Status:** RC completion follow-up implemented; final artifact evidence is pending owner review.
+**Date:** 2026-09-12
+**Scope:** Public-process acceptance, installed-plugin compatibility, foreign-thread teardown evidence, no-event host overhead, release documentation, release-candidate artifact construction, and verification.
 
 ## 1. Result vocabulary and scope boundary
 
@@ -18,10 +17,10 @@ documentation, and verification-task wiring. Production runtime behavior was not
 expanded. The public acceptance harness uses an independently compiled C JACK
 peer and independently compiled integration-only CLAP fixture where a host/plugin
 teardown race cannot be represented by the approved FFI fixture.
-
-The implementation preserves the development metadata (`VERSION=0.0.10-dev`
-and Nimble package version `0.0.10`). No release-candidate binary or checksum
-exists in this worktree.
+The release-candidate metadata is selected (`VERSION=0.1.0-rc.1`, Nimble
+package version `0.1.0`). The reviewed task produced the x86_64 artifact and
+checksum recorded in §7; generated build outputs remain ignored and are not
+source-distribution inputs.
 
 ## 2. Release-gating boundary
 
@@ -32,22 +31,28 @@ release-preparation work. Section 11C adds the stricter requirement that
 `VERSION`, Nimble metadata, fixtures, and tests change only after all prior
 evidence passes.
 
-The current evidence is not complete: scenario 7's combined GUI-service
-witness remains unexecuted. The required Memcheck run is also blocked by the
-workstation's stripped dynamic loader. The worktree therefore remains on the
-development version (`VERSION=0.0.10-dev`, Nimble package version `0.0.10`)
-and no release candidate binary or checksum was created.
+The combined GUI-service witness passed and was accepted by the owner on
+2026-09-12. The owner then supplied a successful `nimble sanitize` run:
+all nine ASan/UBSan RT cases and all twelve Valgrind hardening cases passed,
+all 619 allocations were freed, only three inherited descriptors remained
+open, and Memcheck reported zero errors and zero suppressions.
 
-With the required plugin environment set, `nimble releaseCandidate` fails closed
-before compilation with:
+All prerequisite evidence passed before the RC metadata cutover. The final
+version-sensitive `nimble all` run then passed the complete unit, ABI, RT,
+fixture, hardening, live PipeWire-JACK, public acceptance, X11, and D-Bus
+matrix. `nimble releaseCandidate` built and inspected the selected artifact,
+verified its version and architecture, rejected forbidden eager platform
+dependencies, and wrote its checksum.
+
+The earlier environment-qualified `nimble releaseCandidate` invocation had
+failed closed before compilation with:
 
 ```text
 release candidate version is not selected: 0.0.10-dev
 ```
 
-This preserves the stricter 11C evidence boundary and avoids creating an RC
-artifact while required evidence remains blocked. No owner interpretation of a
-document conflict is required; the remaining blockers are recorded in §12.
+That historical failure proved the task would not silently create a
+wrong-version artifact. The final selected-version invocation exited `0`.
 
 ## 3. Release acceptance checklist
 
@@ -62,18 +67,19 @@ a pass.
 | 4 | MIDI timing | **VERIFIED** | `nimble testIntegration` passed the isolated live JACK MIDI/CLAP event case for multiple offsets, ordering, SysEx lifetime, lifecycle, quiescence, and instrumentation. |
 | 5 | GUI | **VERIFIED — owner-confirmed** | The owner confirmed completion of the public installed-plugin GUI/tray sequence, including signal hide/show, resize, WM close/reopen, tray activation, and audio continuity. `nimble testGui` independently passed the Xvfb window lifecycle, controller negotiation, and StatusNotifierWatcher registration paths. |
 | 6 | Headless | **VERIFIED** | Public acceptance and foreign-thread public-process tests used `--no-gui --no-start-server` with no `DISPLAY` or session-bus address in the invoking environment. Audio/MIDI and clean signal shutdown completed normally. |
-| 7 | GUI services | **BLOCKED for the full conjunction** | `tests/fixtures/test_clap_audio.nim` verifies CLAP timer/POSIX-FD dispatch, while `tests/integration/test_x11_window_host.nim` verifies X11 FD responsiveness. The GUI fixture does not request CLAP timers/POSIX FDs, so no single GUI-service witness proves both CLAP services and GUI responsiveness together. |
+| 7 | GUI services | **VERIFIED** | The extended `gui_fixture.c` registers a periodic CLAP timer and a readable pipe FD, signals the pipe from timer callbacks, checks main-thread/contract state, and rolls back a deliberately rejected FD registration. `test_x11_window_host.nim` drives the GUI, `PluginServiceRegistry`, and `GuiController` on one `MainReactor`, interleaving timer/FD callbacks with Xvfb map, resize, hide/show, and WM-close events; after controller close, bounded reactor waits prove that stale events do not dispatch further callbacks. `nimble testGui` passed both the combined-services and partial-registration-rollback cases. The owner accepted this follow-up evidence on 2026-09-12. |
 | 8 | Parameters | **VERIFIED — owner-confirmed** | The owner confirmed an installed-plugin GUI control change and the resulting parameter behavior. Existing fixture, unit, hardening, and complete regression suites passed parameter flush, output-event, rescan, dirty-state, bounded transport, and no-deadlock paths. |
 | 9 | State | **VERIFIED — owner-confirmed** | The owner confirmed the cross-process changed-state save/reload witness: host A saves changed settings and host B restores them. Existing state fixtures and `nimble testIntegration` passed bounded streams, clean signal save after quiescence, rollback, and preservation of an existing destination. |
 | 10 | Restart | **VERIFIED** | Existing fixture, live integration, and complete regression suites passed coalesced restart/rescan, buffer-size reactivation, silence during transition, quiescence, and compatible connection rebuild paths. |
 | 11 | JACK loss | **VERIFIED** | New public test stopped the private PipeWire server and observed exit status `4`, empty stdout, a clear JACK-shutdown diagnostic on stderr, and PID-file removal. Output: `11C JACK loss exit=4 stdout-bytes=0 stderr-bytes=110`. |
 | 12 | Errors | **VERIFIED** | Existing ABI, fixture, hardening, process-status, and complete regression suites passed missing-library, missing-entry, incompatible/invalid descriptor, plugin-init, activation, process-error, and cleanup paths. |
-| 13 | Real time | **VERIFIED for the exercised paths** | `nimble testRt` passed the generated callback audit and negative allocation canary. The no-event live overhead run reported zero allocations, deallocations, locks, prints, and prohibited I/O. Memcheck remains blocked as described in §§7 and 12. |
+| 13 | Real time | **VERIFIED for the exercised paths** | `nimble testRt` passed the generated callback audit and negative allocation canary. The no-event live overhead run reported zero allocations, deallocations, locks, prints, and prohibited I/O. The 2026-09-12 `nimble sanitize` follow-up passed all nine ASan/UBSan RT cases and all twelve Valgrind hardening cases with zero bytes in use at exit, zero errors, and zero suppressions. |
 | 14 | Compatibility | **VERIFIED with an auxiliary-output limitation** | Vital, Surge XT, Surge XT Effects, and ZamComp ran as separate public processes through the PipeWire-JACK matrix. The compatibility row checks aggregate output/error behavior; Surge XT has two silent auxiliary outputs, so its separate channel metric was `channel-errors=2` and is reported rather than treated as a runtime error. |
 
 The owner confirmed scenarios 5, 8, and 9 in the review conversation on
-2026-09-11. Those confirmations close the previously missing manual/public
-witnesses; the remaining blocked checklist row is scenario 7.
+2026-09-11 and accepted the follow-up GUI-services implementation and Xvfb
+evidence for scenario 7 on 2026-09-12. All release-acceptance scenarios and
+sanitizer prerequisites now have passing evidence.
 
 ## 4. Installed-plugin compatibility matrix
 
@@ -108,7 +114,7 @@ no `RTLD_NODELETE` retention or separate Nim bridge reference is used.
 Direct lifecycle evidence from `nimble testAcceptance`/the focused test:
 
 ```text
-11C foreign-thread teardown started=1 batches=10042 during-destroy=2 joined=1 live-allocation-delta=(allocCount: 0, deallocCount: 0)
+11C foreign-thread teardown started=1 batches=10052 during-destroy=1 joined=1 live-allocation-delta=(allocCount: 0, deallocCount: 0)
   [OK] plugin-owned worker joins while callbacks overlap destroy
 ```
 
@@ -137,7 +143,7 @@ included in the reported host interval.
 Representative output from the successful `nimble all` run:
 
 ```text
-11C overhead sample-rate=48000 buffer-size=64 cycles=4096 frames=262144 cpu-ns=56506429 wall-ns=5462250624 us-per-cycle=13.795514892578124 cpu-percent=1.0344898630561263 xruns=0 allocations=0 deallocations=0 locks=0 prints=0 io=0
+11C overhead sample-rate=48000 buffer-size=64 cycles=4096 frames=262144 cpu-ns=64383583 wall-ns=5461627033 us-per-cycle=15.718648193359375 cpu-percent=1.1788352190836975 xruns=0 allocations=0 deallocations=0 locks=0 prints=0 io=0
   [OK] fixed reference quantum reports host-only process cost
 ```
 
@@ -150,15 +156,17 @@ calls.
 
 ## 7. Exact verification evidence
 
-The following commands exited `0` unless marked otherwise:
+The following commands exited `0` unless the sanitizer environment split is
+explicitly noted below:
 
 ```text
 nimble check
-nimble build && nimble test
+nimble build && ./pluginhost --version
 nimble testIntegration
 nimble testGui
 nimble testRt
 nimble testHardening
+nimble sanitize
 PLUGINHOST_CLAP_SMOKE_PLUGIN=/usr/lib/clap/ZamComp.clap \
   PLUGINHOST_CLAP_SMOKE_PLUGIN_ID=com.zamaudio.ZamComp \
   PLUGINHOST_RELEASE_INSTRUMENT_PLUGIN=/usr/lib/clap/Vital.clap \
@@ -183,12 +191,21 @@ PLUGINHOST_CLAP_SMOKE_PLUGIN=/usr/lib/clap/ZamComp.clap \
   nimble all
 ```
 
+The same required plugin environment shown above was supplied to:
+
+```text
+nimble releaseCandidate
+```
+
 The complete `nimble all` run passed the existing unit, ABI, RT, fixture,
-hardening, live PipeWire-JACK, and X11/D-Bus GUI suites, then all eight new
-11C focused cases: four public compatibility/port rows, two foreign-thread
-teardown rows, the overhead row, and the JACK-loss row. The pre-11C baseline
-contained 279 cases; these eight additional cases also passed in the complete
-run.
+hardening, live PipeWire-JACK, and X11/D-Bus GUI suites, then all ten focused
+11C cases: four public compatibility/port rows, two foreign-thread teardown
+rows, the overhead row, the JACK-loss row, and the two combined GUI-services
+rows. The pre-11C baseline contained 279 cases; all ten additional focused
+cases passed in the complete run.
+The final selected-version `nimble all` run completed in 64.53 seconds.
+Version-sensitive unit, process, CLAP host, and fixture contracts all observed
+`0.1.0-rc.1`.
 
 `python3 -m py_compile tests/integration/run_pipewire_jack.py` also passed.
 The runner passed the private PipeWire server PID into the JACK-loss test so the
@@ -200,32 +217,51 @@ test can terminate the exact disposable server.
 nimble sanitize
 ```
 
-The generated audit passed for 49 CLAP callback/helper functions, the callback
-probe passed, and the negative C-allocation/deallocation canary was rejected as
-required. Clang ASan/UBSan passed all nine RT cases. The task then failed before
-Memcheck could start the target because the installed stripped
-`ld-linux-x86-64.so.2` does not export Valgrind's mandatory `memcmp`
-redirection symbol:
+The initial run passed the generated audit, negative canary, and all nine
+Clang ASan/UBSan RT cases but could not start Memcheck because the stripped
+dynamic loader lacked Valgrind's mandatory `memcmp` redirection symbol.
+
+After correcting that environment prerequisite, the owner reran the task on
+2026-09-12 with Clang 22.1.8 and Valgrind 3.25.1. The rerun exited `0`:
+
+- the generated audit passed for 49 CLAP callback/helper functions;
+- the callback probe passed;
+- the negative C-allocation/deallocation canary was rejected as required;
+- all nine Clang ASan/UBSan RT cases passed;
+- all twelve hardening cases passed under Memcheck;
+- descriptor tracking reported three open inherited descriptors only;
+- all 619 allocations were freed, leaving zero bytes in zero blocks;
+- Memcheck reported `ERROR SUMMARY: 0 errors from 0 contexts`;
+- zero suppressions were used.
+
+The task printed `Sanitizer and Valgrind checks passed`.
+
+After the RC metadata-only cutover, the harness reran `nimble sanitize`. The
+generated audit, required negative canary, and all nine ASan/UBSan RT cases
+passed again, but this harness still exposes the older stripped loader and
+could not start Memcheck. It reported Clang 22.1.6, unlike the owner's
+successful Clang 22.1.8 environment. No allocator, ownership, callback, or
+resource implementation changed after the successful owner Memcheck run; the
+post-Memcheck cutover changed version metadata, matching expectations, and
+release documentation only.
+
+### Release-candidate artifact
+
+With the required plugin environment set, `nimble releaseCandidate` exited `0`
+and produced:
 
 ```text
-valgrind: Fatal error at startup: a function redirection
-valgrind: which is mandatory for this platform-tool combination
-valgrind: cannot be set up
-valgrind: A must-be-redirected function whose name matches the pattern: memcmp
-valgrind: in an object with soname matching: ld-linux-x86-64.so.2 was not found
+path: build/release/pluginhost
+version: pluginhost 0.1.0-rc.1
+format: ELF 64-bit LSB PIE, x86-64, GNU/Linux 4.4.0, not stripped
+size: 1094232 bytes
+needed libraries: libm.so.6, libc.so.6
+sha256: dc0229a41de0800aa499f574151800218cd79d8be05f6932870cafe996d7ac8c
+checksum file: build/release/pluginhost.sha256
 ```
 
-This is an environment blocker, not a target finding or a suppression. A
-matching glibc debug-symbol package or a non-stripped loader is required for a
-Memcheck rerun.
-
-### Conditional RC task
-
-With the required plugin environment set, `nimble releaseCandidate` was
-executed and exited non-zero before compilation because the repository still
-has the development version. This confirms the task does not silently produce a
-wrong-version artifact. `build/release/pluginhost` and
-`build/release/pluginhost.sha256` are therefore intentionally absent.
+The dynamic section contains no eager `libjack.so.0`, `libdbus-1.so.3`, or
+`libX11.so.6` dependency.
 
 ## 8. Tool and environment matrix
 
@@ -235,7 +271,7 @@ wrong-version artifact. `build/release/pluginhost` and
 | Architecture | x86_64 |
 | Nim | 2.2.10, `Linux: amd64` |
 | C compiler | GCC 16.1.1 (`cc`) |
-| Clang | 22.1.6 |
+| Clang | 22.1.8 in the successful owner sanitizer run; 22.1.6 in the harness |
 | Python | 3.14.6 |
 | Valgrind | 3.25.1 |
 | pkg-config | 2.5.1 |
@@ -331,13 +367,16 @@ Supported and deferred matrix:
 
 Changed implementation/test/documentation files:
 
-- `README.md` — complete manual, environment, dependency, support, and example
-  coverage.
+- `README.md` — complete manual, environment, dependency, support, example,
+  and selected RC version coverage.
 - `LICENSE` — owner-selected MIT project license.
-- `MVP_IMPLEMENTATION_PLAN.md` — corrected 11C status metadata to distinguish
-  implementation/review state from approval.
-- `pluginhost.nimble` — release acceptance, integration-only fixture, overhead,
-  JACK-loss, and fail-closed RC task wiring.
+- `VERSION` and `pluginhost.nimble` — selected `0.1.0-rc.1` product metadata,
+  numeric `0.1.0` Nimble metadata, release acceptance, integration fixture,
+  overhead, JACK-loss, and fail-closed RC task wiring.
+- `MVP_IMPLEMENTATION_PLAN.md` — current 11C evidence and review gate.
+- `tests/unit/test_version.nim`, `tests/unit/test_main.nim`,
+  `tests/unit/test_host_bridge.nim`, `tests/fixtures/test_clap_instance.nim`,
+  and `tests/fixtures/clap/clap_fixture.c` — version-sensitive RC contracts.
 - `tests/integration/release_peer.c` — bounded independent JACK peer with synth,
   effect, grouped-port, per-channel, and clean-protocol checks.
 - `tests/integration/test_release_acceptance.nim` — public synth/effect/ports/
@@ -352,34 +391,35 @@ Changed implementation/test/documentation files:
   PID cleanup test.
 - `tests/integration/run_pipewire_jack.py` — exact private PipeWire PID export
   for the JACK-loss test.
+- `tests/fixtures/clap/gui_fixture.c` — opt-in CLAP timer/POSIX-FD GUI
+  fixture, counters, main-thread checks, and transactional setup rollback.
+- `tests/fixtures/clap/gui_fixture_api.nim` — typed fixture control/counter
+  bindings and failure-injection constants.
+- `tests/integration/test_x11_window_host.nim` — shared-reactor GUI-services
+  interleaving and partial-registration rollback evidence.
 - `docs/release/11C-rc-report.md` — this report.
 
 No generated C output, vendored CLAP header/license, or third-party plugin source
 was edited. `build/` and Nim cache outputs are transient verification artifacts.
-The two integration C sources are hand-written test support, not generated or
-vendored source.
+Integration and fixture C sources are hand-written test support, not generated
+or vendored source.
 
-## 12. Known blockers and limitations
+## 12. Known limitations
 
-1. Scenario 7's combined GUI-service witness remains outstanding: one fixture
-   must prove CLAP timer/POSIX-FD dispatch and X11 GUI responsiveness together.
-2. Valgrind Memcheck cannot start on this workstation because the stripped
-   dynamic loader lacks the mandatory `memcmp` redirection symbol. The ASan/UBSan
-   and generated-C portions pass; matching glibc debug symbols or a compatible
-   loader is required for Memcheck.
-3. JACK1 and JACK2 were not separately run. The live compatibility claim is
+1. The owner environment passed Memcheck before the version-only RC metadata
+   cutover. The post-cutover harness revalidated generated auditing and all
+   ASan/UBSan cases but retained its stripped-loader Memcheck startup failure.
+2. JACK1 and JACK2 were not separately run. The live compatibility claim is
    limited to PipeWire-JACK; no untested JACK compatibility is claimed.
-4. Native Wayland is deferred.
-5. x86_64 is the only release-validated architecture; aarch64 remains open.
-6. Plugins execute in-process and are not sandboxed; hostile native plugin code,
+3. Native Wayland is deferred.
+4. x86_64 is the only release-validated architecture; aarch64 remains open.
+5. Plugins execute in-process and are not sandboxed; hostile native plugin code,
    plugin-owned threads, TLS destructors, and exit handlers can terminate the
    host or make unload unsafe.
 
 ## 13. Proposed next increment
 
-After completion of all blocked acceptance evidence (or an owner-approved
-requirements correction that changes the applicable acceptance contract),
-resolution of the remaining environment blockers, and a clean release-candidate
-verification, begin **Increment 12 — MVP release and post-review corrections**.
-Increment 12, not this review unit, owns the final release version/tag decision
-under the implementation plan.
+Review the selected RC metadata, artifact facts, checksum, and final matrix.
+After explicit acceptance, begin **Increment 12 — MVP release and post-review
+corrections**. Increment 12, not this review unit, owns the final `0.1.0`
+version and tag decision.

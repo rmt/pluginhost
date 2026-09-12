@@ -1,8 +1,8 @@
-import std/[os, osproc, strutils, unittest]
+import std/[os, options, osproc, strutils, unittest]
 
 import fixtures/clap/gui_fixture_api
-import pluginhost/app/main_reactor
-import pluginhost/clap/[gui_client, instance, loader]
+import pluginhost/app/[main_reactor, plugin_services]
+import pluginhost/clap/[gui_client, instance, loader, main_thread_services]
 import pluginhost/domain/[plugin_catalog, reactor, result]
 import pluginhost/gui/[controller, icon, window_backend, window_host]
 import pluginhost/platform/linux/reactor as linux_reactor
@@ -45,10 +45,18 @@ proc waitForWindowFd(reactor: var MainReactor; token: ReactorToken): bool =
         return true
   false
 
-proc openGuiFixture(path: string): tuple[instance: ClapInstance, observer: DynamicLibrary] =
+proc openGuiFixture(path: string;
+                    mainServices: ptr ClapMainThreadServices = nil;
+                    servicesEnabled = false;
+                    failureStep = GuiServiceFailureNone):
+    tuple[instance: ClapInstance, observer: DynamicLibrary] =
   var observerResult = openDynamicLibrary(path)
   require observerResult.isOk
   var observer = move(observerResult.value)
+  let api = guiFixtureApi(observer)
+  api.reset()
+  api.enableServices(if servicesEnabled: 1'u32 else: 0'u32)
+  api.setServiceFailureStep(failureStep)
   var moduleResult = openClapModule(path)
   require moduleResult.isOk
   var module = move(moduleResult.value)
@@ -57,9 +65,110 @@ proc openGuiFixture(path: string): tuple[instance: ClapInstance, observer: Dynam
   var selected = catalog.value.selectDescriptor(PluginSelector(
     kind: pskId, pluginId: "org.pluginhost.fixture.gui"))
   require selected.isOk
-  var created = createClapInstance(move(module), move(selected.value), nil, true)
+  var created = createClapInstance(
+    move(module), move(selected.value), mainServices, true)
   require created.isOk
   (move(created.value), move(observer))
+
+proc dispatchCombinedEvents(reactor: var MainReactor;
+                            services: PluginServiceRegistry;
+                            instance: var ClapInstance;
+                            controller: GuiController): bool =
+  var ready = reactor.wait(monotonicNanos(100_000_000))
+  require ready.isOk
+  if ready.value.len == 0:
+    return false
+  for rawEvent in ready.value:
+    let serviceEvent = services.classify(rawEvent)
+    if serviceEvent.isNone:
+      continue
+    case serviceEvent.get.kind
+    of psekTimer:
+      require instance.callOnTimer(serviceEvent.get.timerId).isOk
+      require services.completeTimerDispatch(serviceEvent.get.timerId).isOk
+    of psekFd:
+      require instance.callOnFd(serviceEvent.get.fd,
+        serviceEvent.get.fdFlags).isOk
+  require controller.handleWindowEvents(ready.value).isOk
+  true
+
+proc waitForCombinedServices(reactor: var MainReactor;
+                             services: PluginServiceRegistry;
+                             instance: var ClapInstance;
+                             controller: GuiController;
+                             api: GuiFixtureApi;
+                             timerTarget, fdTarget: uint32;
+                             iterations = 24): bool =
+  for ignored in 0 ..< iterations:
+    discard ignored
+    discard dispatchCombinedEvents(reactor, services, instance, controller)
+    if api.timerCalls() >= timerTarget and api.fdCalls() >= fdTarget:
+      return true
+  false
+
+type
+  TraceWindowBackend = ref object of WindowHostBackend
+    inner: WindowHostBackend
+    mapEvents: uint32
+    unmapEvents: uint32
+    configureEvents: uint32
+    closeEvents: uint32
+    destroyedEvents: uint32
+
+method open(backend: TraceWindowBackend; title: string;
+            width, height: uint32): Result[Unit] {.raises: [].} =
+  backend.inner.open(title, width, height)
+
+method setIcon(backend: TraceWindowBackend;
+               icon: GuiIcon): Result[Unit] {.raises: [].} =
+  backend.inner.setIcon(icon)
+
+method close(backend: TraceWindowBackend): Result[Unit] {.raises: [].} =
+  backend.inner.close()
+
+method show(backend: TraceWindowBackend): Result[Unit] {.raises: [].} =
+  backend.inner.show()
+
+method hide(backend: TraceWindowBackend): Result[Unit] {.raises: [].} =
+  backend.inner.hide()
+
+method resize(backend: TraceWindowBackend; width, height: uint32):
+    Result[Unit] {.raises: [].} =
+  backend.inner.resize(width, height)
+
+method pollEvent(backend: TraceWindowBackend):
+    Result[WindowPollResult] {.raises: [].} =
+  var polled = backend.inner.pollEvent()
+  if polled.isOk and polled.value.available:
+    case polled.value.event.kind
+    of wekMap:
+      inc backend.mapEvents
+    of wekUnmap:
+      inc backend.unmapEvents
+    of wekConfigure:
+      inc backend.configureEvents
+    of wekClose:
+      inc backend.closeEvents
+    of wekDestroyed:
+      inc backend.destroyedEvents
+    else:
+      discard
+  polled
+
+method fileDescriptor(backend: TraceWindowBackend): int32 {.raises: [].} =
+  backend.inner.fileDescriptor
+
+method state(backend: TraceWindowBackend): WindowHostState {.raises: [].} =
+  backend.inner.state
+
+method handle(backend: TraceWindowBackend): GuiWindowHandle {.raises: [].} =
+  backend.inner.handle
+
+method width(backend: TraceWindowBackend): uint32 {.raises: [].} =
+  backend.inner.width
+
+method height(backend: TraceWindowBackend): uint32 {.raises: [].} =
+  backend.inner.height
 
 suite "X11 window-host integration":
   test "Xvfb window lifecycle and reactor readiness are deterministic":
@@ -222,3 +331,213 @@ suite "X11 window-host integration":
 
     check controller.hide().isOk
     check controller.state == gcsHidden
+
+  test "GUI services share the X11 reactor without starving window events":
+    require getEnv("DISPLAY").len > 0
+    let fixtureDirectory = getEnv("PLUGINHOST_CLAP_FIXTURE_DIR")
+    require fixtureDirectory.len > 0
+
+    var driverResult = linux_reactor.openLinuxReactorDriver()
+    require driverResult.isOk
+    var reactorOpened = initMainReactor(driverResult.value)
+    require reactorOpened.isOk
+    var reactor = move(reactorOpened.value)
+    defer:
+      doAssert reactor.close().isOk
+    let services = newPluginServiceRegistry(reactor)
+    defer:
+      doAssert services.close().isOk
+
+    var opened = openGuiFixture(fixtureDirectory / "gui.clap",
+      services.servicePointer, true)
+    var instance = move(opened.instance)
+    var observer = move(opened.observer)
+    defer:
+      doAssert instance.close().isOk
+      doAssert observer.close().isOk
+    let api = guiFixtureApi(observer)
+
+    var produced: TraceWindowBackend
+    let factory: WindowHostFactory = proc(): WindowHostBackend =
+      new(produced)
+      produced.inner = newX11WindowBackend()
+      produced
+    var controller = newGuiController(
+      newClapGuiClient(addr instance), addr reactor, factory,
+      "pluginhost-gui-services")
+    defer:
+      doAssert controller.close().isOk
+
+    require controller.start(true).isOk
+    check controller.state == gcsVisible
+    check controller.mode == gmEmbedded
+    check controller.isCreated
+    check api.createCalls() == 1'u32
+    check api.timerRegisterCalls() == 1'u32
+    check api.fdRegisterCalls() == 1'u32
+    check services.activeTimerCount == 1
+    check services.activeFdCount == 1
+
+    check waitForCombinedServices(reactor, services, instance, controller,
+      api, 3'u32, 3'u32)
+    check produced.mapEvents >= 1'u32
+
+    let configureBefore = produced.configureEvents
+    require produced.resize(420, 300).isOk
+    var resized = false
+    for ignored in 0 ..< 12:
+      discard ignored
+      discard dispatchCombinedEvents(reactor, services, instance, controller)
+      if controller.size == GuiSize(width: 420, height: 300):
+        resized = true
+        break
+    check resized
+    check produced.configureEvents > configureBefore
+    check api.setSizeCalls() >= 1'u32
+
+    let unmapBefore = produced.unmapEvents
+    require controller.hide().isOk
+    check controller.state == gcsHidden
+    var hiddenEvent = false
+    for ignored in 0 ..< 12:
+      discard ignored
+      discard dispatchCombinedEvents(reactor, services, instance, controller)
+      if produced.unmapEvents > unmapBefore:
+        hiddenEvent = true
+        break
+    check hiddenEvent
+    check waitForCombinedServices(reactor, services, instance, controller,
+      api, 6'u32, 6'u32)
+
+    let mapBefore = produced.mapEvents
+    require controller.show().isOk
+    check controller.state == gcsVisible
+    var shownEvent = false
+    for ignored in 0 ..< 12:
+      discard ignored
+      discard dispatchCombinedEvents(reactor, services, instance, controller)
+      if produced.mapEvents > mapBefore:
+        shownEvent = true
+        break
+    check shownEvent
+    check waitForCombinedServices(reactor, services, instance, controller,
+      api, 9'u32, 9'u32)
+
+    let sender = getEnv("PLUGINHOST_X11_SEND_DELETE")
+    require sender.len > 0 and fileExists(sender)
+    let sent = execCmdEx(sender & " " & $produced.handle.id)
+    check sent.exitCode == 0
+    let closeBefore = produced.closeEvents
+    var restoredFromClose = false
+    for ignored in 0 ..< 12:
+      discard ignored
+      discard dispatchCombinedEvents(reactor, services, instance, controller)
+      if controller.state == gcsHidden and produced.closeEvents > closeBefore:
+        restoredFromClose = true
+        break
+    check restoredFromClose
+    check api.destroyCalls() == 0'u32
+
+    let mapBeforeRestore = produced.mapEvents
+    require controller.show().isOk
+    check controller.state == gcsVisible
+    var restoredEvent = false
+    for ignored in 0 ..< 12:
+      discard ignored
+      discard dispatchCombinedEvents(reactor, services, instance, controller)
+      if produced.mapEvents > mapBeforeRestore:
+        restoredEvent = true
+        break
+    check restoredEvent
+    check waitForCombinedServices(reactor, services, instance, controller,
+      api, 12'u32, 12'u32)
+    check produced.mapEvents >= 3'u32
+    check produced.unmapEvents >= 1'u32
+    check produced.configureEvents > configureBefore
+    check produced.closeEvents >= 1'u32
+    check api.timerCalls() >= 12'u32
+    check api.fdCalls() >= 12'u32
+    check api.mainThreadFailures() == 0'u32
+    check api.contractFailures() == 0'u32
+
+    check controller.close().isOk
+    check controller.close().isOk
+    check api.destroyCalls() == 1'u32
+    check api.timerUnregisterCalls() == 1'u32
+    check api.fdUnregisterCalls() == 1'u32
+    check api.pipeCloseCalls() == 2'u32
+    check api.serviceCleanupFailures() == 0'u32
+    check services.activeTimerCount == 0
+    check services.activeFdCount == 0
+    let timerCallsAfterClose = api.timerCalls()
+    let fdCallsAfterClose = api.fdCalls()
+    for ignored in 0 ..< 3:
+      discard ignored
+      discard dispatchCombinedEvents(reactor, services, instance, controller)
+      check services.activeTimerCount == 0
+      check services.activeFdCount == 0
+    check api.timerCalls() == timerCallsAfterClose
+    check api.fdCalls() == fdCallsAfterClose
+    check instance.close().isOk
+    check instance.close().isOk
+    check observer.close().isOk
+    check observer.close().isOk
+
+  test "GUI service setup rolls back a partial FD registration failure":
+    require getEnv("DISPLAY").len > 0
+    let fixtureDirectory = getEnv("PLUGINHOST_CLAP_FIXTURE_DIR")
+    require fixtureDirectory.len > 0
+
+    var driverResult = linux_reactor.openLinuxReactorDriver()
+    require driverResult.isOk
+    var reactorOpened = initMainReactor(driverResult.value)
+    require reactorOpened.isOk
+    var reactor = move(reactorOpened.value)
+    defer:
+      doAssert reactor.close().isOk
+    let services = newPluginServiceRegistry(reactor)
+    defer:
+      doAssert services.close().isOk
+
+    var opened = openGuiFixture(fixtureDirectory / "gui.clap",
+      services.servicePointer, true, GuiServiceFailureFdRegistration)
+    var instance = move(opened.instance)
+    var observer = move(opened.observer)
+    defer:
+      doAssert instance.close().isOk
+      doAssert observer.close().isOk
+    let api = guiFixtureApi(observer)
+
+    var produced: WindowHostBackend
+    let factory: WindowHostFactory = proc(): WindowHostBackend =
+      produced = newX11WindowBackend()
+      produced
+    var controller = newGuiController(
+      newClapGuiClient(addr instance), addr reactor, factory,
+      "pluginhost-gui-services-failure")
+    defer:
+      doAssert controller.close().isOk
+
+    var started = controller.start(true)
+    check not started.isOk
+    check controller.state == gcsUnavailable
+    check api.createCalls() == 0'u32
+    check api.destroyCalls() == 0'u32
+    check api.timerRegisterCalls() == 1'u32
+    check api.timerUnregisterCalls() == 1'u32
+    check api.fdRegisterCalls() == 0'u32
+    check api.fdUnregisterCalls() == 0'u32
+    check api.pipeCreateCalls() == 1'u32
+    check api.pipeCloseCalls() == 2'u32
+    check api.serviceSetupFailures() == 1'u32
+    check api.serviceCleanupFailures() == 0'u32
+    check api.mainThreadFailures() == 0'u32
+    check api.contractFailures() == 0'u32
+    check services.activeTimerCount == 0
+    check services.activeFdCount == 0
+    check controller.close().isOk
+    check controller.close().isOk
+    check instance.close().isOk
+    check instance.close().isOk
+    check observer.close().isOk
+    check observer.close().isOk
