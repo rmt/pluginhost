@@ -489,13 +489,12 @@ Allowed operations must be bounded and deterministic. JACK's documented real-tim
 - Runtime dependencies and their licenses MUST be documented. A JACK-backed run expects `libjack.so.0`; information commands do not require it. GUI builds may require X11/Xlib or XCB libraries.
 - The initial source build MUST support Linux x86_64. Linux aarch64 SHOULD be supported once ABI CI is available.
 
+## 15. Reliability, diagnostics, and security
 - Diagnostics MUST identify the failing subsystem (`CLI`, `CLAP`, `VST3`,
   `JACK`, `GUI`, or `state`) and include plugin path/ID where relevant.
 - Host logs go to standard error. Data requested as JSON goes to standard output.
 - Every failure path MUST leave JACK ports, plugin objects, GUI resources, entry initialization, dynamic libraries, files, and PID files in a valid cleaned-up state.
 - Cleanup MUST be idempotent so partial initialization can use the same teardown path.
-- Diagnostics MUST identify the failing subsystem (`CLI`, `CLAP`, `JACK`, `GUI`, or `state`) and include plugin path/ID where relevant.
-- Host logs go to standard error. Data requested as JSON goes to standard output.
 - Plugin-provided log messages MUST be prefixed with severity and plugin identity.
 - Repeated real-time warnings MUST be rate-limited and include a suppressed/dropped count.
 - The host MUST never silently select the wrong descriptor from a multi-plugin library.
@@ -688,6 +687,7 @@ GUI, and regression gates pass. VST3 loading, scanning, and unloading execute
 third-party native code in-process and provide no crash isolation. The host
 uses the generated C ABI in production; an independently compiled C++ fixture
 is required for ABI evidence but is not a production dependency.
+
 ### 21.4 Explicit amendments to earlier sections
 
 #### Discovery and catalog
