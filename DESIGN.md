@@ -1043,3 +1043,70 @@ Implementation reviews must verify:
 - [ ] Unsupported capabilities are explicit rather than silently approximated.
 - [ ] Raw external API types do not leak into application/domain policy.
 - [ ] A new backend or plugin format can be added as a sibling adapter rather than by editing unrelated components.
+## 23. VST3 sibling adapter
+
+The VST3 expansion uses the existing format seam rather than translating
+native VST3 calls into CLAP structures. `JackBackend`, `MainReactor`,
+`RtProcessEndpoint`, Linux process control, and backend-neutral JACK-facing
+values remain shared. Native lifecycle, bus metadata, parameter queues, MIDI
+conversion, preset streams, host objects, and editor ownership live under a
+new `pluginhost/vst3/` adapter.
+
+The application composition is:
+
+```text
+HostSession
+  -> one InternalAudioSlice
+       -> one JackBackend
+       -> one ProcessorClient
+            -> Clap adapter or VST3 adapter
+  -> shared MainReactor
+```
+
+`ProcessorClient` is an internal control-plane capability, not a public
+embedding API. Its operations are identity, inactive prepare, start/stop,
+main-thread service, native reconfigure, state load/save, editor
+show/hide/service, and idempotent close. It returns copied format-specific
+observations and a borrowed, prevalidated POD `RtProcessEndpoint`; it never
+leaks raw VST3 or CLAP pointers into application/domain policy.
+
+The shared JACK-facing plan contains only media type, direction, grouping,
+channel order, copied names, and an adapter-owned opaque local identity.
+CLAP dialects and stable IDs remain in the CLAP plan. VST3 bus indices are
+layout-local and are never treated as persistent identities. An unchanged
+layout may retain JACK ports; a structural VST3 change conservatively loses
+affected external connections and reports them instead of reconnecting by
+index or name.
+
+### 23.1 VST3 ownership and thread model
+
+`Vst3Module` owns the canonical bundle path, selected architecture binary,
+checked DSO, module-entry/exit state, factory references, copied catalog, and
+mapping-retention policy. `Vst3Instance` owns each queried interface reference,
+initialization/termination ledger, stable host objects, component/controller
+connection state, process context, service registrations, state transactions,
+and editor view/frame/window. Every query reference is released exactly once;
+module exit and DSO close occur only after all dependent references are gone.
+
+The original process thread remains the VST3 main thread. Only the JACK
+process callback reaches the preallocated VST3 process context. It may call
+the processor's process method and bounded ABI containers, but never allocates,
+releases ownership, logs, performs I/O, calls GUI/state/lifecycle methods, or
+uses managed Nim containers. All VST3 host callbacks are stable-address,
+non-capturing, `raises: []` boundaries with explicit validation and audited
+generated-C call paths.
+
+The Linux VST3 run loop adapts `IRunLoop` to `MainReactor` with the existing
+256-FD/256-timer bounds, generation tokens, main-thread dispatch, retained
+handler references, duplicate rejection, self-unregistration safety, and
+deferred close. `IPlugFrame::resizeView` is synchronous: a changed accepted
+size is applied and acknowledged with `onSize` in the same call stack.
+
+### 23.2 VST3 verification boundary
+
+The generated C declarations are pinned and distinguished from handwritten
+Nim policy. ABI probes cover interface/vtable layouts, CIDs/IIDs, UTF-16,
+pointer adjustment, Linux entry exports, and bidirectional Nim/C++ calls.
+An independent C++ fixture is test-only. Every new process-reachable VST3
+callback and native container is added to the generated-C and allocation
+audit; CLAP-only evidence never certifies the VST3 path.

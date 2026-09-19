@@ -29,12 +29,16 @@ Each process hosts one plugin instance and owns one JACK client. Users can run m
 4. Be scriptable, predictable, and suitable for launch by shell scripts or Linux audio session managers.
 5. Keep the host substantially smaller and simpler than a DAW or general-purpose host such as Carla.
 6. Implement the host in idiomatic Nim while preserving C ABI correctness and real-time safety.
+7. Add staged native VST3 information and runtime support under section 21
+   without weakening the CLAP MVP contract.
 
-## 3. Non-goals for the initial release
+## 3. Non-goals for the initial CLAP MVP
+
+The following remain non-goals for the CLAP MVP. Staged VST3 support is
+specified separately in section 21 and does not relax these CLAP constraints.
 
 - Hosting more than one plugin instance in a process.
 - Plugin chains, mixing, routing, patchbay, or rack functionality.
-- VST, LV2, LADSPA, DSSI, AU, or Windows plugin support.
 - Bridging, sandboxing, or running a plugin in a separate process.
 - A generic host-generated parameter editor.
 - Parameter automation recording or playback.
@@ -485,8 +489,9 @@ Allowed operations must be bounded and deterministic. JACK's documented real-tim
 - Runtime dependencies and their licenses MUST be documented. A JACK-backed run expects `libjack.so.0`; information commands do not require it. GUI builds may require X11/Xlib or XCB libraries.
 - The initial source build MUST support Linux x86_64. Linux aarch64 SHOULD be supported once ABI CI is available.
 
-## 15. Reliability, diagnostics, and security
-
+- Diagnostics MUST identify the failing subsystem (`CLI`, `CLAP`, `VST3`,
+  `JACK`, `GUI`, or `state`) and include plugin path/ID where relevant.
+- Host logs go to standard error. Data requested as JSON goes to standard output.
 - Every failure path MUST leave JACK ports, plugin objects, GUI resources, entry initialization, dynamic libraries, files, and PID files in a valid cleaned-up state.
 - Cleanup MUST be idempotent so partial initialization can use the same teardown path.
 - Diagnostics MUST identify the failing subsystem (`CLI`, `CLAP`, `JACK`, `GUI`, or `state`) and include plugin path/ID where relevant.
@@ -628,3 +633,90 @@ Primary sources:
 - Carla and `carla-single`: <https://github.com/falkTX/Carla>
 - Nim CLAP bindings reviewed: <https://github.com/NimAudio/nim-clap>
 - Nim JACK wrapper reviewed: <https://github.com/SpotlightKid/jacket>
+## 21. VST3 scope expansion
+
+This section is operative for the staged VST3 workstream and supersedes the
+historical VST non-goal wording in section 3. It is additive to the reviewed
+CLAP MVP: every CLAP command, state format, lifecycle rule, limit, and
+acceptance case remains required. Each VST3 gate still requires explicit
+owner approval before implementation.
+
+### 21.1 First supported VST3 configuration
+
+Once the corresponding VST3 gate is accepted, the host MUST support selecting
+a native Linux x86_64 VST3 bundle in addition to a CLAP library. The process
+still owns exactly one selected processor instance and one JACK client. The
+first supported VST3 configuration is:
+
+- VST3 SDK 3.8.1, tag `v3.8.1_build_84`, through Steinberg's generated C API.
+- Native Linux x86_64 bundles with matching ELF architecture only.
+- Float32 real-time JACK processing with grouped buses flattened to mono JACK
+  ports and distinct input/output storage.
+- Ordinary main and auxiliary audio/event buses within named host bounds;
+  control-voltage buses, float64-only processors, offline processing, and
+  transport/tempo synchronization are rejected explicitly.
+- MIDI 1.0 note, pressure, mapped controller/pitch, supported program, SysEx,
+  and representable output conversions with preserved sample offsets.
+- Controller-to-processor and processor-to-controller normalized parameter
+  transport without a generic host editor or automation recorder.
+- Optional X11/XEmbed editor hosting with main-thread timers and FDs. GUI
+  failure is headless fallback unless `--require-gui` is selected.
+- Bounded standard `.vstpreset` load before activation and save after clean
+  signal shutdown. CLAP raw state files remain unchanged.
+
+VST3 is identified by bundle path and processor CID. Controller CIDs are not
+selectable processors. A `.vst3` directory is one terminal discovery candidate;
+inner binaries and flat `.vst3` files are rejected. Existing CLAP discovery
+roots and precedence remain unchanged. With no explicit scan roots, VST3
+standard roots are searched after the CLAP roots. Explicit roots may contain
+both formats, and format identity is retained in catalog and JSON output.
+
+### 21.2 Explicit VST3 non-goals
+
+VST2, Windows/Wine/yabridge, 32-bit bridging, native Wayland hosting, float64
+conversion, offline rendering, sandboxing, routing/mixing, JACK transport,
+tempo synchronization, automation recording/playback, generic parameter UI,
+preset browsing, full MPE/note-expression/MIDI 2 translation, automatic JACK
+connections, and multi-instance embedding remain outside this expansion.
+Unsupported optional VST3 interfaces are not advertised.
+
+### 21.3 Availability and safety
+
+VST3 `list` and `scan` become available after the catalog gate. VST3 `run`
+remains unavailable until the complete staged runtime, state, reconfiguration,
+GUI, and regression gates pass. VST3 loading, scanning, and unloading execute
+third-party native code in-process and provide no crash isolation. The host
+uses the generated C ABI in production; an independently compiled C++ fixture
+is required for ABI evidence but is not a production dependency.
+### 21.4 Explicit amendments to earlier sections
+
+#### Discovery and catalog
+
+VST3 discovery MUST use terminal `.vst3` bundle directories, canonicalize
+aliases before deduplication, preserve CLAP precedence, and retain format,
+bundle path, processor CID, and native factory index in copied catalog data.
+`list` and `scan` MUST never create a processor instance or open JACK, X11, or
+D-Bus.
+
+#### Lifecycle and real-time operation
+
+VST3 lifecycle ownership MUST record every acquired interface reference and
+every successful state transition. The JACK process path MUST obey the same
+allocation, blocking, logging, managed-memory, and foreign-exception
+prohibitions as the CLAP path.
+
+#### GUI and state
+
+VST3 GUI operations MUST remain on the main thread and synchronous resize MUST
+complete in the resize callback stack. VST3 state persistence MUST use bounded
+seekable streams and standard `.vstpreset` component/controller chunks; CLAP
+state files remain unchanged.
+
+#### ABI and release acceptance
+
+Every VST3 C ABI declaration used by production code MUST have generated-header
+size, alignment, offset, and function-pointer evidence. Independent C++
+fixtures MUST exercise bidirectional calls, pointer adjustment, interface
+fallbacks, failed initialization, reference accounting, and repeated cleanup.
+The release acceptance matrix MUST include both formats and MUST fail when a
+required VST3 prerequisite is unavailable.

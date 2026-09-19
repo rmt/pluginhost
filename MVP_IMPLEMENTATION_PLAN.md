@@ -1062,3 +1062,72 @@ Each candidate requires requirements/design updates and, where architectural, an
 ## 23. First action after each review gate
 
 After the human approves a completed increment or review unit, update the progress table, current state, verification counts, and next-session gate. Increment 10 and review units 10A, 10B, and 10C are approved; review units 11A and 11B, review unit 11C, the scenario 7 follow-up, and the final RC completion evidence are approved after human review. The final selected-version `nimble all` run passed the pre-existing 279-case baseline plus ten focused 11C cases. The owner-supplied 2026-09-12 `nimble sanitize` run passed generated auditing, all nine ASan/UBSan RT cases, the required negative canary, and all twelve Valgrind hardening cases; Memcheck reported 619 allocations and 619 frees, zero bytes in use at exit, three inherited descriptors only, zero errors, and zero suppressions. The approved `0.1.0-rc.1` x86_64 artifact is 1,094,232 bytes, depends eagerly only on `libm.so.6` and `libc.so.6`, and has SHA-256 `dc0229a41de0800aa499f574151800218cd79d8be05f6932870cafe996d7ac8c`. Increment 11 is closed. Increment 12 has not started and requires explicit owner direction; native Wayland, JACK1/JACK2 validation where unavailable, aarch64 release support, and richer compatible-port reconnection remain explicit constraints rather than silently accepted release claims.
+## 24. VST3 expansion workstream
+
+This workstream is separate from the approved CLAP 0.1.0 increments. It does
+not change the historical approval rows or start the unreleased MVP increment.
+The VST3 scope amendment is accepted for implementation planning; each gate
+still requires its own owner review before the next gate begins.
+
+### V0 — Scope and boundary
+
+**Status:** Approved for implementation planning; generated C ABI selected.
+
+The V0 contract is recorded in `REQUIREMENTS.md §21`, `DESIGN.md §23`, and
+ADR 0010. Production code remains Nim using Steinberg's generated C API.
+Independent C++ is a test-only interoperability dependency. The first
+configuration is native Linux x86_64, one processor/one JACK client, float32
+JACK processing, X11/XEmbed editor support, bounded `.vstpreset` state, and
+explicit rejection of the documented non-goals. VST3 `run` is unavailable
+until V6.
+
+### V1A — ABI and module ownership
+
+Vendor the pinned generated C declarations and license/provenance files,
+bind only the interfaces used by this gate, implement canonical CID
+parsing, architecture-aware bundle resolution, `ModuleEntry`,
+`GetPluginFactory`, and `ModuleExit` ownership, and add independent C++ ABI
+fixtures. Cover failed entry, missing symbols, null factories, interface
+reference accounting, and repeated cleanup.
+
+### V1B — Catalog and discovery
+
+Add VST3 terminal bundle candidates, official Linux roots, canonical
+deduplication, processor-only class filtering, dense displayed indices,
+canonical 32-hex CIDs, mixed-format catalog/output values, and real VST3
+`list`/`scan`. Listing and scanning must not create instances or open JACK,
+X11, or D-Bus. VST3 `run` remains an explicit unavailable capability.
+
+### V2A/V2B — Lifecycle and headless processing
+
+Add the internal `ProcessorClient` composition seam, host objects and
+bounded `IRunLoop`, separate/combined component/controller ownership,
+seekable streams, buses, float32 setup, preallocated process data, and the
+headless JACK process endpoint. Extend ABI and real-time audits for every
+new native callback.
+
+### V3 — Parameters and MIDI
+
+Implement bounded normalized parameter queues, controller gestures,
+processor observations, MIDI-1 note/pressure/controller/program mapping,
+bounded complete SysEx, and representable output conversion with exact
+offsets and overflow diagnostics.
+
+### V4A/V4B — State and reconfiguration
+
+Implement standard bounded `.vstpreset` component/controller chunks and
+atomic transactions, then quiescent restart, latency, bus, parameter-map,
+JACK rate/block, and full component-reload handling.
+
+### V5A/V5B — X11 editor
+
+Implement VST3 editor attachment, synchronous resize, XEmbed input/focus,
+content scale, hide/show/recreate behavior, and run-loop service lifetime
+under Xvfb and independent editor fixtures.
+
+### V6 — Public cutover
+
+Enable VST3 `run` only after all preceding internal gates pass. Preserve all
+CLAP behavior, diagnostics, options, state formats, and regression evidence.
+Wire focused VST3 ABI, fixture, RT, JACK, and GUI tasks into the strict
+aggregate. Missing prerequisites fail rather than produce a false pass.
