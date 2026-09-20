@@ -413,22 +413,18 @@ proc fixedUtf16Result(value: openArray[uint16]): Result[string] =
     let unit = uint32(value[index])
     var codepoint = unit
     if unit >= 0xD800'u32 and unit <= 0xDBFF'u32:
-      if index + 1 >= value.len:
-        return failure[string](hostError(
-          hsVst3, hekVst3Descriptor,
-          "VST3 UTF-16 metadata has an unterminated surrogate pair"))
-      let low = uint32(value[index + 1])
-      if low < 0xDC00'u32 or low > 0xDFFF'u32:
-        return failure[string](hostError(
-          hsVst3, hekVst3Descriptor,
-          "VST3 UTF-16 metadata has an invalid surrogate pair"))
-      codepoint = 0x10000'u32 + ((unit - 0xD800'u32) shl 10) +
-        (low - 0xDC00'u32)
-      inc index
+      if index + 1 < value.len:
+        let low = uint32(value[index + 1])
+        if low >= 0xDC00'u32 and low <= 0xDFFF'u32:
+          codepoint = 0x10000'u32 + ((unit - 0xD800'u32) shl 10) +
+            (low - 0xDC00'u32)
+          inc index
+        else:
+          codepoint = 0xFFFD'u32
+      else:
+        codepoint = 0xFFFD'u32
     elif unit >= 0xDC00'u32 and unit <= 0xDFFF'u32:
-      return failure[string](hostError(
-        hsVst3, hekVst3Descriptor,
-        "VST3 UTF-16 metadata contains an unpaired low surrogate"))
+      codepoint = 0xFFFD'u32
     appendUtf8(output, codepoint)
     inc index
   if index == value.len:

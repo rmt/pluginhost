@@ -1,5 +1,6 @@
 import std/[algorithm, json, os, osproc, streams, strutils, unittest]
 
+import pluginhost/app/catalog_output
 import pluginhost/discovery/scanner
 import pluginhost/domain/[errors, plugin_catalog]
 import pluginhost/platform/linux/dynlib
@@ -99,11 +100,15 @@ suite "VST3 catalog and discovery boundary":
     check loaded.value.descriptors.len == 1
     check loaded.value.descriptors[0].vendor == "pluginhost VST3 fixture"
     check loaded.value.descriptors[0].features.len == 0
-
-  test "malformed UTF-16 metadata and textual CIDs are rejected":
+  test "malformed UTF-16 and narrow metadata are replaced safely":
     let unicode = loadVst3Catalog(fixturePath("malformed_unicode"))
-    check not unicode.isOk
-    check unicode.error.kind == hekVst3Descriptor
+    require unicode.isOk
+    check unicode.value.descriptors[0].name == "�"
+    let invalidUtf8 = loadVst3Catalog(fixturePath("invalid_utf8_metadata"))
+    require invalidUtf8.isOk
+    check invalidUtf8.value.descriptors[0].vendor == "�"
+    let rendered = renderCatalogJson(unicode.value)
+    check parseJson(rendered)["plugins"][0]["name"].getStr() == "�"
 
     let malformed = parseVst3Uid("00112233445566778899AABBCCDDEEFG")
     check not malformed.isOk
@@ -154,6 +159,15 @@ suite "VST3 catalog and discovery boundary":
     check scan.errorOutput.len == 0
     check parseJson(scan.output)["plugins"][0]["format"].getStr() == "vst3"
 
+
+    let inner = fixturePath("valid") / "Contents" / "x86_64-linux" / "valid.so"
+    let innerList = runHost(@["list", inner])
+    check innerList.exitCode == ExitClap
+    check innerList.errorOutput.contains("inside a VST3 bundle")
+
+    let innerRun = runHost(@[inner])
+    check innerRun.exitCode == ExitClap
+    check innerRun.errorOutput.contains("inside a VST3 bundle")
     let run = runHost(@[fixturePath("valid")])
     check run.exitCode == ExitClap
     check run.output.len == 0

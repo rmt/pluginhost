@@ -1,4 +1,3 @@
-import std/strutils
 
 import ./[catalog_output, host_session, run_config]
 import ../clap/loader as clap_loader
@@ -9,14 +8,26 @@ import ../version
 
 import ../vst3/catalog as vst3_catalog
 
+proc vst3InnerPathError(path: string): HostError =
+  hostError(
+    hsVst3,
+    hekVst3Path,
+    "a path inside a VST3 bundle is not a selectable plugin",
+    path,
+  )
+
 proc loadPluginCatalog(path: string): Result[PluginCatalog] =
-  if path.toLowerAscii.endsWith(".vst3"):
-    vst3_catalog.loadVst3Catalog(path)
-  else:
-    clap_loader.loadCatalog(path)
+  if vst3_catalog.isVst3InnerPath(path):
+    return failure[PluginCatalog](vst3InnerPathError(path))
+  if vst3_catalog.isVst3BundlePath(path):
+    return vst3_catalog.loadVst3Catalog(path)
+  clap_loader.loadCatalog(path)
 
 proc executeRun(config: RunConfig; errorOutput: File): int =
-  if config.pluginPath.toLowerAscii.endsWith(".vst3"):
+  if vst3_catalog.isVst3InnerPath(config.pluginPath):
+    errorOutput.writeDiagnostic(vst3InnerPathError(config.pluginPath))
+    return ExitClap
+  if vst3_catalog.isVst3BundlePath(config.pluginPath):
     errorOutput.writeDiagnostic(hostError(
       hsVst3,
       hekVst3Unavailable,

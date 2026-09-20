@@ -455,6 +455,7 @@ proc compileVst3Fixtures() =
   compileVst3FixtureVariant("duplicate_cid", 17)
   compileVst3FixtureVariant("unicode_metadata", 18)
   compileVst3FixtureVariant("malformed_unicode", 19)
+  compileVst3FixtureVariant("invalid_utf8_metadata", 20)
 
 proc runVst3AbiTests() =
   exec "mkdir -p build/abi build/nimcache/vst3-abi build/test"

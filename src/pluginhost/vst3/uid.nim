@@ -1,4 +1,5 @@
 import ../domain/[errors, result]
+import ../support/utf8
 import ./ffi
 
 proc hexDigit(value: uint8): char {.inline.} =
@@ -68,4 +69,4 @@ proc fixedCStringResult*(value: openArray[char]): Result[string] =
   var text = newString(length)
   for index in 0 ..< length:
     text[index] = value[index]
-  success(move(text))
+  success(replaceInvalidUtf8(move(text)))

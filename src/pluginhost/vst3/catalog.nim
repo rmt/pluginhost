@@ -9,6 +9,22 @@ proc catalogCleanupError(primary, cleanup: HostError): HostError =
   if primary.context.len > 0:
     result.context.add(" (" & primary.context & ")")
 
+proc isVst3BundlePath*(path: string): bool =
+  path.toLowerAscii.endsWith(".vst3")
+
+proc isVst3InnerPath*(path: string): bool =
+  if isVst3BundlePath(path):
+    return false
+  var parent = parentDir(path)
+  while parent.len > 0:
+    if isVst3BundlePath(parent):
+      return true
+    let next = parentDir(parent)
+    if next == parent:
+      break
+    parent = next
+  false
+
 proc classFeatures(subCategories: string): seq[string] =
   for value in subCategories.split({',', '|'}):
     let feature = value.strip()

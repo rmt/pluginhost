@@ -415,6 +415,9 @@ class FixtureFactory final : public IPluginFactory {
 #if PLUGINHOST_VST3_FIXTURE_MODE == 18
     std::memcpy(info->vendor, "V\xc3\xa4ndor \xe2\x9c\x93", 11);
     std::memcpy(info->version, "2.0-\xc3\xbc", 7);
+#elif PLUGINHOST_VST3_FIXTURE_MODE == 20
+    info->vendor[0] = static_cast<char>(0xFF);
+    std::memcpy(info->version, "1.0", 4);
 #else
     std::memcpy(info->vendor, "pluginhost", 10);
     std::memcpy(info->version, "1.0", 4);
