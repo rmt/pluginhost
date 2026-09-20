@@ -1,0 +1,17 @@
+VST3 generated C API
+=====================
+
+Source: https://github.com/steinbergmedia/vst3_c_api
+Tag: v3.8.1_build_84
+Commit: 93a116f7c6c52a317ec3aaee9b13789068b5234e
+File: vst3_c_api.h
+
+SDK context:
+  vst3sdk tag v3.8.1_build_84
+  root commit 3cdf9ca5d1f5b1b21e0a86832aa4abe55607bd96
+
+The header is generated upstream and is vendored unchanged. Production code
+binds only the interfaces used by the reviewed VST3 gates. The generated API
+license text is retained in LICENSE.txt. Its README's dual-license wording
+conflicts with the tagged license text; this discrepancy remains documented
+for redistribution review.

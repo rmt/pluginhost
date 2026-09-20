@@ -59,6 +59,9 @@ proc libraryPath*(library: DynamicLibrary): string {.inline.} =
 proc isOpen*(library: DynamicLibrary): bool {.inline.} =
   library.handle != nil
 
+proc nativeHandle*(library: DynamicLibrary): pointer {.inline.} =
+  library.handle
+
 proc openDynamicLibrary*(path: string;
                          keepLoaded = false): Result[DynamicLibrary] =
   if path.len == 0:

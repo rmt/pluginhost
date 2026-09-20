@@ -426,6 +426,42 @@ proc runUnitTests() =
        " --nimcache:build/nimcache/tests --out:build/test/all_tests " &
        "tests/all_tests.nim"
 
+proc compileVst3FixtureVariant(name: string; mode: int) =
+  exec "mkdir -p build/fixtures/vst3/" & name &
+       ".vst3/Contents/x86_64-linux"
+  exec "c++ -std=c++17 -fPIC -shared -fvisibility=hidden " &
+       "-Wall -Wextra -Werror -DPLUGINHOST_VST3_FIXTURE_MODE=" & $mode &
+       " tests/fixtures/vst3/v1a_fixture.cpp -o build/fixtures/vst3/" &
+       name & ".vst3/Contents/x86_64-linux/" & name & ".so"
+
+proc compileVst3Fixtures() =
+  exec "mkdir -p build/fixtures/vst3"
+  compileVst3FixtureVariant("valid", 0)
+  compileVst3FixtureVariant("entry_reject", 1)
+  compileVst3FixtureVariant("missing_exit", 2)
+  compileVst3FixtureVariant("missing_factory", 3)
+  compileVst3FixtureVariant("null_factory", 4)
+  compileVst3FixtureVariant("v2_only", 5)
+  compileVst3FixtureVariant("base_only", 6)
+  compileVst3FixtureVariant("query_fail", 7)
+  compileVst3FixtureVariant("query_null", 8)
+  compileVst3FixtureVariant("factory_info_fail", 9)
+  compileVst3FixtureVariant("negative_count", 10)
+  compileVst3FixtureVariant("excessive_count", 11)
+  compileVst3FixtureVariant("malformed_factory", 12)
+  compileVst3FixtureVariant("malformed_class", 13)
+
+proc runVst3AbiTests() =
+  exec "mkdir -p build/abi build/nimcache/vst3-abi build/test"
+  exec "cc -std=gnu11 -Wall -Wextra -Werror -Ivendor " &
+       "-c c/vst3_abi_probe.c -o build/abi/vst3_abi_probe.o"
+  compileVst3Fixtures()
+  exec "PLUGINHOST_VST3_FIXTURE_DIR=$PWD/build/fixtures/vst3 " &
+       "nim c -r --hints:off --path:src --path:tests " &
+       dependencyPathsClause() & " --nimcache:build/nimcache/vst3-abi " &
+       "--passL:build/abi/vst3_abi_probe.o " &
+       "--out:build/test/test_vst3_abi tests/abi/test_vst3_abi.nim"
+
 proc runAbiTests() =
   exec "mkdir -p build/abi build/nimcache/abi build/test"
   exec "cc -std=gnu11 -Wall -Wextra -Werror -Ic -Ivendor/clap/include " &
@@ -597,6 +633,8 @@ task test, "Build the executable and run the fast unit test suite":
 
 task testAbi, "Run C-versus-Nim ABI conformance tests":
   runAbiTests()
+task testVst3Abi, "Run VST3 generated-C and C++ fixture ABI checks":
+  runVst3AbiTests()
 
 task testFixtures, "Build and test the synthetic CLAP fixtures":
   compileTestBinary()

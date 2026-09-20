@@ -5,6 +5,7 @@ type
     hsInternal = "internal"
     hsPlatform = "platform"
     hsClap = "CLAP"
+    hsVst3 = "VST3"
     hsJack = "JACK"
     hsDiscovery = "discovery"
     hsGui = "GUI"
@@ -34,6 +35,13 @@ type
     hekClapProcess
     hekClapPorts
     hekClapRender
+    hekVst3Path
+    hekVst3Binary
+    hekVst3Symbol
+    hekVst3Entry
+    hekVst3Factory
+    hekVst3Descriptor
+    hekVst3Unload
     hekJackLibraryOpen
     hekJackSymbol
     hekJackLibraryClose
@@ -106,6 +114,8 @@ proc exitCode*(error: HostError): int =
       hekClapPluginCreate, hekClapPluginInit, hekClapActivation,
       hekClapStartProcessing, hekClapStopProcessing, hekClapDeactivation,
       hekClapProcess, hekClapPorts, hekClapRender,
+      hekVst3Path, hekVst3Binary, hekVst3Symbol, hekVst3Entry,
+      hekVst3Factory, hekVst3Descriptor, hekVst3Unload,
       hekDiscoveryRoot, hekDiscoveryTraversal, hekDiscoveryCandidate:
     ExitClap
   of hekGui:
