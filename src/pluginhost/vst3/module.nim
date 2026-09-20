@@ -322,6 +322,27 @@ proc openVst3Module*(path: string; keepLoaded = true): Result[Vst3Module] =
 
   success(move(module))
 
+proc createInstance*(module: Vst3Module; classId, interfaceId: Vst3Tuid):
+    Result[pointer] =
+  if not module.isOpen or module.factory == nil or module.factory.lpVtbl == nil or
+      module.factory.lpVtbl.createInstance == nil:
+    return failure[pointer](vst3Error(
+      hekVst3Factory, "VST3 module is not ready for instance creation",
+      module.bundlePath))
+  var objectPointer: pointer = nil
+  let code = module.factory.lpVtbl.createInstance(
+    cast[pointer](module.factory), cast[cstring](unsafeAddr classId[0]),
+    cast[cstring](unsafeAddr interfaceId[0]), addr objectPointer)
+  if code != Vst3ResultOk or objectPointer == nil:
+    if objectPointer != nil:
+      let base = cast[ptr Vst3FUnknown](objectPointer)
+      if base.lpVtbl != nil and base.lpVtbl.release != nil:
+        discard base.lpVtbl.release(objectPointer)
+    return failure[pointer](vst3Error(
+      hekVst3Factory, "VST3 factory could not create the requested instance",
+      module.bundlePath, "result=" & $code))
+  success(objectPointer)
+
 proc queryOptionalFactory(module: Vst3Module; iidText: string): Result[pointer] =
   var iidResult = parseVst3Uid(iidText)
   if not iidResult.isOk:
@@ -347,24 +368,47 @@ proc queryOptionalFactory(module: Vst3Module; iidText: string): Result[pointer] 
     ))
   success(objectPointer)
 
+proc validFactoryView(view: Vst3FactoryView): bool
+proc releaseQueriedFactory(view: var Vst3FactoryView)
+
 proc acquireFactoryView(module: Vst3Module): Result[Vst3FactoryView] =
   var v3 = queryOptionalFactory(module, Vst3Factory3Iid)
   if not v3.isOk:
     return failure[Vst3FactoryView](move(v3.error))
   if v3.value != nil:
-    return success(Vst3FactoryView(
-      objectPointer: v3.value, level: vflV3, ownsReference: true))
+    var view = Vst3FactoryView(
+      objectPointer: v3.value, level: vflV3, ownsReference: true)
+    if not view.validFactoryView():
+      view.releaseQueriedFactory()
+      return failure[Vst3FactoryView](vst3Error(
+        hekVst3Factory,
+        "VST3 queried factory interface is missing required callbacks",
+        module.bundlePath, "level=v3"))
+    return success(view)
 
   var v2 = queryOptionalFactory(module, Vst3Factory2Iid)
   if not v2.isOk:
     return failure[Vst3FactoryView](move(v2.error))
   if v2.value != nil:
-    return success(Vst3FactoryView(
-      objectPointer: v2.value, level: vflV2, ownsReference: true))
+    var view = Vst3FactoryView(
+      objectPointer: v2.value, level: vflV2, ownsReference: true)
+    if not view.validFactoryView():
+      view.releaseQueriedFactory()
+      return failure[Vst3FactoryView](vst3Error(
+        hekVst3Factory,
+        "VST3 queried factory interface is missing required callbacks",
+        module.bundlePath, "level=v2"))
+    return success(view)
 
-  success(Vst3FactoryView(
+  let view = Vst3FactoryView(
     objectPointer: cast[pointer](module.factory), level: vflBase,
-    ownsReference: false))
+    ownsReference: false)
+  if not view.validFactoryView():
+    return failure[Vst3FactoryView](vst3Error(
+      hekVst3Factory,
+      "VST3 base factory interface is missing required callbacks",
+      module.bundlePath, "level=base"))
+  success(view)
 proc factoryVtable(view: Vst3FactoryView): ptr Vst3PluginFactoryVtbl =
   case view.level
   of vflBase:
@@ -390,6 +434,34 @@ proc factoryVtable3(view: Vst3FactoryView): ptr Vst3PluginFactory3Vtbl =
   if view.level != vflV3:
     return nil
   cast[ptr Vst3PluginFactory3](view.objectPointer).lpVtbl
+
+proc validFactoryView(view: Vst3FactoryView): bool =
+  if view.objectPointer == nil:
+    return false
+  let base = view.factoryVtable()
+  if base == nil or base.queryInterface == nil or base.addRef == nil or
+      base.release == nil or base.getFactoryInfo == nil or
+      base.countClasses == nil or base.getClassInfo == nil or
+      base.createInstance == nil:
+    return false
+  case view.level
+  of vflBase:
+    true
+  of vflV2:
+    let extended = view.factoryVtable2()
+    extended != nil and extended.getClassInfo2 != nil
+  of vflV3:
+    let extended = view.factoryVtable2()
+    let unicode = view.factoryVtable3()
+    extended != nil and extended.getClassInfo2 != nil and unicode != nil
+
+proc releaseQueriedFactory(view: var Vst3FactoryView) =
+  if not view.ownsReference:
+    return
+  let base = view.factoryVtable()
+  if base != nil and base.release != nil:
+    discard base.release(view.objectPointer)
+  view.ownsReference = false
 
 proc appendUtf8(output: var string; codepoint: uint32) =
   if codepoint <= 0x7F'u32:

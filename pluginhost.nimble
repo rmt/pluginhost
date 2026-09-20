@@ -457,6 +457,30 @@ proc compileVst3Fixtures() =
   compileVst3FixtureVariant("malformed_unicode", 19)
   compileVst3FixtureVariant("invalid_utf8_metadata", 20)
 
+proc compileVst3V2aFixtureVariant(name: string; mode: int) =
+  exec "mkdir -p build/fixtures/vst3/" & name &
+       ".vst3/Contents/x86_64-linux"
+  exec "c++ -std=c++17 -fPIC -shared -fvisibility=hidden " &
+       "-Wall -Wextra -Werror -DPLUGINHOST_VST3_V2A_MODE=" & $mode &
+       " tests/fixtures/vst3/v2a_fixture.cpp -o build/fixtures/vst3/" &
+       name & ".vst3/Contents/x86_64-linux/" & name & ".so"
+
+proc compileVst3V2aFixtures() =
+  compileVst3V2aFixtureVariant("separate", 0)
+  compileVst3V2aFixtureVariant("component_init_fail", 1)
+  compileVst3V2aFixtureVariant("controller_init_fail", 2)
+  compileVst3V2aFixtureVariant("component_connect_fail", 3)
+  compileVst3V2aFixtureVariant("controller_connect_fail", 4)
+  compileVst3V2aFixtureVariant("combined", 5)
+  compileVst3V2aFixtureVariant("no_controller", 6)
+  compileVst3V2aFixtureVariant("state_notimpl", 7)
+  compileVst3V2aFixtureVariant("state_set_notimpl", 8)
+  compileVst3V2aFixtureVariant("malformed_buses", 9)
+  compileVst3V2aFixtureVariant("malformed_params", 10)
+  compileVst3V2aFixtureVariant("quarantine", 11)
+  compileVst3V2aFixtureVariant("retained_handler", 12)
+  compileVst3V2aFixtureVariant("retained_proxy", 13)
+  compileVst3V2aFixtureVariant("retained_stream", 14)
 proc runVst3AbiTests() =
   exec "mkdir -p build/abi build/nimcache/vst3-abi build/test"
   exec "cc -std=gnu11 -Wall -Wextra -Werror -Ivendor " &
@@ -476,6 +500,12 @@ proc runVst3CatalogTests() =
        "nim c -r --hints:off --path:src --path:tests " &
        dependencyPathsClause() & " --nimcache:build/nimcache/vst3-catalog " &
        "--out:build/test/test_vst3_catalog tests/fixtures/test_vst3_catalog.nim"
+proc runVst3V2aTests() =
+  compileVst3V2aFixtures()
+  exec "PLUGINHOST_VST3_V2A_FIXTURE_DIR=$PWD/build/fixtures/vst3 " &
+       "nim c -r --hints:off --path:src --path:tests " &
+       dependencyPathsClause() & " --nimcache:build/nimcache/vst3-v2a " &
+       "--out:build/test/test_vst3_v2a tests/fixtures/test_vst3_v2a.nim"
 
 proc runAbiTests() =
   exec "mkdir -p build/abi build/nimcache/abi build/test"
@@ -622,7 +652,6 @@ proc runGuiTests() =
     "tests/integration/test_x11_window_host.nim", "x11_window_host")
   compileControlIntegrationTest(
     "tests/integration/test_dbus_tray_icon.nim", "dbus_tray_icon")
-  exec "command -v readelf >/dev/null 2>&1 || { echo 'readelf is required for GUI tests' >&2; exit 1; }"
   exec "dependencies=$(readelf -d build/test/x11_window_host) || exit 1; " &
        "if printf '%s\\n' \"$dependencies\" | grep -Fq 'libX11.so'; then " &
        "echo 'unexpected eager libX11 dependency in X11 test host' >&2; exit 1; fi"
@@ -652,6 +681,8 @@ task testVst3Catalog, "Run VST3 discovery and catalog checks":
   runVst3CatalogTests()
 task testVst3Abi, "Run VST3 generated-C and C++ fixture ABI checks":
   runVst3AbiTests()
+task testVst3V2a, "Run VST3 V2A lifecycle, host, and run-loop checks":
+  runVst3V2aTests()
 
 task testFixtures, "Build and test the synthetic CLAP fixtures":
   compileTestBinary()
@@ -689,6 +720,7 @@ task all, "Run compile checks, build the executable, and run tests":
   runAbiTests()
   runVst3AbiTests()
   runVst3CatalogTests()
+  runVst3V2aTests()
   runRtTests()
   runClapFixtureTests()
   compileHardeningTests()

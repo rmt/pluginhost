@@ -13,6 +13,9 @@ proc vst3AbiOffset(fieldId: int32): uint64 {.
   importc: "pluginhost_vst3_abi_offset", cdecl, gcsafe, raises: [].}
 proc vst3AbiUidByte(index: int32): uint64 {.
   importc: "pluginhost_vst3_abi_uid_byte", cdecl, gcsafe, raises: [].}
+proc vst3LinuxResultValues(): uint64 {.
+  importc: "pluginhost_vst3_linux_result_values", cdecl, gcsafe, raises: [].}
+
 
 proc vst3FieldId(typeId, fieldId: int32): int32 =
   typeId * 100 + fieldId
@@ -69,9 +72,56 @@ proc makeBundle(name, binaryName: string; elfClass, data: uint8;
     removeDir(result)
   let architecture = result / "Contents" / Vst3ArchitectureDir
   createDir(architecture)
+
   writeElfHeader(architecture / binaryName, elfClass, data, machine)
 
 suite "VST3 raw ABI and module ownership":
+  test "active Linux tresult values are exact":
+    check Vst3NoInterface == -1'i32
+    check Vst3ResultOk == 0'i32
+    check Vst3ResultFalse == 1'i32
+    check Vst3InvalidArgument == 2'i32
+    check Vst3NotImplemented == 3'i32
+    check vst3LinuxResultValues() ==
+      ((uint64(0xFFFF_FFFF'u32) shl 32) or
+       (uint64(0'u32) shl 24) or
+       (uint64(1'u32) shl 16) or
+       (uint64(2'u32) shl 8) or uint64(3'u32))
+  test "every used V2A vtable slot has an exact vendor offset":
+    let pointerBytes = uint64(sizeof(pointer))
+    for field in 1 .. 9:
+      check vst3AbiOffset(vst3FieldId(412, int32(field))) ==
+        pointerBytes * uint64(field - 1)
+    for field in 11 .. 14:
+      check vst3AbiOffset(vst3FieldId(412, int32(field))) ==
+        pointerBytes * uint64(field - 1)
+    for field in [1, 2, 3, 4, 5, 6, 9, 10, 17]:
+      check vst3AbiOffset(vst3FieldId(413, int32(field))) ==
+        pointerBytes * uint64(field - 1)
+    for field in 1 .. 6:
+      check vst3AbiOffset(vst3FieldId(414, int32(field))) ==
+        pointerBytes * uint64(field - 1)
+    for field in 1 .. 5:
+      check vst3AbiOffset(vst3FieldId(415, int32(field))) ==
+        pointerBytes * uint64(field - 1)
+    for field in 1 .. 7:
+      check vst3AbiOffset(vst3FieldId(416, int32(field))) ==
+        pointerBytes * uint64(field - 1)
+    for field in 1 .. 7:
+      check vst3AbiOffset(vst3FieldId(417, int32(field))) ==
+        pointerBytes * uint64(field - 1)
+    for field in 1 .. 11:
+      check vst3AbiOffset(vst3FieldId(418, int32(field))) ==
+        pointerBytes * uint64(field - 1)
+    for field in 1 .. 6:
+      check vst3AbiOffset(vst3FieldId(419, int32(field))) ==
+        pointerBytes * uint64(field - 1)
+    for field in 1 .. 7:
+      check vst3AbiOffset(vst3FieldId(420, int32(field))) ==
+        pointerBytes * uint64(field - 1)
+    for field in 1 .. 11:
+      check vst3AbiOffset(vst3FieldId(422, int32(field))) ==
+        pointerBytes * uint64(field - 1)
   test "generated C header layouts match the Nim boundary":
     check uint64(sizeof(Vst3Tuid)) == vst3AbiSize(401)
     check uint64(alignof(Vst3Tuid)) == vst3AbiAlign(401)
@@ -84,6 +134,41 @@ suite "VST3 raw ABI and module ownership":
     check uint64(sizeof(Vst3FUnknownVtbl)) == vst3AbiSize(407)
     check uint64(sizeof(Vst3PluginFactory2Vtbl)) == vst3AbiSize(408)
     check uint64(sizeof(Vst3PluginFactory3Vtbl)) == vst3AbiSize(409)
+    check uint64(sizeof(Vst3BusInfo)) == vst3AbiSize(410)
+    check uint64(sizeof(Vst3ParameterInfo)) == vst3AbiSize(411)
+    check uint64(sizeof(Vst3ComponentVtbl)) == vst3AbiSize(412)
+    check uint64(sizeof(Vst3EditControllerVtbl)) == vst3AbiSize(413)
+    check uint64(sizeof(Vst3ConnectionPointVtbl)) == vst3AbiSize(414)
+    check uint64(sizeof(Vst3HostApplicationVtbl)) == vst3AbiSize(415)
+    check uint64(sizeof(Vst3RunLoopVtbl)) == vst3AbiSize(416)
+    check uint64(sizeof(Vst3BStreamVtbl)) == vst3AbiSize(417)
+    check uint64(sizeof(Vst3AudioProcessorVtbl)) == vst3AbiSize(422)
+    check uint64(alignof(Vst3AudioProcessorVtbl)) == vst3AbiAlign(422)
+    check uint64(offsetOf(Vst3ComponentVtbl, initialize)) ==
+      vst3AbiOffset(vst3FieldId(412, 4))
+    check uint64(offsetOf(Vst3ComponentVtbl, getState)) ==
+      vst3AbiOffset(vst3FieldId(412, 14))
+    check uint64(offsetOf(Vst3EditControllerVtbl, getParameterInfo)) ==
+      vst3AbiOffset(vst3FieldId(413, 10))
+    check uint64(offsetOf(Vst3EditControllerVtbl, setComponentHandler)) ==
+      vst3AbiOffset(vst3FieldId(413, 17))
+    check uint64(offsetOf(Vst3ConnectionPointVtbl, connect)) ==
+      vst3AbiOffset(vst3FieldId(414, 4))
+    check uint64(offsetOf(Vst3ConnectionPointVtbl, notify)) ==
+      vst3AbiOffset(vst3FieldId(414, 6))
+    check uint64(offsetOf(Vst3HostApplicationVtbl, createInstance)) ==
+      vst3AbiOffset(vst3FieldId(415, 5))
+    check uint64(offsetOf(Vst3RunLoopVtbl, registerTimer)) ==
+      vst3AbiOffset(vst3FieldId(416, 6))
+    check uint64(offsetOf(Vst3BStreamVtbl, seek)) ==
+      vst3AbiOffset(vst3FieldId(417, 6))
+    check uint64(offsetOf(Vst3AttributeListVtbl, getBinary)) ==
+      vst3AbiOffset(vst3FieldId(418, 11))
+    check uint64(offsetOf(Vst3MessageVtbl, getAttributes)) ==
+      vst3AbiOffset(vst3FieldId(419, 6))
+    check uint64(offsetOf(Vst3ComponentHandlerVtbl, performEdit)) ==
+      vst3AbiOffset(vst3FieldId(420, 5))
+    check uint64(sizeof(Vst3PlugInterfaceSupportVtbl)) == vst3AbiSize(421)
     check uint64(offsetOf(Vst3FactoryInfo, flags)) ==
       vst3AbiOffset(vst3FieldId(402, 4))
     check uint64(offsetOf(Vst3ClassInfo, cid)) ==
@@ -111,6 +196,12 @@ suite "VST3 raw ABI and module ownership":
       check uint64(parsed.value[index]) == vst3AbiUidByte(int32(index))
     check not parseVst3Uid("0011").isOk
     check not parseVst3Uid("00112233445566778899AABBCCDDEEFG").isOk
+    let unknown = parseVst3Uid(Vst3FUnknownIid)
+    require unknown.isOk
+    check formatVst3Uid(unknown.value) == Vst3FUnknownIid
+    check unknown.value[0] == 0'u8
+    check unknown.value[8] == 0xC0'u8
+    check unknown.value[15] == 0x46'u8
 
   test "v3 factory uses an adjusted interface and calls back into Nim":
     var observerResult = openDynamicLibrary(fixtureBinary("valid"), keepLoaded = true)

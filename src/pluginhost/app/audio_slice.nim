@@ -9,6 +9,26 @@ import ../clap/[audio_process, event_bridge, ffi, gui_client, host_bridge, insta
 import ../domain/[errors, plugin_catalog, port_plan, result]
 import ../gui/plugin_client
 import ../jack/[backend, ports]
+import ./vst3_plugin_services
+
+type
+  PluginServiceAdapterKind* = enum
+    psakNone
+    psakClap
+    psakVst3
+
+  PluginServiceAdapter* = object
+    kind*: PluginServiceAdapterKind
+    clap*: ptr ClapMainThreadServices
+    vst3*: Vst3PluginServices
+
+proc clapPluginServiceAdapter*(services: ptr ClapMainThreadServices):
+    PluginServiceAdapter =
+  PluginServiceAdapter(kind: psakClap, clap: services)
+
+proc vst3PluginServiceAdapter*(services: Vst3PluginServices):
+    PluginServiceAdapter =
+  PluginServiceAdapter(kind: psakVst3, vst3: services)
 
 type
   InternalAudioSliceState* = enum
@@ -17,14 +37,15 @@ type
     iassActive
     iassQuiesced
     iassClosed
-
   InternalAudioSlice* = object
     instance: ClapInstance
     process: ClapAudioProcess
     backend: JackBackend
     portPlan: PortPlan
+    serviceAdapter: PluginServiceAdapter
     stateValue: InternalAudioSliceState
     reconnectionReport: JackReconnectionReport
+
   PluginLogSeverity* = enum
     plsDebug
     plsInfo
@@ -64,7 +85,6 @@ type
 proc `=destroy`*(slice: var InternalAudioSlice) =
   doAssert slice.stateValue in {iassEmpty, iassClosed},
     "an internal audio slice must be explicitly closed"
-
 proc `=copy`*(destination: var InternalAudioSlice;
               source: InternalAudioSlice) {.error:
   "InternalAudioSlice owns CLAP/JACK resources and cannot be copied; use move".}
@@ -79,6 +99,7 @@ proc `=sink`*(destination: var InternalAudioSlice;
   `=sink`(destination.process, source.process)
   `=sink`(destination.backend, source.backend)
   `=sink`(destination.portPlan, source.portPlan)
+  `=sink`(destination.serviceAdapter, source.serviceAdapter)
   destination.stateValue = source.stateValue
   `=sink`(destination.reconnectionReport, source.reconnectionReport)
 
@@ -127,6 +148,9 @@ proc cleanupConstructionFailure(slice: var InternalAudioSlice;
 
 proc state*(slice: InternalAudioSlice): InternalAudioSliceState {.inline.} =
   slice.stateValue
+
+proc pluginServiceAdapter*(slice: InternalAudioSlice): PluginServiceAdapter =
+  slice.serviceAdapter
 
 proc jackBackend*(slice: var InternalAudioSlice): var JackBackend =
   slice.backend
@@ -248,6 +272,7 @@ proc openInternalAudioSlice*(module: sink ClapModule;
                              guiEnabled = false):
     Result[InternalAudioSlice] =
   var slice = InternalAudioSlice(stateValue: iassEmpty)
+  slice.serviceAdapter = clapPluginServiceAdapter(mainServices)
   var created = createClapInstance(
     move(module), move(descriptor), mainServices, guiEnabled)
   if not created.isOk:

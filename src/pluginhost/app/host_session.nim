@@ -24,6 +24,7 @@ type
   HostSession* = object
     state*: SessionState
     audioSlice: InternalAudioSlice
+    compositionServices: PluginServiceAdapter
     gui: GuiController
     tray: TrayController
     guiIcon: GuiIcon
@@ -45,6 +46,9 @@ proc initHostSession*(): HostSession =
 proc hasDirtyState*(session: HostSession): bool {.inline.} =
   session.stateDirty
 
+proc compositionServiceAdapter*(session: HostSession): PluginServiceAdapter =
+  session.compositionServices
+
 proc attachInternalAudioSlice*(session: var HostSession;
                                slice: var InternalAudioSlice): Result[Unit] =
   if session.state != ssNew or session.audioSlice.state != iassEmpty or
@@ -55,6 +59,7 @@ proc attachInternalAudioSlice*(session: var HostSession;
         "; slice=" & $slice.state,
     ))
   session.audioSlice = move(slice)
+  session.compositionServices = session.audioSlice.pluginServiceAdapter()
   success()
 
 proc startInternalAudio*(session: var HostSession): Result[Unit] =
