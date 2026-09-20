@@ -1,7 +1,8 @@
 import std/[algorithm, os, posix, sets, strutils]
 
-import ../clap/loader
+import ../clap/loader as clap_loader
 import ../domain/[errors, plugin_catalog]
+import ../vst3/catalog as vst3_catalog
 import ./paths
 
 type
@@ -64,7 +65,8 @@ proc canonicalRoot(root: DiscoveryRoot; report: var ScanReport): string =
     result = expandFilename(root.path)
   except OSError as error:
     let errorCode = errno
-    if root.kind in {drkHome, drkSystem} and
+    if root.kind in {drkHome, drkSystem, drkVstHome, drkVstSystem,
+        drkExecutable} and
         missingRootError(errorCode):
       return
     report.addIssue(root.path, discoveryError(
@@ -81,35 +83,52 @@ proc canonicalRoot(root: DiscoveryRoot; report: var ScanReport): string =
       "source=" & $root.kind & "; detail=" & error.msg,
     ))
 
+proc isVst3Bundle(path: string): bool =
+  path.toLowerAscii.endsWith(".vst3")
+
 proc addCatalog(report: var ScanReport; canonicalPath: string;
-                seenCandidates: var HashSet[string]) =
+                seenCandidates: var HashSet[string];
+                seenPluginKeys: var HashSet[string]) =
   if canonicalPath in seenCandidates:
     return
   seenCandidates.incl(canonicalPath)
 
-  let catalog = loadCatalog(canonicalPath)
+  let catalog = if isVst3Bundle(canonicalPath):
+      vst3_catalog.loadVst3Catalog(canonicalPath)
+    else:
+      clap_loader.loadCatalog(canonicalPath)
   if not catalog.isOk:
     report.addIssue(canonicalPath, catalog.error)
     return
 
   for descriptor in catalog.value.descriptors:
+    let pluginKey = $descriptor.format & ":" & descriptor.id
+    if descriptor.format == pfVst3 and pluginKey in seenPluginKeys:
+      continue
+    if descriptor.format == pfVst3:
+      seenPluginKeys.incl(pluginKey)
     report.plugins.add(DiscoveredPlugin(
       path: catalog.value.canonicalPath,
       descriptor: descriptor,
     ))
 
 proc inspectCandidate(report: var ScanReport; candidatePath: string;
-                      seenCandidates: var HashSet[string]) =
+                      seenCandidates: var HashSet[string];
+                      seenPluginKeys: var HashSet[string]) =
+  let vst3 = isVst3Bundle(candidatePath)
   var canonicalPath: string
   try:
     let info = getFileInfo(candidatePath, followSymlink = true)
-    if info.kind != pcFile or info.isSpecial:
+    if vst3:
+      if info.kind != pcDir:
+        return
+    elif info.kind != pcFile or info.isSpecial:
       return
     canonicalPath = expandFilename(candidatePath)
   except OSError as error:
     report.addIssue(candidatePath, discoveryError(
       hekDiscoveryCandidate,
-      "could not canonicalize CLAP candidate",
+      "could not canonicalize plugin candidate",
       candidatePath,
       error.msg,
     ))
@@ -117,16 +136,17 @@ proc inspectCandidate(report: var ScanReport; candidatePath: string;
   except ValueError as error:
     report.addIssue(candidatePath, discoveryError(
       hekDiscoveryCandidate,
-      "could not canonicalize CLAP candidate",
+      "could not canonicalize plugin candidate",
       candidatePath,
       error.msg,
     ))
     return
 
-  addCatalog(report, canonicalPath, seenCandidates)
+  addCatalog(report, canonicalPath, seenCandidates, seenPluginKeys)
 
 proc walkDirectory(directory: string; report: var ScanReport;
-                   seenCandidates: var HashSet[string]) =
+                   seenCandidates: var HashSet[string];
+                   seenPluginKeys: var HashSet[string]) =
   var entries: seq[tuple[kind: PathComponent, path: string]]
   try:
     for kind, path in walkDir(directory, checkDir = true):
@@ -145,20 +165,20 @@ proc walkDirectory(directory: string; report: var ScanReport;
 
   for entry in entries:
     case entry.kind
-    of pcDir:
-      walkDirectory(entry.path, report, seenCandidates)
+    of pcDir, pcLinkToDir:
+      if isVst3Bundle(entry.path):
+        inspectCandidate(report, entry.path, seenCandidates, seenPluginKeys)
+      elif entry.kind == pcDir:
+        walkDirectory(entry.path, report, seenCandidates, seenPluginKeys)
     of pcFile, pcLinkToFile:
-      if entry.path.endsWith(".clap"):
-        inspectCandidate(report, entry.path, seenCandidates)
-    else:
-      # Nested symlink directories and special filesystem objects are not
-      # followed or loaded. A configured root itself was canonicalized above.
-      discard
+      if entry.path.toLowerAscii.endsWith(".clap"):
+        inspectCandidate(report, entry.path, seenCandidates, seenPluginKeys)
 
 proc scanConfiguredRoots*(roots: openArray[DiscoveryRoot]): ScanReport =
   ## Scans already ordered roots; useful for deterministic callers and tests.
   var seenRoots = initHashSet[string]()
   var seenCandidates = initHashSet[string]()
+  var seenPluginKeys = initHashSet[string]()
 
   for root in roots:
     let fallback = rootFallbackPath(root.path)
@@ -172,7 +192,10 @@ proc scanConfiguredRoots*(roots: openArray[DiscoveryRoot]): ScanReport =
     if canonical in seenRoots:
       continue
     seenRoots.incl(canonical)
-    walkDirectory(canonical, result, seenCandidates)
+    if isVst3Bundle(canonical):
+      inspectCandidate(result, canonical, seenCandidates, seenPluginKeys)
+    else:
+      walkDirectory(canonical, result, seenCandidates, seenPluginKeys)
 
 proc scanPlugins*(explicitRoots: openArray[string];
                   clapPath = getEnv("CLAP_PATH")): ScanReport =

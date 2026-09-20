@@ -3,11 +3,14 @@ import std/strutils
 import ./[errors, result]
 
 type
+  PluginFormat* = enum
+    pfClap = "clap"
+    pfVst3 = "vst3"
+
   PluginSelectorKind* = enum
     pskImplicitSingle
     pskId
     pskIndex
-
   PluginSelector* = object
     case kind*: PluginSelectorKind
     of pskImplicitSingle:
@@ -18,7 +21,9 @@ type
       pluginIndex*: int
 
   PluginDescriptor* = object
+    format*: PluginFormat
     index*: int
+    nativeIndex*: int
     id*: string
     name*: string
     vendor*: string
@@ -40,6 +45,12 @@ proc availableDescriptors(catalog: PluginCatalog): string =
       " (" & descriptor.name & ")")
   lines.join(", ")
 
+proc selectionSubsystem(catalog: PluginCatalog): HostSubsystem =
+  if catalog.canonicalPath.toLowerAscii.endsWith(".vst3"):
+    hsVst3
+  else:
+    hsClap
+
 proc selectionError(message: string; catalog: PluginCatalog;
                     context = ""): HostError =
   var detail = context
@@ -48,7 +59,7 @@ proc selectionError(message: string; catalog: PluginCatalog;
     if detail.len > 0:
       detail.add("; ")
     detail.add("available=" & available)
-  hostError(hsClap, hekPluginSelection, message, detail)
+  hostError(catalog.selectionSubsystem, hekPluginSelection, message, detail)
 
 proc selectDescriptor*(catalog: PluginCatalog;
                        selector: PluginSelector): Result[PluginDescriptor] =

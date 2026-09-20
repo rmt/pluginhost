@@ -385,6 +385,57 @@ proc factoryVtable2(view: Vst3FactoryView): ptr Vst3PluginFactory2Vtbl =
   of vflV3:
     cast[ptr Vst3PluginFactory2Vtbl](
       cast[ptr Vst3PluginFactory3](view.objectPointer).lpVtbl)
+
+proc factoryVtable3(view: Vst3FactoryView): ptr Vst3PluginFactory3Vtbl =
+  if view.level != vflV3:
+    return nil
+  cast[ptr Vst3PluginFactory3](view.objectPointer).lpVtbl
+
+proc appendUtf8(output: var string; codepoint: uint32) =
+  if codepoint <= 0x7F'u32:
+    output.add(char(codepoint))
+  elif codepoint <= 0x7FF'u32:
+    output.add(char(0xC0'u32 or (codepoint shr 6)))
+    output.add(char(0x80'u32 or (codepoint and 0x3F'u32)))
+  elif codepoint <= 0xFFFF'u32:
+    output.add(char(0xE0'u32 or (codepoint shr 12)))
+    output.add(char(0x80'u32 or ((codepoint shr 6) and 0x3F'u32)))
+    output.add(char(0x80'u32 or (codepoint and 0x3F'u32)))
+  else:
+    output.add(char(0xF0'u32 or (codepoint shr 18)))
+    output.add(char(0x80'u32 or ((codepoint shr 12) and 0x3F'u32)))
+    output.add(char(0x80'u32 or ((codepoint shr 6) and 0x3F'u32)))
+    output.add(char(0x80'u32 or (codepoint and 0x3F'u32)))
+proc fixedUtf16Result(value: openArray[uint16]): Result[string] =
+  var output = newStringOfCap(value.len)
+  var index = 0
+  while index < value.len and value[index] != 0'u16:
+    let unit = uint32(value[index])
+    var codepoint = unit
+    if unit >= 0xD800'u32 and unit <= 0xDBFF'u32:
+      if index + 1 >= value.len:
+        return failure[string](hostError(
+          hsVst3, hekVst3Descriptor,
+          "VST3 UTF-16 metadata has an unterminated surrogate pair"))
+      let low = uint32(value[index + 1])
+      if low < 0xDC00'u32 or low > 0xDFFF'u32:
+        return failure[string](hostError(
+          hsVst3, hekVst3Descriptor,
+          "VST3 UTF-16 metadata has an invalid surrogate pair"))
+      codepoint = 0x10000'u32 + ((unit - 0xD800'u32) shl 10) +
+        (low - 0xDC00'u32)
+      inc index
+    elif unit >= 0xDC00'u32 and unit <= 0xDFFF'u32:
+      return failure[string](hostError(
+        hsVst3, hekVst3Descriptor,
+        "VST3 UTF-16 metadata contains an unpaired low surrogate"))
+    appendUtf8(output, codepoint)
+    inc index
+  if index == value.len:
+    return failure[string](hostError(
+      hsVst3, hekVst3Descriptor,
+      "VST3 UTF-16 metadata is not NUL terminated"))
+  success(move(output))
 proc releaseFactoryView(module: Vst3Module; view: var Vst3FactoryView): Result[Unit] =
   if not view.ownsReference:
     return success()
@@ -439,6 +490,33 @@ proc classRecord(module: Vst3Module; view: Vst3FactoryView;
     record.category = category.value
     record.name = name.value
     return success(record)
+
+  if view.level == vflV3:
+    let v3table = factoryVtable3(view)
+    if v3table != nil and v3table.getClassInfoUnicode != nil:
+      var info: Vst3ClassInfoW
+      if v3table.getClassInfoUnicode(
+          view.objectPointer, index, addr info) == Vst3ResultOk:
+        record.cid = info.cid
+        var category = fixedCStringResult(info.category)
+        var name = fixedUtf16Result(info.name)
+        var subCategories = fixedCStringResult(info.subCategories)
+        var vendor = fixedUtf16Result(info.vendor)
+        var version = fixedUtf16Result(info.version)
+        var sdkVersion = fixedUtf16Result(info.sdkVersion)
+        if not category.isOk or not name.isOk or not subCategories.isOk or
+            not vendor.isOk or not version.isOk or not sdkVersion.isOk:
+          return failure[Vst3ClassRecord](vst3Error(
+            hekVst3Descriptor,
+            "VST3 Unicode class metadata is malformed",
+            module.bundlePath, "index=" & $index))
+        record.category = category.value
+        record.name = name.value
+        record.subCategories = subCategories.value
+        record.vendor = vendor.value
+        record.version = version.value
+        record.sdkVersion = sdkVersion.value
+        return success(record)
 
   let v2table = factoryVtable2(view)
   var info: Vst3ClassInfo2

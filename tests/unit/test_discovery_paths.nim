@@ -3,7 +3,7 @@ import std/[os, strutils, unittest]
 import pluginhost/discovery/[paths, scanner]
 import pluginhost/domain/errors
 
-suite "CLAP discovery root policy":
+suite "native discovery root policy":
   test "explicit roots are exclusive and preserve order":
     let roots = discoveryRoots(@["first", "second"], "/home/test", "/ignored:/also-ignored")
 
@@ -14,9 +14,10 @@ suite "CLAP discovery root policy":
     check roots[1].kind == drkExplicit
 
   test "standard roots precede non-empty CLAP_PATH entries":
-    let roots = discoveryRoots(@[], "/home/test", "/one::/two:")
+    let roots = discoveryRoots(@[], "/home/test", "/one::/two:",
+      "/usr/bin")
 
-    check roots.len == 4
+    check roots.len == 10
     check roots[0].path == "/home/test/.clap"
     check roots[0].kind == drkHome
     check roots[1].path == "/usr/lib/clap"
@@ -25,12 +26,30 @@ suite "CLAP discovery root policy":
     check roots[2].kind == drkEnvironment
     check roots[3].path == "/two"
     check roots[3].kind == drkEnvironment
+    check roots[4].path == "/home/test/.vst3"
+    check roots[4].kind == drkVstHome
+    check roots[5].path == "/usr/lib64/vst3"
+    check roots[5].kind == drkVstSystem
+    check roots[8].path == "/usr/local/lib/vst3"
+    check roots[8].kind == drkVstSystem
+    check roots[9].path == "/usr/bin/vst3"
+    check roots[9].kind == drkExecutable
 
   test "missing standard roots are skipped":
     let root = getTempDir() / ("pluginhost-missing-home-" &
       $getCurrentProcessId()) / ".clap"
     let report = scanConfiguredRoots(@[
       DiscoveryRoot(path: root, kind: drkHome),
+    ])
+
+    check report.plugins.len == 0
+    check report.issues.len == 0
+
+  test "missing standard VST3 roots are skipped":
+    let root = getTempDir() / ("pluginhost-missing-vst3-" &
+      $getCurrentProcessId()) / ".vst3"
+    let report = scanConfiguredRoots(@[
+      DiscoveryRoot(path: root, kind: drkVstHome),
     ])
 
     check report.plugins.len == 0

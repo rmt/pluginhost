@@ -41,6 +41,7 @@ type
     hekVst3Entry
     hekVst3Factory
     hekVst3Descriptor
+    hekVst3Unavailable
     hekVst3Unload
     hekJackLibraryOpen
     hekJackSymbol
@@ -115,7 +116,7 @@ proc exitCode*(error: HostError): int =
       hekClapStartProcessing, hekClapStopProcessing, hekClapDeactivation,
       hekClapProcess, hekClapPorts, hekClapRender,
       hekVst3Path, hekVst3Binary, hekVst3Symbol, hekVst3Entry,
-      hekVst3Factory, hekVst3Descriptor, hekVst3Unload,
+      hekVst3Factory, hekVst3Descriptor, hekVst3Unavailable, hekVst3Unload,
       hekDiscoveryRoot, hekDiscoveryTraversal, hekDiscoveryCandidate:
     ExitClap
   of hekGui:

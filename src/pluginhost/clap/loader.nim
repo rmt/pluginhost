@@ -375,7 +375,9 @@ proc readCatalog*(module: ClapModule): Result[PluginCatalog] =
 
     ids.incl(id.value)
     descriptors.add(PluginDescriptor(
+      format: pfClap,
       index: index,
+      nativeIndex: index,
       id: move(id.value),
       name: move(name.value),
       vendor: move(vendor.value),

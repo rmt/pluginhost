@@ -6,17 +6,17 @@ import ./run_config
 import ../domain/[errors, result]
 
 let commandParser = newParser("pluginhost"):
-  help("""Host one native CLAP plugin as a JACK client.
+  help("""Inspect native CLAP or VST3 plugins; host one CLAP plugin as a JACK client.
 
 The 'run' subcommand may be omitted: pluginhost [run options] PLUGIN_PATH""")
   flag("-V", "--version", shortcircuit = true,
        help = "Display version information")
 
   command("run"):
-    help("Run one CLAP plugin as a JACK client.")
+    help("Run one CLAP plugin as a JACK client; VST3 run is unavailable until V6.")
     flag("-V", "--version", shortcircuit = true,
          help = "Display version information")
-    option("--plugin-id", help = "Select a descriptor by stable CLAP ID")
+    option("--plugin-id", help = "Select a descriptor by stable native plugin ID")
     option("--plugin-index",
            help = "Select a descriptor by zero-based bundle index")
     option("--client-name", help = "Request a JACK client name")
@@ -33,17 +33,17 @@ The 'run' subcommand may be omitted: pluginhost [run options] PLUGIN_PATH""")
     option("--pid-file", help = "Write the running process ID to this file")
     flag("-v", "--verbose", help = "Enable diagnostic logging")
     flag("-q", "--quiet", help = "Suppress non-error host messages")
-    arg("plugin_path", help = "Path to a native .clap plugin")
+    arg("plugin_path", help = "Path to a native .clap or .vst3 plugin")
 
   command("list"):
-    help("List the CLAP descriptors in one plugin library.")
+    help("List descriptors in one CLAP or VST3 plugin library.")
     flag("-V", "--version", shortcircuit = true,
          help = "Display version information")
     flag("--json", help = "Write machine-readable JSON")
-    arg("plugin_path", help = "Path to a native .clap plugin")
+    arg("plugin_path", help = "Path to a native .clap or .vst3 plugin")
 
   command("scan"):
-    help("Scan explicit or standard directories for CLAP plugins.")
+    help("Scan explicit or standard directories for CLAP and VST3 plugins.")
     flag("-V", "--version", shortcircuit = true,
          help = "Display version information")
     flag("--json", help = "Write machine-readable JSON")

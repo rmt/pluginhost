@@ -40,7 +40,8 @@ suite "plugin catalog rendering":
     check parsed["path"].getStr() == "/plugins/example.clap"
     check parsed["plugins"].len == 1
     let plugin = parsed["plugins"][0]
-    check plugin.len == 6
+    check plugin.len == 7
+    check plugin["format"].getStr() == "clap"
     check plugin["index"].getInt() == 0
     check plugin["id"].getStr() == "org.example.synth"
     check plugin["name"].getStr() == "Example Synth"
@@ -60,7 +61,7 @@ suite "plugin catalog rendering":
     check not rendered.contains("Unsafe\n")
 
   test "an empty human catalog reports its state truthfully":
-    check renderCatalogHuman(PluginCatalog()).contains("No CLAP")
+    check renderCatalogHuman(PluginCatalog()).contains("No plugins")
 
   test "scan output groups descriptors by canonical library":
     let report = ScanReport(

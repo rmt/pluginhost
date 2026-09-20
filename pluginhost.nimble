@@ -450,6 +450,11 @@ proc compileVst3Fixtures() =
   compileVst3FixtureVariant("excessive_count", 11)
   compileVst3FixtureVariant("malformed_factory", 12)
   compileVst3FixtureVariant("malformed_class", 13)
+  compileVst3FixtureVariant("multi_class", 15)
+  compileVst3FixtureVariant("controller_only", 16)
+  compileVst3FixtureVariant("duplicate_cid", 17)
+  compileVst3FixtureVariant("unicode_metadata", 18)
+  compileVst3FixtureVariant("malformed_unicode", 19)
 
 proc runVst3AbiTests() =
   exec "mkdir -p build/abi build/nimcache/vst3-abi build/test"
@@ -461,6 +466,15 @@ proc runVst3AbiTests() =
        dependencyPathsClause() & " --nimcache:build/nimcache/vst3-abi " &
        "--passL:build/abi/vst3_abi_probe.o " &
        "--out:build/test/test_vst3_abi tests/abi/test_vst3_abi.nim"
+
+proc runVst3CatalogTests() =
+  compileTestBinary()
+  compileVst3Fixtures()
+  exec "PLUGINHOST_VST3_FIXTURE_DIR=$PWD/build/fixtures/vst3 " &
+       "PLUGINHOST_TEST_BIN=$PWD/build/test/pluginhost " &
+       "nim c -r --hints:off --path:src --path:tests " &
+       dependencyPathsClause() & " --nimcache:build/nimcache/vst3-catalog " &
+       "--out:build/test/test_vst3_catalog tests/fixtures/test_vst3_catalog.nim"
 
 proc runAbiTests() =
   exec "mkdir -p build/abi build/nimcache/abi build/test"
@@ -633,6 +647,8 @@ task test, "Build the executable and run the fast unit test suite":
 
 task testAbi, "Run C-versus-Nim ABI conformance tests":
   runAbiTests()
+task testVst3Catalog, "Run VST3 discovery and catalog checks":
+  runVst3CatalogTests()
 task testVst3Abi, "Run VST3 generated-C and C++ fixture ABI checks":
   runVst3AbiTests()
 
@@ -670,6 +686,8 @@ task all, "Run compile checks, build the executable, and run tests":
   compileTestBinary()
   runUnitTests()
   runAbiTests()
+  runVst3AbiTests()
+  runVst3CatalogTests()
   runRtTests()
   runClapFixtureTests()
   compileHardeningTests()
