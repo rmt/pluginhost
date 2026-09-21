@@ -62,6 +62,29 @@ CLAP_PROCESS_ROOTS = (
     "pluginhost_clap_process_audio",
 )
 
+VST3_PROCESS_ROOTS = (
+    "pluginhost_vst3_process_audio",
+    "pluginhost_vst3_event_query",
+    "pluginhost_vst3_event_add_ref",
+    "pluginhost_vst3_event_release",
+    "pluginhost_vst3_event_count",
+    "pluginhost_vst3_event_get",
+    "pluginhost_vst3_event_add",
+    "pluginhost_vst3_queue_query",
+    "pluginhost_vst3_queue_add_ref",
+    "pluginhost_vst3_queue_release",
+    "pluginhost_vst3_queue_parameter_id",
+    "pluginhost_vst3_queue_point_count",
+    "pluginhost_vst3_queue_get_point",
+    "pluginhost_vst3_queue_add_point",
+    "pluginhost_vst3_changes_query",
+    "pluginhost_vst3_changes_add_ref",
+    "pluginhost_vst3_changes_release",
+    "pluginhost_vst3_changes_count",
+    "pluginhost_vst3_changes_get",
+    "pluginhost_vst3_changes_add",
+)
+
 CLAP_EVENT_ROOTS = (
     "pluginhost_clap_input_event_size",
     "pluginhost_clap_input_event_get",
@@ -124,6 +147,7 @@ ALLOWED_EXTERNAL_PREFIXES = (
     "pluginhost_rt_zero_outputs",
     "pluginhost_rt_process_fake",
     "pluginhost_rt_process",
+    "processProc_",
     "initAudioRoleGuard__",
     "initRtEngine__",
     "pluginhost_clap_event_cycle_",
@@ -286,7 +310,8 @@ def audit_main(nimcache: Path) -> int:
         audited.add(path)
         failures.extend(audit_complete_module(path, source))
 
-    all_roots = JACK_ROOTS + CLAP_ROOTS + CLAP_PROCESS_ROOTS + CLAP_EVENT_ROOTS
+    all_roots = JACK_ROOTS + CLAP_ROOTS + CLAP_PROCESS_ROOTS + \
+        VST3_PROCESS_ROOTS + CLAP_EVENT_ROOTS
     for root in all_roots:
         matches = find_marker(sources, root)
         if len(matches) != 1:
@@ -324,6 +349,35 @@ def audit_main(nimcache: Path) -> int:
             audio_path, audio_source, CLAP_PROCESS_ROOTS)
         failures.extend(audio_failures)
 
+    vst3_matches = [(path, source) for path, source in sources.items()
+                    if path.name == "@ppluginhost@svst3@saudio_process.nim.c"]
+    vst3_count = 0
+    if len(vst3_matches) != 1:
+        failures.append(
+            "expected one generated VST3 audio process module, "
+            f"found {len(vst3_matches)}"
+        )
+    else:
+        vst3_path, vst3_source = vst3_matches[0]
+        audited.add(vst3_path)
+        transport_matches = [(path, source) for path, source in sources.items()
+                             if path.name == "@ppluginhost@svst3@sparameter_transport.nim.c"]
+        if len(transport_matches) > 1:
+            failures.append(
+                "expected at most one generated VST3 parameter transport module, "
+                f"found {len(transport_matches)}"
+            )
+            vst3_transport_source = ""
+        elif len(transport_matches) == 1:
+            transport_path, vst3_transport_source = transport_matches[0]
+            audited.add(transport_path)
+        else:
+            vst3_transport_source = ""
+        vst3_failures, vst3_count = audit_closure(
+            vst3_path, vst3_source + "\n" + vst3_transport_source,
+            VST3_PROCESS_ROOTS)
+        failures.extend(vst3_failures)
+
     event_matches = [(path, source) for path, source in sources.items()
                      if path.name == "@ppluginhost@sclap@sevent_bridge.nim.c"]
     event_count = 0
@@ -351,7 +405,8 @@ def audit_main(nimcache: Path) -> int:
     paths += ", c/rt_atomic.h"
     print(
         "Complete generated callback audit passed "
-        f"({bridge_count + audio_count + event_count} CLAP callback/helper functions): {paths}"
+        f"({bridge_count + audio_count + event_count + vst3_count} "
+        f"CLAP/VST3 callback/helper functions): {paths}"
     )
     return 0
 

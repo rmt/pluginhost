@@ -53,6 +53,35 @@ const
   Vst3RestartRoutingChanged* = 1'i32 shl 9
   Vst3RestartKeyswitchChanged* = 1'i32 shl 10
   Vst3RestartAllKnown* = (1'i32 shl 11) - 1
+  Vst3ProcessModeRealtime* = 0'i32
+  Vst3ProcessModePrefetch* = 1'i32
+  Vst3ProcessModeOffline* = 2'i32
+  Vst3SymbolicSample32* = 0'i32
+  Vst3SymbolicSample64* = 1'i32
+  ## VST3 kContTimeValid is the only asserted state bit for the host's
+  ## free-running sample clock. No musical/system/tempo fields are asserted.
+  Vst3ProcessContextStateContinuousTimeValid* = 1'u32 shl 17
+  Vst3ProcessContextRequirementNeedContinousTimeSamples* = 1'u32 shl 1
+  Vst3ProcessContextSupportedRequirements* =
+    Vst3ProcessContextRequirementNeedContinousTimeSamples
+  Vst3ProcessContextRequirementNeedSystemTime* = 1'u32 shl 0
+  Vst3ProcessContextRequirementNeedProjectTimeMusic* = 1'u32 shl 2
+  Vst3ProcessContextRequirementNeedBarPositionMusic* = 1'u32 shl 3
+  Vst3ProcessContextRequirementNeedCycleMusic* = 1'u32 shl 4
+  Vst3ProcessContextRequirementNeedSamplesToNextClock* = 1'u32 shl 5
+  Vst3ProcessContextRequirementNeedTempo* = 1'u32 shl 6
+  Vst3ProcessContextRequirementNeedTimeSignature* = 1'u32 shl 7
+  Vst3ProcessContextRequirementNeedChord* = 1'u32 shl 8
+  Vst3ProcessContextRequirementNeedFrameRate* = 1'u32 shl 9
+  Vst3ProcessContextRequirementNeedTransportState* = 1'u32 shl 10
+  Vst3SpeakerArrEmpty* = 0'u64
+  Vst3SpeakerArrMono* = 1'u64 shl 19
+  Vst3SpeakerArrStereo* = (1'u64 shl 0) or (1'u64 shl 1)
+  Vst3AudioProcessorContextRequirementsIid* =
+    "2A654303EF764E3D95B5FE83730EF6D0"
+  Vst3ParameterChangesIid* = "A47796630BB64A56B44384A8466FEB9D"
+  Vst3ParamValueQueueIid* = "01263A18ED074F6F98C9D3564686F9BA"
+  Vst3EventListIid* = "3A2C4214346349FEB2C4F397B9695A44"
 type
   Vst3Tuid* = array[Vst3TuidBytes, uint8]
   Vst3FactoryInfo* {.bycopy.} = object
@@ -253,7 +282,8 @@ type
       cdecl, raises: [].}
     setProcessing*: proc(thisInterface: pointer; state: Vst3TBool): int32 {.
       cdecl, raises: [].}
-    process*: proc(thisInterface: pointer; data: pointer): int32 {.cdecl, raises: [].}
+    process*: proc(thisInterface: pointer; data: pointer): int32 {.
+      cdecl, gcsafe, raises: [].}
     getTailSamples*: proc(thisInterface: pointer): uint32 {.cdecl, raises: [].}
   Vst3AudioProcessor* {.bycopy.} = object
     lpVtbl*: ptr Vst3AudioProcessorVtbl
@@ -433,9 +463,145 @@ type
     tell*: proc(thisInterface: pointer; pos: ptr int64): int32 {.cdecl, raises: [].}
   Vst3BStream* {.bycopy.} = object
     lpVtbl*: ptr Vst3BStreamVtbl
+  Vst3SpeakerArrangement* = uint64
+  Vst3SampleRate* = float64
+  Vst3Sample32* = cfloat
+  Vst3Sample64* = float64
+  Vst3ProcessContext* {.bycopy.} = object
+    state*: uint32
+    sampleRate*: float64
+    projectTimeSamples*: int64
+    systemTime*: int64
+    continousTimeSamples*: int64
+    projectTimeMusic*: float64
+    barPositionMusic*: float64
+    cycleStartMusic*: float64
+    cycleEndMusic*: float64
+    tempo*: float64
+    timeSigNumerator*: int32
+    timeSigDenominator*: int32
+    chordKeyNote*: uint8
+    chordRootNote*: uint8
+    chordMask*: int16
+    smpteOffsetSubframes*: int32
+    frameRateFramesPerSecond*: uint32
+    frameRateFlags*: uint32
+    samplesToNextClock*: int32
+  Vst3NoteOnEvent* {.bycopy.} = object
+    channel*: int16
+    pitch*: int16
+    tuning*: cfloat
+    velocity*: cfloat
+    length*: int32
+    noteId*: int32
+  Vst3NoteOffEvent* {.bycopy.} = object
+    channel*: int16
+    pitch*: int16
+    velocity*: cfloat
+    noteId*: int32
+    tuning*: cfloat
+  Vst3DataEvent* {.bycopy.} = object
+    size*: uint32
+    dataType*: uint32
+    bytes*: ptr uint8
+  Vst3PolyPressureEvent* {.bycopy.} = object
+    channel*: int16
+    pitch*: int16
+    pressure*: cfloat
+    noteId*: int32
+  Vst3LegacyMidiCcOutEvent* {.bycopy.} = object
+    controlNumber*: uint8
+    channel*: int8
+    value*: int8
+    value2*: int8
+  Vst3Event* {.bycopy.} = object
+    busIndex*: int32
+    sampleOffset*: int32
+    ppqPosition*: float64
+    flags*: uint16
+    eventType*: uint16
+    payload*: array[24, uint8]
+  Vst3ProcessSetup* {.bycopy.} = object
+    processMode*: int32
+    symbolicSampleSize*: int32
+    maxSamplesPerBlock*: int32
+    sampleRate*: float64
+  Vst3AudioBusBuffers* {.bycopy.} = object
+    numChannels*: int32
+    silenceFlags*: uint64
+    channelBuffers32*: ptr ptr cfloat
+  Vst3EventListVtbl* {.bycopy.} = object
+    queryInterface*: proc(thisInterface: pointer; iid: ptr Vst3Tuid;
+                          obj: ptr pointer): int32 {.cdecl, raises: [].}
+    addRef*: proc(thisInterface: pointer): uint32 {.cdecl, raises: [].}
+    release*: proc(thisInterface: pointer): uint32 {.cdecl, raises: [].}
+    getEventCount*: proc(thisInterface: pointer): int32 {.cdecl, raises: [].}
+    getEvent*: proc(thisInterface: pointer; index: int32;
+                    event: ptr Vst3Event): int32 {.cdecl, raises: [].}
+    addEvent*: proc(thisInterface: pointer; event: ptr Vst3Event): int32 {.
+      cdecl, raises: [].}
+  Vst3EventList* {.bycopy.} = object
+    lpVtbl*: ptr Vst3EventListVtbl
+  Vst3ParamValueQueueVtbl* {.bycopy.} = object
+    queryInterface*: proc(thisInterface: pointer; iid: ptr Vst3Tuid;
+                          obj: ptr pointer): int32 {.cdecl, raises: [].}
+    addRef*: proc(thisInterface: pointer): uint32 {.cdecl, raises: [].}
+    release*: proc(thisInterface: pointer): uint32 {.cdecl, raises: [].}
+    getParameterId*: proc(thisInterface: pointer): Vst3ParamID {.cdecl, raises: [].}
+    getPointCount*: proc(thisInterface: pointer): int32 {.cdecl, raises: [].}
+    getPoint*: proc(thisInterface: pointer; index: int32;
+                    sampleOffset: ptr int32; value: ptr Vst3ParamValue): int32 {.
+      cdecl, raises: [].}
+    addPoint*: proc(thisInterface: pointer; sampleOffset: int32;
+                    value: Vst3ParamValue; index: ptr int32): int32 {.
+      cdecl, raises: [].}
+  Vst3ParamValueQueue* {.bycopy.} = object
+    lpVtbl*: ptr Vst3ParamValueQueueVtbl
+  Vst3ParameterChangesVtbl* {.bycopy.} = object
+    queryInterface*: proc(thisInterface: pointer; iid: ptr Vst3Tuid;
+                          obj: ptr pointer): int32 {.cdecl, raises: [].}
+    addRef*: proc(thisInterface: pointer): uint32 {.cdecl, raises: [].}
+    release*: proc(thisInterface: pointer): uint32 {.cdecl, raises: [].}
+    getParameterCount*: proc(thisInterface: pointer): int32 {.cdecl, raises: [].}
+    getParameterData*: proc(thisInterface: pointer; index: int32):
+      ptr Vst3ParamValueQueue {.cdecl, raises: [].}
+    addParameterData*: proc(thisInterface: pointer; id: ptr Vst3ParamID;
+                            index: ptr int32): ptr Vst3ParamValueQueue {.
+      cdecl, raises: [].}
+  Vst3ParameterChanges* {.bycopy.} = object
+    lpVtbl*: ptr Vst3ParameterChangesVtbl
+  Vst3ProcessData* {.bycopy.} = object
+    processMode*: int32
+    symbolicSampleSize*: int32
+    numSamples*: int32
+    numInputs*: int32
+    numOutputs*: int32
+    inputs*: ptr Vst3AudioBusBuffers
+    outputs*: ptr Vst3AudioBusBuffers
+    inputParameterChanges*: ptr Vst3ParameterChanges
+    outputParameterChanges*: ptr Vst3ParameterChanges
+    inputEvents*: ptr Vst3EventList
+    outputEvents*: ptr Vst3EventList
+    processContext*: ptr Vst3ProcessContext
+  Vst3ProcessContextRequirementsVtbl* {.bycopy.} = object
+    queryInterface*: proc(thisInterface: pointer; iid: ptr Vst3Tuid;
+                          obj: ptr pointer): int32 {.cdecl, raises: [].}
+    addRef*: proc(thisInterface: pointer): uint32 {.cdecl, raises: [].}
+    release*: proc(thisInterface: pointer): uint32 {.cdecl, raises: [].}
+    getProcessContextRequirements*: proc(thisInterface: pointer): uint32 {.
+      cdecl, raises: [].}
+  Vst3ProcessContextRequirements* {.bycopy.} = object
+    lpVtbl*: ptr Vst3ProcessContextRequirementsVtbl
 static:
   doAssert sizeof(Vst3Tuid) == 16
   doAssert sizeof(Vst3FactoryInfo) == 452
   doAssert sizeof(Vst3ClassInfo) == 116
   doAssert sizeof(Vst3ClassInfo2) == 440
   doAssert sizeof(Vst3ClassInfoW) == 696
+  doAssert sizeof(Vst3ProcessSetup) == 24
+  doAssert sizeof(Vst3AudioBusBuffers) == 24
+  doAssert sizeof(Vst3ProcessData) == 80
+  doAssert Vst3SymbolicSample32 == 0'i32
+  doAssert Vst3SymbolicSample64 == 1'i32
+  doAssert sizeof(Vst3Event) == 48
+  doAssert sizeof(Vst3ProcessContext) == 112

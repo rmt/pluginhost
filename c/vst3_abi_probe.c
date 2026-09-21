@@ -142,6 +142,24 @@ typedef Steinberg_tresult (*pluginhost_processor_process_signature)(
 typedef Steinberg_tresult (*pluginhost_processor_sample_signature)(
     void *, Steinberg_int32);
 typedef Steinberg_uint32 (*pluginhost_processor_u32_signature)(void *);
+typedef Steinberg_tresult (*pluginhost_event_list_get_signature)(
+    void *, Steinberg_int32, struct Steinberg_Vst_Event *);
+typedef Steinberg_tresult (*pluginhost_event_list_add_signature)(
+    void *, struct Steinberg_Vst_Event *);
+typedef Steinberg_Vst_ParamID (*pluginhost_param_queue_id_signature)(void *);
+typedef Steinberg_int32 (*pluginhost_param_queue_count_signature)(void *);
+typedef Steinberg_tresult (*pluginhost_param_queue_point_signature)(
+    void *, Steinberg_int32, Steinberg_int32 *,
+    Steinberg_Vst_ParamValue *);
+typedef Steinberg_tresult (*pluginhost_param_queue_add_signature)(
+    void *, Steinberg_int32, Steinberg_Vst_ParamValue, Steinberg_int32 *);
+typedef Steinberg_int32 (*pluginhost_param_changes_count_signature)(void *);
+typedef struct Steinberg_Vst_IParamValueQueue *
+(*pluginhost_param_changes_data_signature)(void *, Steinberg_int32);
+typedef struct Steinberg_Vst_IParamValueQueue *
+(*pluginhost_param_changes_add_signature)(
+    void *, const Steinberg_Vst_ParamID *, Steinberg_int32 *);
+typedef Steinberg_uint32 (*pluginhost_context_requirements_signature)(void *);
 
 static void pluginhost_vst3_check_callback_signatures(void) __attribute__((unused));
 static void pluginhost_vst3_check_callback_signatures(void) {
@@ -178,6 +196,21 @@ static void pluginhost_vst3_check_callback_signatures(void) {
    pluginhost_processor_sample_signature pcs = processor->canProcessSampleSize;
    pluginhost_processor_u32_signature plu = processor->getLatencySamples;
    pluginhost_processor_u32_signature ptu = processor->getTailSamples;
+   struct Steinberg_Vst_IEventListVtbl *events = 0;
+   struct Steinberg_Vst_IParamValueQueueVtbl *queue = 0;
+   struct Steinberg_Vst_IParameterChangesVtbl *changes = 0;
+   struct Steinberg_Vst_IProcessContextRequirementsVtbl *requirements = 0;
+   pluginhost_event_list_get_signature eg = events->getEvent;
+   pluginhost_event_list_add_signature ea = events->addEvent;
+   pluginhost_param_queue_id_signature qid = queue->getParameterId;
+   pluginhost_param_queue_count_signature qpc = queue->getPointCount;
+   pluginhost_param_queue_point_signature qgp = queue->getPoint;
+   pluginhost_param_queue_add_signature qap = queue->addPoint;
+   pluginhost_param_changes_count_signature pcc = changes->getParameterCount;
+   pluginhost_param_changes_data_signature pcd = changes->getParameterData;
+   pluginhost_param_changes_add_signature pca = changes->addParameterData;
+   pluginhost_context_requirements_signature pcr =
+      requirements->getProcessContextRequirements;
    pluginhost_component_handler_signature sh = controller->setComponentHandler;
    pluginhost_state_signature cs = controller->setComponentState;
    pluginhost_controller_parameter_info_signature pi = controller->getParameterInfo;
@@ -221,6 +254,8 @@ static void pluginhost_vst3_check_callback_signatures(void) {
    (void)rf; (void)uf; (void)rt; (void)ut; (void)sr; (void)sw; (void)sk;
    (void)asi; (void)agi; (void)asf; (void)agf; (void)ass; (void)ags; (void)asb;
    (void)agb; (void)mgi; (void)msi; (void)mga; (void)be; (void)pe; (void)ee;
+   (void)eg; (void)ea; (void)qid; (void)qpc; (void)qgp; (void)qap;
+   (void)pcc; (void)pcd; (void)pca; (void)pcr;
    (void)rc;
 }
 #define ABI_FIELD_ID(type_id, field_id) ((type_id) * 100 + (field_id))
@@ -251,6 +286,15 @@ uint64_t pluginhost_vst3_abi_size(int32_t type_id) {
       case 420: return sizeof(struct Steinberg_Vst_IComponentHandlerVtbl);
       case 421: return sizeof(struct Steinberg_Vst_IPlugInterfaceSupportVtbl);
       case 422: return sizeof(struct Steinberg_Vst_IAudioProcessorVtbl);
+      case 423: return sizeof(struct Steinberg_Vst_ProcessContext);
+      case 424: return sizeof(struct Steinberg_Vst_ProcessSetup);
+      case 425: return sizeof(struct Steinberg_Vst_AudioBusBuffers);
+      case 426: return sizeof(struct Steinberg_Vst_ProcessData);
+      case 427: return sizeof(struct Steinberg_Vst_Event);
+      case 428: return sizeof(struct Steinberg_Vst_IEventListVtbl);
+      case 429: return sizeof(struct Steinberg_Vst_IParamValueQueueVtbl);
+      case 430: return sizeof(struct Steinberg_Vst_IParameterChangesVtbl);
+      case 431: return sizeof(struct Steinberg_Vst_IProcessContextRequirementsVtbl);
       default: return 0;
    }
 }
@@ -277,7 +321,16 @@ uint64_t pluginhost_vst3_abi_align(int32_t type_id) {
       case 419: return _Alignof(struct Steinberg_Vst_IMessageVtbl);
       case 420: return _Alignof(struct Steinberg_Vst_IComponentHandlerVtbl);
       case 421: return _Alignof(struct Steinberg_Vst_IPlugInterfaceSupportVtbl);
+      case 424: return _Alignof(struct Steinberg_Vst_ProcessSetup);
+      case 423: return _Alignof(struct Steinberg_Vst_ProcessContext);
       case 422: return _Alignof(struct Steinberg_Vst_IAudioProcessorVtbl);
+      case 425: return _Alignof(struct Steinberg_Vst_AudioBusBuffers);
+      case 426: return _Alignof(struct Steinberg_Vst_ProcessData);
+      case 427: return _Alignof(struct Steinberg_Vst_Event);
+      case 428: return _Alignof(struct Steinberg_Vst_IEventListVtbl);
+      case 429: return _Alignof(struct Steinberg_Vst_IParamValueQueueVtbl);
+      case 430: return _Alignof(struct Steinberg_Vst_IParameterChangesVtbl);
+      case 431: return _Alignof(struct Steinberg_Vst_IProcessContextRequirementsVtbl);
       default: return 0;
    }
 }
@@ -387,6 +440,50 @@ uint64_t pluginhost_vst3_abi_offset(int32_t field_id) {
       ABI_FIELD_CASE(422, 7, struct Steinberg_Vst_IAudioProcessorVtbl, getLatencySamples);
       ABI_FIELD_CASE(422, 8, struct Steinberg_Vst_IAudioProcessorVtbl, setupProcessing);
       ABI_FIELD_CASE(422, 9, struct Steinberg_Vst_IAudioProcessorVtbl, setProcessing);
+      ABI_FIELD_CASE(423, 1, struct Steinberg_Vst_ProcessContext, state);
+      ABI_FIELD_CASE(423, 2, struct Steinberg_Vst_ProcessContext, sampleRate);
+      ABI_FIELD_CASE(423, 3, struct Steinberg_Vst_ProcessContext, projectTimeSamples);
+      ABI_FIELD_CASE(423, 4, struct Steinberg_Vst_ProcessContext, systemTime);
+      ABI_FIELD_CASE(423, 5, struct Steinberg_Vst_ProcessContext, continousTimeSamples);
+      ABI_FIELD_CASE(423, 6, struct Steinberg_Vst_ProcessContext, projectTimeMusic);
+      ABI_FIELD_CASE(423, 7, struct Steinberg_Vst_ProcessContext, tempo);
+      ABI_FIELD_CASE(424, 1, struct Steinberg_Vst_ProcessSetup, processMode);
+      ABI_FIELD_CASE(424, 2, struct Steinberg_Vst_ProcessSetup, symbolicSampleSize);
+      ABI_FIELD_CASE(424, 3, struct Steinberg_Vst_ProcessSetup, maxSamplesPerBlock);
+      ABI_FIELD_CASE(424, 4, struct Steinberg_Vst_ProcessSetup, sampleRate);
+      ABI_FIELD_CASE(425, 1, struct Steinberg_Vst_AudioBusBuffers, numChannels);
+      ABI_FIELD_CASE(425, 2, struct Steinberg_Vst_AudioBusBuffers, silenceFlags);
+      ABI_FIELD_CASE(425, 3, struct Steinberg_Vst_AudioBusBuffers,
+                     Steinberg_Vst_AudioBusBuffers_channelBuffers32);
+      ABI_FIELD_CASE(426, 1, struct Steinberg_Vst_ProcessData, processMode);
+      ABI_FIELD_CASE(426, 2, struct Steinberg_Vst_ProcessData, symbolicSampleSize);
+      ABI_FIELD_CASE(426, 3, struct Steinberg_Vst_ProcessData, numSamples);
+      ABI_FIELD_CASE(426, 4, struct Steinberg_Vst_ProcessData, numInputs);
+      ABI_FIELD_CASE(426, 5, struct Steinberg_Vst_ProcessData, numOutputs);
+      ABI_FIELD_CASE(426, 6, struct Steinberg_Vst_ProcessData, inputs);
+      ABI_FIELD_CASE(426, 7, struct Steinberg_Vst_ProcessData, outputs);
+      ABI_FIELD_CASE(426, 8, struct Steinberg_Vst_ProcessData, inputParameterChanges);
+      ABI_FIELD_CASE(426, 9, struct Steinberg_Vst_ProcessData, outputParameterChanges);
+      ABI_FIELD_CASE(426, 10, struct Steinberg_Vst_ProcessData, inputEvents);
+      ABI_FIELD_CASE(426, 11, struct Steinberg_Vst_ProcessData, outputEvents);
+      ABI_FIELD_CASE(426, 12, struct Steinberg_Vst_ProcessData, processContext);
+      ABI_FIELD_CASE(428, 1, struct Steinberg_Vst_IEventListVtbl, queryInterface);
+      ABI_FIELD_CASE(428, 2, struct Steinberg_Vst_IEventListVtbl, getEventCount);
+      ABI_FIELD_CASE(428, 3, struct Steinberg_Vst_IEventListVtbl, getEvent);
+      ABI_FIELD_CASE(428, 4, struct Steinberg_Vst_IEventListVtbl, addEvent);
+      ABI_FIELD_CASE(429, 1, struct Steinberg_Vst_IParamValueQueueVtbl, getParameterId);
+      ABI_FIELD_CASE(429, 2, struct Steinberg_Vst_IParamValueQueueVtbl, getPointCount);
+      ABI_FIELD_CASE(429, 3, struct Steinberg_Vst_IParamValueQueueVtbl, getPoint);
+      ABI_FIELD_CASE(429, 4, struct Steinberg_Vst_IParamValueQueueVtbl, addPoint);
+      ABI_FIELD_CASE(430, 1, struct Steinberg_Vst_IParameterChangesVtbl,
+                     getParameterCount);
+      ABI_FIELD_CASE(430, 2, struct Steinberg_Vst_IParameterChangesVtbl,
+                     getParameterData);
+      ABI_FIELD_CASE(430, 3, struct Steinberg_Vst_IParameterChangesVtbl,
+                     addParameterData);
+      ABI_FIELD_CASE(431, 1,
+                     struct Steinberg_Vst_IProcessContextRequirementsVtbl,
+                     getProcessContextRequirements);
       ABI_FIELD_CASE(422, 10, struct Steinberg_Vst_IAudioProcessorVtbl, process);
       ABI_FIELD_CASE(422, 11, struct Steinberg_Vst_IAudioProcessorVtbl, getTailSamples);
       default: return UINT64_MAX;

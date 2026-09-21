@@ -87,7 +87,7 @@ suite "VST3 raw ABI and module ownership":
        (uint64(0'u32) shl 24) or
        (uint64(1'u32) shl 16) or
        (uint64(2'u32) shl 8) or uint64(3'u32))
-  test "every used V2A vtable slot has an exact vendor offset":
+  test "every used VST3 vtable slot has an exact vendor offset":
     let pointerBytes = uint64(sizeof(pointer))
     for field in 1 .. 9:
       check vst3AbiOffset(vst3FieldId(412, int32(field))) ==
@@ -122,6 +122,18 @@ suite "VST3 raw ABI and module ownership":
     for field in 1 .. 11:
       check vst3AbiOffset(vst3FieldId(422, int32(field))) ==
         pointerBytes * uint64(field - 1)
+    check vst3AbiOffset(vst3FieldId(428, 1)) == pointerBytes * 0'u64
+    check vst3AbiOffset(vst3FieldId(428, 2)) == pointerBytes * 3'u64
+    check vst3AbiOffset(vst3FieldId(428, 3)) == pointerBytes * 4'u64
+    check vst3AbiOffset(vst3FieldId(428, 4)) == pointerBytes * 5'u64
+    check vst3AbiOffset(vst3FieldId(429, 1)) == pointerBytes * 3'u64
+    check vst3AbiOffset(vst3FieldId(429, 2)) == pointerBytes * 4'u64
+    check vst3AbiOffset(vst3FieldId(429, 3)) == pointerBytes * 5'u64
+    check vst3AbiOffset(vst3FieldId(429, 4)) == pointerBytes * 6'u64
+    check vst3AbiOffset(vst3FieldId(430, 1)) == pointerBytes * 3'u64
+    check vst3AbiOffset(vst3FieldId(430, 2)) == pointerBytes * 4'u64
+    check vst3AbiOffset(vst3FieldId(430, 3)) == pointerBytes * 5'u64
+    check vst3AbiOffset(vst3FieldId(431, 1)) == pointerBytes * 3'u64
   test "generated C header layouts match the Nim boundary":
     check uint64(sizeof(Vst3Tuid)) == vst3AbiSize(401)
     check uint64(alignof(Vst3Tuid)) == vst3AbiAlign(401)
@@ -144,6 +156,29 @@ suite "VST3 raw ABI and module ownership":
     check uint64(sizeof(Vst3BStreamVtbl)) == vst3AbiSize(417)
     check uint64(sizeof(Vst3AudioProcessorVtbl)) == vst3AbiSize(422)
     check uint64(alignof(Vst3AudioProcessorVtbl)) == vst3AbiAlign(422)
+    check uint64(sizeof(Vst3ProcessContext)) == vst3AbiSize(423)
+    check uint64(sizeof(Vst3ProcessSetup)) == vst3AbiSize(424)
+    check uint64(sizeof(Vst3AudioBusBuffers)) == vst3AbiSize(425)
+    check uint64(sizeof(Vst3ProcessData)) == vst3AbiSize(426)
+    check uint64(sizeof(Vst3Event)) == vst3AbiSize(427)
+    check uint64(sizeof(Vst3EventListVtbl)) == vst3AbiSize(428)
+    check uint64(sizeof(Vst3ParamValueQueueVtbl)) == vst3AbiSize(429)
+    check uint64(sizeof(Vst3ParameterChangesVtbl)) == vst3AbiSize(430)
+    check uint64(sizeof(Vst3ProcessContextRequirementsVtbl)) ==
+      vst3AbiSize(431)
+    check uint64(alignof(Vst3ProcessContext)) == vst3AbiAlign(423)
+    check uint64(alignof(Vst3ProcessSetup)) == vst3AbiAlign(424)
+    check uint64(alignof(Vst3AudioBusBuffers)) == vst3AbiAlign(425)
+    check uint64(alignof(Vst3ProcessData)) == vst3AbiAlign(426)
+    check uint64(alignof(Vst3Event)) == vst3AbiAlign(427)
+    check uint64(offsetOf(Vst3AudioBusBuffers, silenceFlags)) ==
+      vst3AbiOffset(vst3FieldId(425, 2))
+    check uint64(offsetOf(Vst3ProcessData, processContext)) ==
+      vst3AbiOffset(vst3FieldId(426, 12))
+    check uint64(offsetOf(Vst3ParamValueQueueVtbl, addPoint)) ==
+      vst3AbiOffset(vst3FieldId(429, 4))
+    check uint64(offsetOf(Vst3ParameterChangesVtbl, addParameterData)) ==
+      vst3AbiOffset(vst3FieldId(430, 3))
     check uint64(offsetOf(Vst3ComponentVtbl, initialize)) ==
       vst3AbiOffset(vst3FieldId(412, 4))
     check uint64(offsetOf(Vst3ComponentVtbl, getState)) ==

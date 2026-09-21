@@ -8,7 +8,7 @@ import std/[locks, math, posix]
 import ../app/main_reactor
 import ../domain/[errors, result]
 import ../rt/atomic_pod
-import ./[ffi, host_context, module, stream, uid]
+import ./[ffi, host_context, module, stream, uid, parameter_transport]
 
 const
   Vst3ComponentIid* = "E831FF31F2D54301928EBBEE25697802"
@@ -73,8 +73,10 @@ type
     stateSynchronized: bool
     closed: bool
     quarantined: bool
+    ownsContext: bool
     mainThread: Pthread
     mailbox: Vst3EditMailbox
+    parameterTransport: ptr Vst3ParameterTransport
     wrongThreadNotifications: RtAtomicU64
     activeCallbacks: RtAtomicU32
     closingState: RtAtomicU32
@@ -293,6 +295,20 @@ proc incrementWrongThread(counter: ptr RtAtomicU64) {.inline, raises: [].} =
 proc handlerOnMain(handler: ptr Vst3HandlerObject): bool {.inline, raises: [].} =
   handler != nil and handler.owner != nil and
     pthread_equal(pthread_self(), handler.owner[].mainThread) != 0
+proc queueParameterEdit(owner: ptr Vst3InstanceState;
+                        kind: Vst3ParameterEditKind; id: Vst3ParamID;
+                        value: Vst3ParamValue): bool {.inline, gcsafe, raises: [].} =
+  if owner == nil:
+    return false
+  if owner.parameterTransport != nil:
+    let transportKind = case kind
+      of vpekBegin: v3pekBegin
+      of vpekPerform: v3pekPerform
+      of vpekEnd: v3pekEnd
+    return enqueueVst3ParameterEdit(owner.parameterTransport,
+      Vst3ParameterEditRecord(kind: transportKind, id: id, value: value))
+  mailboxPush(addr owner.mailbox,
+    Vst3ParameterEdit(kind: kind, id: id, value: value))
 proc enterCallback(owner: ptr Vst3InstanceState): bool {.inline, gcsafe, raises: [].} =
   if owner == nil:
     return false
@@ -312,7 +328,6 @@ proc leaveCallback(owner: ptr Vst3InstanceState) {.inline, gcsafe, raises: [].} 
   if owner != nil:
     discard owner.activeCallbacks.fetchSubRelease(1'u32)
 
-
 proc handlerBeginEdit(thisInterface: pointer; id: Vst3ParamID): int32 {.
     cdecl, raises: [].} =
   let handler = handlerState(thisInterface)
@@ -323,8 +338,7 @@ proc handlerBeginEdit(thisInterface: pointer; id: Vst3ParamID): int32 {.
   if not handler.handlerOnMain():
     incrementWrongThread(addr handler.owner[].wrongThreadNotifications)
     return Vst3ResultFalse
-  if not mailboxPush(addr handler.owner[].mailbox,
-      Vst3ParameterEdit(kind: vpekBegin, id: id, value: 0.0)):
+  if not queueParameterEdit(handler.owner, vpekBegin, id, 0.0):
     return Vst3ResultFalse
   Vst3ResultOk
 
@@ -340,8 +354,7 @@ proc handlerPerformEdit(thisInterface: pointer; id: Vst3ParamID;
     return Vst3ResultFalse
   if classify(value) in {fcNan, fcInf, fcNegInf} or value < 0.0 or value > 1.0:
     return Vst3ResultFalse
-  if not mailboxPush(addr handler.owner[].mailbox,
-      Vst3ParameterEdit(kind: vpekPerform, id: id, value: value)):
+  if not queueParameterEdit(handler.owner, vpekPerform, id, value):
     return Vst3ResultFalse
   Vst3ResultOk
 
@@ -355,8 +368,7 @@ proc handlerEndEdit(thisInterface: pointer; id: Vst3ParamID): int32 {.
   if not handler.handlerOnMain():
     incrementWrongThread(addr handler.owner[].wrongThreadNotifications)
     return Vst3ResultFalse
-  if not mailboxPush(addr handler.owner[].mailbox,
-      Vst3ParameterEdit(kind: vpekEnd, id: id, value: 0.0)):
+  if not queueParameterEdit(handler.owner, vpekEnd, id, 0.0):
     return Vst3ResultFalse
   Vst3ResultOk
 
@@ -644,11 +656,14 @@ proc close*(instance: Vst3Instance): Result[Unit] =
   if instance.component != nil:
     releaseInterface(cast[pointer](instance.component))
     instance.component = nil
-  # Retained host callbacks and control objects remain callable through all
-  # native releases; never unload while any borrowed host owner is live.
-  instance.context.close()
-  if instance.context.hasRetainedCallbacks() or
-      instance.context.hasRetainedObjects():
+  # The application-owned context remains usable after a borrowed instance
+  # closes, but retained callback/object ownership must still be checked before
+  # this instance's module can be unloaded.
+  if instance.ownsContext and instance.context != nil:
+    instance.context.close()
+  if instance.context != nil and
+      (instance.context.hasRetainedCallbacks() or
+       instance.context.hasRetainedObjects()):
     return failure[Unit](instanceError(hekVst3Factory,
       "VST3 host context retained callbacks or objects during shutdown",
       instance.module.bundlePath))
@@ -699,10 +714,12 @@ proc openVst3Instance*(module: var Vst3Module; classId: Vst3Tuid;
       "VST3 instance root quarantine is full", module.bundlePath))
   instance.module = move(module)
   initLock(instance.mailbox.lock)
-  instance.context = if hostContext == nil:
-    newVst3HostContext(reactor)
+  if hostContext == nil:
+    instance.context = newVst3HostContext(reactor)
+    instance.ownsContext = true
   else:
-    hostContext
+    instance.context = hostContext
+    instance.ownsContext = false
   if instance.context == nil:
     return failOpen(instance, instanceError(hekVst3Factory,
       "VST3 host context allocation failed", instance.module.bundlePath))
@@ -907,6 +924,20 @@ proc parameterMetadata*(instance: Vst3Instance): seq[Vst3ParameterMetadata] =
 proc busMetadata*(instance: Vst3Instance): seq[Vst3BusMetadata] =
   if instance == nil: return @[]
   instance.buses
+proc attachVst3ParameterTransport*(instance: Vst3Instance;
+                                   transport: ptr Vst3ParameterTransport): bool =
+  if instance == nil or instance.closed or
+      instance.closingState.loadAcquire() != 0'u32:
+    return false
+  instance.parameterTransport = transport
+  true
+
+proc detachVst3ParameterTransport*(instance: Vst3Instance;
+                                   transport: ptr Vst3ParameterTransport): bool =
+  if instance == nil or instance.parameterTransport != transport:
+    return false
+  instance.parameterTransport = nil
+  true
 
 proc wrongThreadNotifications*(instance: Vst3Instance): uint64 {.inline.} =
   if instance == nil: 0'u64

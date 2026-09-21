@@ -5,4 +5,5 @@
 import pluginhost/clap/[audio_process, event_bridge, host_bridge]
 import pluginhost/jack/callbacks
 import pluginhost/rt/[atomic_pod, engine, midi_io, role_guard]
+import pluginhost/vst3/audio_process
 {.pop.}
