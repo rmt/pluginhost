@@ -319,17 +319,19 @@ class FixtureFactory final : public IPluginFactory {
 #else
     std::memcpy(info->cid, kClassId, sizeof(TUID));
 #endif
-#if PLUGINHOST_VST3_FIXTURE_MODE == 16
+#if PLUGINHOST_VST3_FIXTURE_MODE == 21
+    std::memcpy(info->category, "AudioEffectClass", 16);
+#elif PLUGINHOST_VST3_FIXTURE_MODE == 16
     std::memcpy(info->category, "Controller", 10);
 #elif PLUGINHOST_VST3_FIXTURE_MODE == 15
     if (index == 1)
       std::memcpy(info->category, "Controller", 10);
     else
-      std::memcpy(info->category, "AudioEffectClass", 16);
+      std::memcpy(info->category, "Audio Module Class", 18);
 #elif PLUGINHOST_VST3_FIXTURE_MODE == 13
     std::memset(info->category, 'Q', sizeof(info->category));
 #else
-    std::memcpy(info->category, "AudioEffectClass", 16);
+    std::memcpy(info->category, "Audio Module Class", 18);
 #endif
 #if PLUGINHOST_VST3_FIXTURE_MODE == 15
     if (index == 1)
@@ -383,15 +385,17 @@ class FixtureFactory final : public IPluginFactory {
     std::memcpy(info->cid, kClassId, sizeof(TUID));
 #endif
     info->classFlags = 0;
-#if PLUGINHOST_VST3_FIXTURE_MODE == 16
+#if PLUGINHOST_VST3_FIXTURE_MODE == 21
+    std::memcpy(info->category, "AudioEffectClass", 16);
+#elif PLUGINHOST_VST3_FIXTURE_MODE == 16
     std::memcpy(info->category, "Controller", 10);
 #elif PLUGINHOST_VST3_FIXTURE_MODE == 15
     if (index == 1)
       std::memcpy(info->category, "Controller", 10);
     else
-      std::memcpy(info->category, "AudioEffectClass", 16);
+      std::memcpy(info->category, "Audio Module Class", 18);
 #else
-    std::memcpy(info->category, "AudioEffectClass", 16);
+    std::memcpy(info->category, "Audio Module Class", 18);
 #endif
 #if PLUGINHOST_VST3_FIXTURE_MODE == 15
     if (index == 1)
@@ -432,12 +436,17 @@ class FixtureFactory final : public IPluginFactory {
   std::int32_t fillClassInfoUnicode(std::int32_t index, PClassInfoW* info) {
     (void)index;
     (void)info;
-#if PLUGINHOST_VST3_FIXTURE_MODE == 18 || PLUGINHOST_VST3_FIXTURE_MODE == 19
+#if PLUGINHOST_VST3_FIXTURE_MODE == 18 || PLUGINHOST_VST3_FIXTURE_MODE == 19 || \
+    PLUGINHOST_VST3_FIXTURE_MODE == 21
     if (index != 0 || info == nullptr)
       return -2;
     std::memset(info, 0, sizeof(*info));
     std::memcpy(info->cid, kClassId, sizeof(TUID));
+#if PLUGINHOST_VST3_FIXTURE_MODE == 21
     std::memcpy(info->category, "AudioEffectClass", 16);
+#else
+    std::memcpy(info->category, "Audio Module Class", 18);
+#endif
     info->name[0] = 'S';
 #if PLUGINHOST_VST3_FIXTURE_MODE == 19
     info->name[0] = 0xD800;

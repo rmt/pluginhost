@@ -80,6 +80,11 @@ suite "VST3 catalog and discovery boundary":
     require loaded.isOk
     check loaded.value.descriptors.len == 0
 
+  test "obsolete processor category is ignored":
+    let loaded = loadVst3Catalog(fixturePath("obsolete_category"))
+    require loaded.isOk
+    check loaded.value.descriptors.len == 0
+
   test "duplicate processor CIDs fail before a catalog is returned":
     let loaded = loadVst3Catalog(fixturePath("duplicate_cid"))
     check not loaded.isOk

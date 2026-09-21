@@ -6,7 +6,7 @@
 
 const
   Vst3GeneratedHeader* = "vendor/vst3/vst3_c_api.h"
-  Vst3AudioEffectClass* = "AudioEffectClass"
+  Vst3AudioEffectClass* = "Audio Module Class"
   Vst3SdkVersion* = "VST 3.8.1"
   Vst3TuidBytes* = 16
   Vst3FactoryVendorBytes* = 64

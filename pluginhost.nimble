@@ -456,6 +456,7 @@ proc compileVst3Fixtures() =
   compileVst3FixtureVariant("unicode_metadata", 18)
   compileVst3FixtureVariant("malformed_unicode", 19)
   compileVst3FixtureVariant("invalid_utf8_metadata", 20)
+  compileVst3FixtureVariant("obsolete_category", 21)
 
 proc compileVst3V2aFixtureVariant(name: string; mode: int) =
   exec "mkdir -p build/fixtures/vst3/" & name &

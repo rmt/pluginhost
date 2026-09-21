@@ -622,7 +622,7 @@ class Factory final : public IPluginFactory {
     if (!info || index != 0) return 2;
     std::memset(info, 0, sizeof(*info));
     std::memcpy(info->cid, kProcessorCid, 16);
-    std::memcpy(info->category, "AudioEffectClass", 16);
+    std::memcpy(info->category, "Audio Module Class", 18);
     std::memcpy(info->name, "V2A Fixture", 11);
     return 0;
   }
