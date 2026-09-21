@@ -1017,6 +1017,15 @@ This table is updated only when work is reviewed.
 | 10 — GUI | Approved | Review units 10A, 10B, and 10C | X11 window host, CLAP GUI controller, StatusNotifierItem D-Bus tray toggle/icon, unit/ABI/fixture, Xvfb, and session-bus evidence accepted |
 | 11 — Release candidate | Approved | Review units 11A, 11B, and 11C; human review gate 11; scenario 7, Memcheck, and RC completion follow-ups | All acceptance scenarios and sanitizer prerequisites have passing evidence. The selected `0.1.0-rc.1` x86_64 artifact is 1,094,232 bytes with SHA-256 `dc0229a41de0800aa499f574151800218cd79d8be05f6932870cafe996d7ac8c`; the final version-sensitive `nimble all` matrix passed, and the owner accepted the completion evidence on 2026-09-12. JACK1/JACK2 remain documented limitations, and Increment 12 has not started. |
 | 12 — MVP release | Not started | — | Target 0.1.0 |
+| V0 — VST3 scope/boundary | Approved | V0 scope review | Generated C ABI, native Linux x86_64 boundary, staged availability, and format isolation accepted |
+| V1A — VST3 ABI/module | Approved | V1A review | Pinned generated declarations, checked module ownership, canonical CIDs, and independent C++ ABI evidence accepted |
+| V1B — VST3 catalog/discovery | Approved | V1B review | Terminal bundle discovery, processor filtering, mixed-format catalog output, and unavailable-run policy accepted |
+| V2A — VST3 lifecycle/services | Approved | V2A review | Host objects, run loop, separate/combined ownership, streams, metadata, and cleanup accounting accepted |
+| V2B — VST3 headless processing | Approved | V2B review and continuation approval | Bounded float32 JACK slice, bus negotiation, parameter transport groundwork, live audio, and generated-C RT evidence accepted |
+| V3 — VST3 parameters/MIDI | Not started | — | Awaiting approval of the pre-code review package |
+| V4A/V4B — VST3 state/reconfiguration | Not started | — | Standard `.vstpreset` transactions and native reconfiguration |
+| V5A/V5B — VST3 GUI | Not started | — | X11 editor ownership and protocol integration |
+| V6 — VST3 public cutover | Not started | — | Public `run`, complete regression matrix, and compatibility evidence |
 
 Allowed statuses: `Not started`, `In progress`, `Changes requested`, `Approved`, and `Deferred`.
 
