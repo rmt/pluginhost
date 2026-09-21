@@ -1,8 +1,30 @@
 # pluginhost
 
-`pluginhost` is a review-gated standalone Linux JACK host for native CLAP plugins, implemented in Nim. Each process owns exactly one plugin instance and one JACK client.
+`pluginhost` is a standalone Linux JACK host for native CLAP plugins, implemented in Nim. Each process owns exactly one plugin instance and one JACK client.
 
 The current release-candidate version is **0.1.0-rc.1**. The implementation includes checked CLAP ownership/catalog/lifecycle, human/JSON `list` and recursive `scan`, grouped zero-copy JACK audio, and a fixed-capacity sample-accurate JACK MIDI/CLAP event bridge. The canonical public command runs one plugin instance as one JACK client under an `epoll`/`signalfd` main reactor, handles orderly signals and JACK/process failures, services CLAP main-thread callbacks plus generation-safe plugin timers and POSIX FDs, reflects plugin latency through JACK, tracks dirty-state notification, handles bounded CLAP parameter output/rescans, sleep/wake requests, safe restart/port rebuild requests, and an optional atomic PID file. It loads requested CLAP state before audio configuration and saves state transactionally after clean quiescence. The reviewed X11 GUI path embeds or floats a native CLAP GUI and exposes optional signal and StatusNotifierItem tray control; native Wayland remains deferred.
+
+## Why?
+
+Over the past few years, I've been using python and nim to create a personal (currently unpublished) musical creation tools, runtime and TUI, turning musical pattern languages and notations into MIDI, along with some audio synthesis experiments as I learn from an impressively thick book.  It's a part-time hobby project that I pick up and drop as time and interest allows.
+
+While DAWs have _all the features_, they're usually heavy-weight, and can eat significant CPU and RAM even when idle, and aren't suitable for embedding in a nim project.  carla-single was mostly doing the job, but it also has its quirks, and I eventually want to embed this directly.
+
+Creating a standalone pluginhost for CLAP is just the first step.  I'll look to add VST and LV2 support, and to make this easily embeddable (in nim, at least).
+
+## How?
+
+This was initially implemented primarily with a chatgpt business subscription
+over the course of a few weeks using gpt-5.6-sol and luna primarily with the pi
+coding agent, with manual testing and bugfixes along the way.
+
+Why use AI?  Writing a plugin host is error prone and boring, but all aspects
+(nim, clap, jack, X11) are quite well specified, making it a good candidate for
+AI assisted development, and being an interactive program, issues can be
+identified and fixed rapidly.  Also: I would not have started this without AI.
+
+I was not completely confident that AI would get the job done, but the proof is
+in the pudding: it works well, and I'm using it every day already.
 
 ## Build
 
