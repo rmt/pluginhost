@@ -20,6 +20,14 @@ _Static_assert(sizeof(struct Steinberg_IPluginFactory2Vtbl) == 64,
                "unexpected VST3 factory2-vtable size");
 _Static_assert(sizeof(struct Steinberg_IPluginFactory3Vtbl) == 80,
                "unexpected VST3 factory3-vtable size");
+_Static_assert(sizeof(struct Steinberg_ViewRect) == 16,
+               "unexpected VST3 ViewRect size");
+_Static_assert(_Alignof(struct Steinberg_ViewRect) == 4,
+               "unexpected VST3 ViewRect alignment");
+_Static_assert(sizeof(struct Steinberg_IPlugViewVtbl) == 120,
+               "unexpected VST3 IPlugView-vtable size");
+_Static_assert(sizeof(struct Steinberg_IPlugFrameVtbl) == 32,
+               "unexpected VST3 IPlugFrame-vtable size");
 typedef Steinberg_TBool (*pluginhost_vst3_module_entry_t)(void *);
 _Static_assert(sizeof(pluginhost_vst3_module_entry_t) == sizeof(void *),
                "unexpected VST3 ModuleEntry function-pointer size");
@@ -156,6 +164,20 @@ typedef Steinberg_tresult (*pluginhost_param_queue_point_signature)(
     Steinberg_Vst_ParamValue *);
 typedef Steinberg_tresult (*pluginhost_param_queue_add_signature)(
     void *, Steinberg_int32, Steinberg_Vst_ParamValue, Steinberg_int32 *);
+typedef struct Steinberg_IPlugView *(*pluginhost_controller_create_view_signature)(
+   void *, Steinberg_FIDString);
+typedef Steinberg_tresult (*pluginhost_view_platform_signature)(
+   void *, Steinberg_FIDString);
+typedef Steinberg_tresult (*pluginhost_view_attach_signature)(
+   void *, void *, Steinberg_FIDString);
+typedef Steinberg_tresult (*pluginhost_view_rect_signature)(
+   void *, struct Steinberg_ViewRect *);
+typedef Steinberg_tresult (*pluginhost_view_key_signature)(
+   void *, Steinberg_char16, Steinberg_int16, Steinberg_int16);
+typedef Steinberg_tresult (*pluginhost_view_frame_signature)(
+   void *, struct Steinberg_IPlugFrame *);
+typedef Steinberg_tresult (*pluginhost_frame_resize_signature)(
+   void *, struct Steinberg_IPlugView *, struct Steinberg_ViewRect *);
 typedef Steinberg_int32 (*pluginhost_param_changes_count_signature)(void *);
 typedef struct Steinberg_Vst_IParamValueQueue *
 (*pluginhost_param_changes_data_signature)(void *, Steinberg_int32);
@@ -168,6 +190,8 @@ static void pluginhost_vst3_check_callback_signatures(void) __attribute__((unuse
 static void pluginhost_vst3_check_callback_signatures(void) {
    struct Steinberg_Vst_IAudioProcessorVtbl *processor = 0;
    struct Steinberg_Vst_IComponentVtbl *component = 0;
+   struct Steinberg_IPlugViewVtbl *view = 0;
+   struct Steinberg_IPlugFrameVtbl *frame = 0;
    struct Steinberg_Vst_IEditControllerVtbl *controller = 0;
    struct Steinberg_Vst_IConnectionPointVtbl *connection = 0;
    struct Steinberg_Vst_IHostApplicationVtbl *host = 0;
@@ -252,6 +276,15 @@ static void pluginhost_vst3_check_callback_signatures(void) {
    pluginhost_handler_edit_signature pe = handler->performEdit;
    pluginhost_handler_end_signature ee = handler->endEdit;
    pluginhost_handler_restart_signature rc = handler->restartComponent;
+   pluginhost_view_platform_signature vps = view->isPlatformTypeSupported;
+   pluginhost_view_attach_signature va = view->attached;
+   pluginhost_view_rect_signature vr = view->getSize;
+   pluginhost_view_rect_signature vs = view->onSize;
+   pluginhost_view_key_signature vk = view->onKeyDown;
+   pluginhost_controller_create_view_signature cv = controller->createView;
+   pluginhost_view_frame_signature vf = view->setFrame;
+   pluginhost_view_rect_signature vc = view->checkSizeConstraint;
+   pluginhost_frame_resize_signature fr = frame->resizeView;
    (void)me; (void)mx; (void)gf; (void)q; (void)ar; (void)rr; (void)ci; (void)ct;
    (void)cc; (void)io; (void)bc; (void)bi; (void)ri; (void)ab; (void)sa;
    (void)ss; (void)gs; (void)ba; (void)ps; (void)pp; (void)pcs; (void)plu;
@@ -264,6 +297,9 @@ static void pluginhost_vst3_check_callback_signatures(void) {
    (void)eg; (void)ea; (void)qid; (void)qpc; (void)qgp; (void)qap;
    (void)pcc; (void)pcd; (void)pca; (void)pcr;
    (void)rc;
+   (void)cv;
+   (void)vps; (void)va; (void)vr; (void)vs; (void)vk; (void)vf; (void)vc;
+   (void)fr;
 }
 #define ABI_FIELD_ID(type_id, field_id) ((type_id) * 100 + (field_id))
 #define ABI_FIELD_CASE(type_id, field_id, type_name, field_name) \
@@ -272,6 +308,9 @@ static void pluginhost_vst3_check_callback_signatures(void) {
 uint64_t pluginhost_vst3_abi_size(int32_t type_id) {
    switch (type_id) {
       case 401: return sizeof(Steinberg_TUID);
+      case 433: return sizeof(struct Steinberg_ViewRect);
+      case 434: return sizeof(struct Steinberg_IPlugViewVtbl);
+      case 435: return sizeof(struct Steinberg_IPlugFrameVtbl);
       case 402: return sizeof(struct Steinberg_PFactoryInfo);
       case 403: return sizeof(struct Steinberg_PClassInfo);
       case 404: return sizeof(struct Steinberg_PClassInfo2);
@@ -340,6 +379,9 @@ uint64_t pluginhost_vst3_abi_align(int32_t type_id) {
       case 430: return _Alignof(struct Steinberg_Vst_IParameterChangesVtbl);
       case 431: return _Alignof(struct Steinberg_Vst_IProcessContextRequirementsVtbl);
       case 432: return _Alignof(struct Steinberg_Vst_IMidiMappingVtbl);
+      case 433: return _Alignof(struct Steinberg_ViewRect);
+      case 434: return _Alignof(struct Steinberg_IPlugViewVtbl);
+      case 435: return _Alignof(struct Steinberg_IPlugFrameVtbl);
       default: return 0;
    }
 }
@@ -392,6 +434,7 @@ uint64_t pluginhost_vst3_abi_offset(int32_t field_id) {
       ABI_FIELD_CASE(413, 9, struct Steinberg_Vst_IEditControllerVtbl, getParameterCount);
       ABI_FIELD_CASE(413, 10, struct Steinberg_Vst_IEditControllerVtbl, getParameterInfo);
       ABI_FIELD_CASE(413, 17, struct Steinberg_Vst_IEditControllerVtbl, setComponentHandler);
+      ABI_FIELD_CASE(413, 18, struct Steinberg_Vst_IEditControllerVtbl, createView);
       ABI_FIELD_CASE(414, 1, struct Steinberg_Vst_IConnectionPointVtbl, queryInterface);
       ABI_FIELD_CASE(414, 2, struct Steinberg_Vst_IConnectionPointVtbl, addRef);
       ABI_FIELD_CASE(414, 3, struct Steinberg_Vst_IConnectionPointVtbl, release);
@@ -500,6 +543,31 @@ uint64_t pluginhost_vst3_abi_offset(int32_t field_id) {
       ABI_FIELD_CASE(432, 3, struct Steinberg_Vst_IMidiMappingVtbl, release);
       ABI_FIELD_CASE(432, 4, struct Steinberg_Vst_IMidiMappingVtbl,
                      getMidiControllerAssignment);
+      ABI_FIELD_CASE(433, 1, struct Steinberg_ViewRect, left);
+      ABI_FIELD_CASE(433, 2, struct Steinberg_ViewRect, top);
+      ABI_FIELD_CASE(433, 3, struct Steinberg_ViewRect, right);
+      ABI_FIELD_CASE(433, 4, struct Steinberg_ViewRect, bottom);
+      ABI_FIELD_CASE(434, 1, struct Steinberg_IPlugViewVtbl, queryInterface);
+      ABI_FIELD_CASE(434, 2, struct Steinberg_IPlugViewVtbl, addRef);
+      ABI_FIELD_CASE(434, 3, struct Steinberg_IPlugViewVtbl, release);
+      ABI_FIELD_CASE(434, 4, struct Steinberg_IPlugViewVtbl,
+                     isPlatformTypeSupported);
+      ABI_FIELD_CASE(434, 5, struct Steinberg_IPlugViewVtbl, attached);
+      ABI_FIELD_CASE(434, 6, struct Steinberg_IPlugViewVtbl, removed);
+      ABI_FIELD_CASE(434, 7, struct Steinberg_IPlugViewVtbl, onWheel);
+      ABI_FIELD_CASE(434, 8, struct Steinberg_IPlugViewVtbl, onKeyDown);
+      ABI_FIELD_CASE(434, 9, struct Steinberg_IPlugViewVtbl, onKeyUp);
+      ABI_FIELD_CASE(434, 10, struct Steinberg_IPlugViewVtbl, getSize);
+      ABI_FIELD_CASE(434, 11, struct Steinberg_IPlugViewVtbl, onSize);
+      ABI_FIELD_CASE(434, 12, struct Steinberg_IPlugViewVtbl, onFocus);
+      ABI_FIELD_CASE(434, 13, struct Steinberg_IPlugViewVtbl, setFrame);
+      ABI_FIELD_CASE(434, 14, struct Steinberg_IPlugViewVtbl, canResize);
+      ABI_FIELD_CASE(434, 15, struct Steinberg_IPlugViewVtbl,
+                     checkSizeConstraint);
+      ABI_FIELD_CASE(435, 1, struct Steinberg_IPlugFrameVtbl, queryInterface);
+      ABI_FIELD_CASE(435, 2, struct Steinberg_IPlugFrameVtbl, addRef);
+      ABI_FIELD_CASE(435, 3, struct Steinberg_IPlugFrameVtbl, release);
+      ABI_FIELD_CASE(435, 4, struct Steinberg_IPlugFrameVtbl, resizeView);
       ABI_FIELD_CASE(422, 10, struct Steinberg_Vst_IAudioProcessorVtbl, process);
       ABI_FIELD_CASE(422, 11, struct Steinberg_Vst_IAudioProcessorVtbl, getTailSamples);
       default: return UINT64_MAX;

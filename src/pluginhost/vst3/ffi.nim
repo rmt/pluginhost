@@ -21,11 +21,14 @@ const
   Vst3NoInterface* = -1'i32
   Vst3InvalidArgument* = 2'i32
   Vst3NotImplemented* = 3'i32
-  Vst3FUnknownIid* = "0000000000000000C000000000000046"
   Vst3ResultNoInterface* = Vst3NoInterface
+  Vst3FUnknownIid* = "0000000000000000C000000000000046"
   Vst3FactoryIid* = "7A4D811C52114A1FAED9D2EE0B43BF9F"
   Vst3Factory2Iid* = "0007B650F24B4C0BA464EDB9F00B2ABB"
   Vst3Factory3Iid* = "4555A2ABC1234E579B12291036878931"
+  Vst3PlugViewIid* = "5BC32507D06049EAA6151B522B755B29"
+  Vst3PlugFrameIid* = "367FAF01AFA946938D4DA2A0ED0882A3"
+  Vst3PlatformTypeX11EmbedWindowID* = "X11EmbedWindowID"
 
   Vst3MediaAudio* = 0'i32
   Vst3MediaEvent* = 1'i32
@@ -351,8 +354,63 @@ type
                               value: Vst3ParamValue): int32 {.cdecl, raises: [].}
     setComponentHandler*: proc(thisInterface: pointer; handler: pointer): int32 {.
       cdecl, raises: [].}
-    createView*: proc(thisInterface: pointer; name: cstring): pointer {.
+    createView*: proc(thisInterface: pointer; name: cstring): ptr Vst3IPlugView {.
       cdecl, raises: [].}
+
+  Vst3ViewRect* {.bycopy.} = object
+    left*: int32
+    top*: int32
+    right*: int32
+    bottom*: int32
+
+  ## Exact generated-C IPlugView vtable.
+  Vst3IPlugViewVtbl* {.bycopy.} = object
+    queryInterface*: proc(thisInterface: pointer; iid: ptr Vst3Tuid;
+                          obj: ptr pointer): int32 {.cdecl, raises: [].}
+    addRef*: proc(thisInterface: pointer): uint32 {.cdecl, raises: [].}
+    release*: proc(thisInterface: pointer): uint32 {.cdecl, raises: [].}
+    isPlatformTypeSupported*: proc(thisInterface: pointer;
+                                   typeName: cstring): int32 {.
+      cdecl, raises: [].}
+    attached*: proc(thisInterface: pointer; parent: pointer;
+                    typeName: cstring): int32 {.cdecl, raises: [].}
+    removed*: proc(thisInterface: pointer): int32 {.cdecl, raises: [].}
+    onWheel*: proc(thisInterface: pointer; distance: cfloat): int32 {.
+      cdecl, raises: [].}
+    onKeyDown*: proc(thisInterface: pointer; key: Vst3TChar;
+                     keyCode, modifiers: int16): int32 {.
+      cdecl, raises: [].}
+    onKeyUp*: proc(thisInterface: pointer; key: Vst3TChar;
+                   keyCode, modifiers: int16): int32 {.
+      cdecl, raises: [].}
+    getSize*: proc(thisInterface: pointer; size: ptr Vst3ViewRect): int32 {.
+      cdecl, raises: [].}
+    onSize*: proc(thisInterface: pointer; newSize: ptr Vst3ViewRect): int32 {.
+      cdecl, raises: [].}
+    onFocus*: proc(thisInterface: pointer; state: Vst3TBool): int32 {.
+      cdecl, raises: [].}
+    setFrame*: proc(thisInterface: pointer; frame: ptr Vst3IPlugFrame): int32 {.
+      cdecl, raises: [].}
+    canResize*: proc(thisInterface: pointer): int32 {.cdecl, raises: [].}
+    checkSizeConstraint*: proc(thisInterface: pointer;
+                               rect: ptr Vst3ViewRect): int32 {.
+      cdecl, raises: [].}
+
+  Vst3IPlugView* {.bycopy.} = object
+    lpVtbl*: ptr Vst3IPlugViewVtbl
+
+  Vst3IPlugFrameVtbl* {.bycopy.} = object
+    queryInterface*: proc(thisInterface: pointer; iid: ptr Vst3Tuid;
+                          obj: ptr pointer): int32 {.cdecl, raises: [].}
+    addRef*: proc(thisInterface: pointer): uint32 {.cdecl, raises: [].}
+    release*: proc(thisInterface: pointer): uint32 {.cdecl, raises: [].}
+    resizeView*: proc(thisInterface: pointer; view: ptr Vst3IPlugView;
+                      newSize: ptr Vst3ViewRect): int32 {.
+      cdecl, raises: [].}
+
+  Vst3IPlugFrame* {.bycopy.} = object
+    lpVtbl*: ptr Vst3IPlugFrameVtbl
+
   Vst3EditController* {.bycopy.} = object
     lpVtbl*: ptr Vst3EditControllerVtbl
 
@@ -648,3 +706,7 @@ static:
   doAssert Vst3SymbolicSample64 == 1'i32
   doAssert sizeof(Vst3Event) == 48
   doAssert sizeof(Vst3ProcessContext) == 112
+  doAssert sizeof(Vst3ViewRect) == 16
+  doAssert alignof(Vst3ViewRect) == 4
+  doAssert sizeof(Vst3IPlugViewVtbl) == 120
+  doAssert sizeof(Vst3IPlugFrameVtbl) == 32

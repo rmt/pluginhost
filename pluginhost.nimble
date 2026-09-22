@@ -659,6 +659,21 @@ proc runVst3V4b2Tests() =
        dependencyPathsClause() & " --nimcache:build/nimcache/vst3-v4b2 " &
        "--out:build/test/test_vst3_v4b2 tests/fixtures/test_vst3_v4b2.nim"
 
+proc compileVst3V5aFixture() =
+  exec "mkdir -p build/fixtures/vst3/v5a.vst3/Contents/x86_64-linux"
+  exec "c++ -std=c++17 -fPIC -shared -fvisibility=hidden " &
+       "-Wall -Wextra -Werror -Ivendor " &
+       "tests/fixtures/vst3/v5a_fixture.cpp -o " &
+       "build/fixtures/vst3/v5a.vst3/Contents/x86_64-linux/v5a.so"
+
+proc runVst3V5aTests() =
+  compileVst3V5aFixture()
+  exec "mkdir -p build/nimcache/vst3-v5a build/test"
+  exec "PLUGINHOST_VST3_V5A_FIXTURE_DIR=$PWD/build/fixtures/vst3 " &
+       "nim c -r --hints:off --path:src --path:tests " &
+       dependencyPathsClause() & " --nimcache:build/nimcache/vst3-v5a " &
+       "--out:build/test/test_vst3_v5a tests/fixtures/test_vst3_v5a.nim"
+
 proc runVst3V4bTests() =
   compileVst3V4bFixture()
   compileFakeJackFixture()
@@ -842,6 +857,8 @@ task testAbi, "Run C-versus-Nim ABI conformance tests":
   runAbiTests()
 task testVst3Catalog, "Run VST3 discovery and catalog checks":
   runVst3CatalogTests()
+task testVst3V5a, "Run private VST3 V5A editor ownership checks":
+  runVst3V5aTests()
 task testVst3Audio, "Run the bounded private VST3 float32 audio checks":
   runVst3AudioTests()
 task testVst3V4a, "Run bounded VST3 preset and stream transaction checks":
@@ -893,6 +910,7 @@ task all, "Run compile checks, build the executable, and run tests":
   runVst3V4aTests()
   runVst3V4bTests()
   runVst3V4b2Tests()
+  runVst3V5aTests()
   runUnitTests()
   runAbiTests()
   runVst3AbiTests()

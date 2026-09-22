@@ -8,7 +8,7 @@ import std/[locks, math, posix]
 import ../app/main_reactor
 import ../domain/[errors, result]
 import ../rt/atomic_pod
-import ./[ffi, host_context, module, stream, uid, parameter_transport, state_codec]
+import ./[editor, ffi, host_context, module, stream, uid, parameter_transport, state_codec]
 const
   Vst3ComponentIid* = "E831FF31F2D54301928EBBEE25697802"
   Vst3AudioProcessorIid* = "42043F99B7DA453CA569E79D9AAEC33D"
@@ -77,6 +77,7 @@ type
     stateSynchronized: bool
     selectedClassId: string
     stateStreams: seq[Vst3MemoryStream]
+    editor: Vst3Editor
     closed: bool
     quarantined: bool
     ownsContext: bool
@@ -640,6 +641,13 @@ proc close*(instance: Vst3Instance): Result[Unit] =
     return failure[Unit](instanceError(hekVst3Factory,
       "VST3 instance callbacks are still active",
       instance.module.bundlePath))
+  ## The editor owns the plugin view and host frame.  It must be closed
+  ## before handler removal, controller termination, or module release; a
+  ## retained frame leaves this instance rooted and makes close retryable.
+  if instance.editor != nil:
+    var editorClosed = editor.close(instance.editor)
+    if not editorClosed.isOk:
+      return failure[Unit](move(editorClosed.error))
   if instance.handlerInstalled and instance.controller != nil:
     let removed = instance.controller.lpVtbl.setComponentHandler(
       cast[pointer](instance.controller), nil)
@@ -1123,7 +1131,41 @@ proc stateSynchronized*(instance: Vst3Instance): bool {.inline.} =
 proc selectedClassId*(instance: Vst3Instance): string =
   if instance == nil: "" else: instance.selectedClassId
 
+proc createEditor*(instance: Vst3Instance; parentWindowId: uint64;
+                   host: Vst3EditorHost): Result[Vst3Editor] =
+  if instance == nil or instance.closed or
+      instance.closingState.loadAcquire() != 0'u32 or
+      instance.controller == nil:
+    return failure[Vst3Editor](instanceError(hekVst3Unavailable,
+      "VST3 editor requires an open edit controller",
+      if instance == nil: "" else: instance.module.bundlePath))
+  if instance.editor != nil and not instance.editor.isClosed:
+    return failure[Vst3Editor](instanceError(hekVst3Unavailable,
+      "VST3 instance already owns an editor",
+      instance.module.bundlePath))
+  var created = createVst3Editor(instance.controller, instance.mainThread,
+    parentWindowId, host)
+  if not created.isOk:
+    # A failed plugin callback may retain the stable frame. Preserve the
+    # partial editor under the instance so module teardown cannot pass it.
+    let retained = retainedEditorForController(instance.controller)
+    if retained != nil:
+      instance.editor = retained
+    return created
+  instance.editor = created.value
+  success(instance.editor)
+
+proc closeEditor*(instance: Vst3Instance): Result[Unit] =
+  if instance == nil:
+    return success()
+  if instance.editor == nil:
+    return success()
+  editor.close(instance.editor)
+
+proc editorOwner*(instance: Vst3Instance): Vst3Editor =
+  if instance == nil: nil else: instance.editor
 proc captureState*(instance: Vst3Instance): Result[Vst3StateSnapshot] =
+
   if instance == nil or instance.closed or instance.component == nil:
     return failure[Vst3StateSnapshot](hostError(hsState, hekState,
       "VST3 state capture requires an open instance"))

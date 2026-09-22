@@ -134,6 +134,15 @@ suite "VST3 raw ABI and module ownership":
     check vst3AbiOffset(vst3FieldId(430, 2)) == pointerBytes * 4'u64
     check vst3AbiOffset(vst3FieldId(430, 3)) == pointerBytes * 5'u64
     check vst3AbiOffset(vst3FieldId(431, 1)) == pointerBytes * 3'u64
+    for field in 1 .. 15:
+      check vst3AbiOffset(vst3FieldId(434, int32(field))) ==
+        pointerBytes * uint64(field - 1)
+    for field in 1 .. 4:
+      check vst3AbiOffset(vst3FieldId(435, int32(field))) ==
+        pointerBytes * uint64(field - 1)
+    for field in 1 .. 4:
+      check vst3AbiOffset(vst3FieldId(433, int32(field))) ==
+        uint64((field - 1) * sizeof(int32))
   test "generated C header layouts match the Nim boundary":
     check uint64(sizeof(Vst3Tuid)) == vst3AbiSize(401)
     check uint64(alignof(Vst3Tuid)) == vst3AbiAlign(401)
@@ -160,6 +169,12 @@ suite "VST3 raw ABI and module ownership":
     check uint64(sizeof(Vst3ProcessSetup)) == vst3AbiSize(424)
     check uint64(sizeof(Vst3AudioBusBuffers)) == vst3AbiSize(425)
     check uint64(sizeof(Vst3ProcessData)) == vst3AbiSize(426)
+    check uint64(sizeof(Vst3ViewRect)) == vst3AbiSize(433)
+    check uint64(alignof(Vst3ViewRect)) == vst3AbiAlign(433)
+    check uint64(sizeof(Vst3IPlugViewVtbl)) == vst3AbiSize(434)
+    check uint64(alignof(Vst3IPlugViewVtbl)) == vst3AbiAlign(434)
+    check uint64(sizeof(Vst3IPlugFrameVtbl)) == vst3AbiSize(435)
+    check uint64(alignof(Vst3IPlugFrameVtbl)) == vst3AbiAlign(435)
     check uint64(sizeof(Vst3Event)) == vst3AbiSize(427)
     check uint64(offsetOf(Vst3Event, payload)) ==
       vst3AbiOffset(vst3FieldId(427, 1))
@@ -189,6 +204,8 @@ suite "VST3 raw ABI and module ownership":
     check uint64(alignof(Vst3Event)) == vst3AbiAlign(427)
     check uint64(offsetOf(Vst3AudioBusBuffers, silenceFlags)) ==
       vst3AbiOffset(vst3FieldId(425, 2))
+    check uint64(offsetOf(Vst3EditControllerVtbl, createView)) ==
+      vst3AbiOffset(vst3FieldId(413, 18))
     check uint64(offsetOf(Vst3ProcessData, processContext)) ==
       vst3AbiOffset(vst3FieldId(426, 12))
     check uint64(offsetOf(Vst3ParamValueQueueVtbl, addPoint)) ==
@@ -219,6 +236,17 @@ suite "VST3 raw ABI and module ownership":
       vst3AbiOffset(vst3FieldId(419, 6))
     check uint64(offsetOf(Vst3ComponentHandlerVtbl, performEdit)) ==
       vst3AbiOffset(vst3FieldId(420, 5))
+    check uint64(offsetOf(Vst3ViewRect, right)) ==
+      vst3AbiOffset(vst3FieldId(433, 3))
+    check uint64(offsetOf(Vst3IPlugViewVtbl, setFrame)) ==
+      vst3AbiOffset(vst3FieldId(434, 13))
+    check uint64(offsetOf(Vst3IPlugViewVtbl, checkSizeConstraint)) ==
+      vst3AbiOffset(vst3FieldId(434, 15))
+    check Vst3PlugViewIid == "5BC32507D06049EAA6151B522B755B29"
+    check Vst3PlugFrameIid == "367FAF01AFA946938D4DA2A0ED0882A3"
+    check Vst3PlatformTypeX11EmbedWindowID == "X11EmbedWindowID"
+    check uint64(offsetOf(Vst3IPlugFrameVtbl, resizeView)) ==
+      vst3AbiOffset(vst3FieldId(435, 4))
     check uint64(sizeof(Vst3PlugInterfaceSupportVtbl)) == vst3AbiSize(421)
     check uint64(offsetOf(Vst3FactoryInfo, flags)) ==
       vst3AbiOffset(vst3FieldId(402, 4))
