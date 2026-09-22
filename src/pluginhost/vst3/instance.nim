@@ -8,8 +8,7 @@ import std/[locks, math, posix]
 import ../app/main_reactor
 import ../domain/[errors, result]
 import ../rt/atomic_pod
-import ./[ffi, host_context, module, stream, uid, parameter_transport]
-
+import ./[ffi, host_context, module, stream, uid, parameter_transport, state_codec]
 const
   Vst3ComponentIid* = "E831FF31F2D54301928EBBEE25697802"
   Vst3AudioProcessorIid* = "42043F99B7DA453CA569E79D9AAEC33D"
@@ -20,6 +19,11 @@ const
   Vst3MaxInstanceRoots* = 64
 
 type
+  Vst3StateSnapshot* = object
+    component*: seq[uint8]
+    controller*: seq[uint8]
+    hasController*: bool
+
   Vst3ParameterMetadata* = object
     id*: Vst3ParamID
     title*: string
@@ -61,7 +65,6 @@ type
     component*: ptr Vst3Component
     processor*: ptr Vst3AudioProcessor
     controller*: ptr Vst3EditController
-    stateStream*: Vst3MemoryStream
     componentPoint: ptr Vst3ConnectionPoint
     controllerPoint: ptr Vst3ConnectionPoint
     componentInitialized: bool
@@ -71,6 +74,8 @@ type
     componentConnected: bool
     controllerConnected: bool
     stateSynchronized: bool
+    selectedClassId: string
+    stateStreams: seq[Vst3MemoryStream]
     closed: bool
     quarantined: bool
     ownsContext: bool
@@ -155,6 +160,25 @@ proc instanceError(kind: HostErrorKind; message, path: string;
   if detail.len > 0: context.add("; " & detail)
   hostError(hsVst3, kind, message, context)
 
+proc stateError(message, path: string; detail = ""): HostError =
+  var context = "bundle=" & path
+  if detail.len > 0: context.add("; " & detail)
+  hostError(hsState, hekState, message, context)
+proc pruneDrainedStateTransactions(instance: Vst3Instance) =
+  if instance == nil: return
+  var index = instance.stateStreams.len
+  while index > 0:
+    dec index
+    if not instance.stateStreams[index].hasRetainedReferences():
+      instance.stateStreams.delete(index)
+
+proc finishStateTransaction(instance: Vst3Instance; stream: Vst3MemoryStream) =
+  if stream == nil: return
+  discard stream.close()
+  pruneDrainedStateTransactions(instance)
+  if stream.hasRetainedReferences():
+    instance.stateStreams.add(stream)
+
 proc uidMatches(iid: ptr Vst3Tuid; text: string): bool {.inline, raises: [].} =
   if iid == nil: return false
   let parsed = parseVst3Uid(text)
@@ -208,6 +232,7 @@ proc validController(controller: ptr Vst3EditController): bool =
     controller.lpVtbl.queryInterface != nil and controller.lpVtbl.addRef != nil and
     controller.lpVtbl.release != nil and controller.lpVtbl.initialize != nil and
     controller.lpVtbl.terminate != nil and controller.lpVtbl.setComponentState != nil and
+    controller.lpVtbl.setState != nil and controller.lpVtbl.getState != nil and
     controller.lpVtbl.getParameterCount != nil and
     controller.lpVtbl.getParameterInfo != nil and
     controller.lpVtbl.setComponentHandler != nil
@@ -670,10 +695,12 @@ proc close*(instance: Vst3Instance): Result[Unit] =
   # A plugin may retain the startup state stream after the host's reference
   # is released. Keep the instance and module quarantined until that edge
   # drains instead of unloading an object rooted by the stream.
-  if instance.stateStream.hasRetainedReferences():
-    return failure[Unit](instanceError(hekVst3Factory,
-      "VST3 startup state stream remained retained during shutdown",
-      instance.module.bundlePath))
+  pruneDrainedStateTransactions(instance)
+  for retainedState in instance.stateStreams:
+    if retainedState.hasRetainedReferences():
+      return failure[Unit](instanceError(hekVst3Factory,
+        "VST3 state transaction stream remained retained during shutdown",
+        instance.module.bundlePath))
   if instance.handlerObject.references.loadAcquire() > 1'u32 or
       instance.componentProxy.references.loadAcquire() > 1'u32 or
       instance.controllerProxy.references.loadAcquire() > 1'u32:
@@ -701,7 +728,8 @@ proc failOpen(instance: Vst3Instance; primary: HostError): Result[Vst3Instance] 
   failure[Vst3Instance](move(error))
 proc openVst3Instance*(module: var Vst3Module; classId: Vst3Tuid;
                        reactor: ptr MainReactor = nil;
-                       hostContext: Vst3HostContext = nil): Result[Vst3Instance] =
+                       hostContext: Vst3HostContext = nil;
+                       loadStatePath = ""): Result[Vst3Instance] =
   if instanceRootCountAtomic.loadAcquire() >= uint32(Vst3MaxInstanceRoots):
     discard module.close()
     return failure[Vst3Instance](instanceError(hekVst3Factory,
@@ -713,6 +741,7 @@ proc openVst3Instance*(module: var Vst3Module; classId: Vst3Tuid;
     return failure[Vst3Instance](instanceError(hekVst3Factory,
       "VST3 instance root quarantine is full", module.bundlePath))
   instance.module = move(module)
+  instance.selectedClassId = formatVst3Uid(classId)
   initLock(instance.mailbox.lock)
   if hostContext == nil:
     instance.context = newVst3HostContext(reactor)
@@ -860,35 +889,112 @@ proc openVst3Instance*(module: var Vst3Module; classId: Vst3Tuid;
         hekVst3Factory, "VST3 controller connection failed", instance.module.bundlePath,
         "result=" & $controllerConnection))
     instance.controllerConnected = true
-
-  if instance.controller != nil:
+  if loadStatePath.len > 0:
+    var loaded = loadVst3Preset(loadStatePath, instance.selectedClassId)
+    if not loaded.isOk:
+      return failOpen(instance, move(loaded.error))
+    if loaded.value.hasController and instance.controller == nil:
+      return failOpen(instance, stateError(
+        "VST3 preset contains controller state but plugin has no controller",
+        instance.module.bundlePath))
+    let backing = newVst3SharedBuffer(loaded.value.raw)
+    if backing == nil:
+      return failOpen(instance, stateError(
+        "VST3 preset stream backing allocation failed", instance.module.bundlePath))
+    var componentState = newVst3ReadOnlyView(backing,
+      loaded.value.componentOffset, loaded.value.component.len)
+    if componentState == nil:
+      return failOpen(instance, stateError(
+        "VST3 component state stream allocation failed", instance.module.bundlePath))
+    let componentResult = instance.component.lpVtbl.setState(
+      cast[pointer](instance.component), cast[pointer](componentState.interfacePointer()))
+    finishStateTransaction(instance, componentState)
+    if componentResult != Vst3ResultOk and
+        componentResult != Vst3NotImplemented:
+      return failOpen(instance, stateError(
+        "VST3 component rejected preset state", instance.module.bundlePath,
+        "result=" & $componentResult))
+    var controllerStateResult = Vst3NotImplemented
+    if instance.controller != nil:
+      var controllerComponent = newVst3ReadOnlyView(backing,
+        loaded.value.componentOffset, loaded.value.component.len)
+      if controllerComponent == nil:
+        return failOpen(instance, stateError(
+          "VST3 controller component-state stream allocation failed",
+          instance.module.bundlePath))
+      controllerStateResult = instance.controller.lpVtbl.setComponentState(
+        cast[pointer](instance.controller),
+        cast[pointer](controllerComponent.interfacePointer()))
+      finishStateTransaction(instance, controllerComponent)
+      if controllerStateResult != Vst3ResultOk and
+          controllerStateResult != Vst3NotImplemented:
+        return failOpen(instance, stateError(
+          "VST3 controller rejected preset component state",
+          instance.module.bundlePath, "result=" & $controllerStateResult))
+      if loaded.value.hasController:
+        var controllerState = newVst3ReadOnlyView(backing,
+          loaded.value.controllerOffset, loaded.value.controller.len)
+        if controllerState == nil:
+          return failOpen(instance, stateError(
+            "VST3 controller state stream allocation failed",
+            instance.module.bundlePath))
+        let controllerStateResult = instance.controller.lpVtbl.setState(
+          cast[pointer](instance.controller),
+          cast[pointer](controllerState.interfacePointer()))
+        finishStateTransaction(instance, controllerState)
+        if controllerStateResult != Vst3ResultOk and
+            controllerStateResult != Vst3NotImplemented:
+          return failOpen(instance, stateError(
+            "VST3 controller rejected preset state", instance.module.bundlePath,
+            "result=" & $controllerStateResult))
+    instance.stateSynchronized = controllerStateResult == Vst3ResultOk
+  elif instance.controller != nil:
     let state = newVst3MemoryStream()
     if state == nil:
-      return failOpen(instance, instanceError(
-        hekVst3Factory, "VST3 state stream allocation failed",
-        instance.module.bundlePath))
-    instance.stateStream = state
+      return failOpen(instance, stateError(
+        "VST3 state stream allocation failed", instance.module.bundlePath))
     let stateResult = instance.component.lpVtbl.getState(
       cast[pointer](instance.component), cast[pointer](state.interfacePointer()))
     if stateResult == Vst3ResultOk:
-      discard state.rewind()
+      if state.failed():
+        finishStateTransaction(instance, state)
+        return failOpen(instance, stateError(
+          "VST3 initial component state stream failed",
+          instance.module.bundlePath))
+      let componentBytes = state.bytes()
+      finishStateTransaction(instance, state)
+      let controllerState = newVst3ReadOnlyStream(componentBytes)
+      if controllerState == nil:
+        return failOpen(instance, stateError(
+          "VST3 initial controller state stream allocation failed",
+          instance.module.bundlePath))
       let controllerResult = instance.controller.lpVtbl.setComponentState(
-        cast[pointer](instance.controller), cast[pointer](state.interfacePointer()))
-      if controllerResult != Vst3ResultOk and controllerResult != Vst3NotImplemented:
-        discard state.interfacePointer().lpVtbl.release(
-          cast[pointer](state.interfacePointer()))
-        return failOpen(instance, instanceError(
-          hekVst3Factory, "VST3 controller rejected initial component state",
+        cast[pointer](instance.controller),
+        cast[pointer](controllerState.interfacePointer()))
+      finishStateTransaction(instance, controllerState)
+      if controllerResult != Vst3ResultOk and
+          controllerResult != Vst3NotImplemented:
+        return failOpen(instance, stateError(
+          "VST3 controller rejected initial component state",
           instance.module.bundlePath, "result=" & $controllerResult))
       instance.stateSynchronized = controllerResult == Vst3ResultOk
-    elif stateResult != Vst3NotImplemented:
-      discard state.interfacePointer().lpVtbl.release(
-        cast[pointer](state.interfacePointer()))
-      return failOpen(instance, instanceError(
-        hekVst3Factory, "VST3 component state query failed",
-        instance.module.bundlePath, "result=" & $stateResult))
-    discard state.interfacePointer().lpVtbl.release(
-      cast[pointer](state.interfacePointer()))
+    else:
+      finishStateTransaction(instance, state)
+      if stateResult != Vst3NotImplemented:
+        return failOpen(instance, stateError(
+          "VST3 component state query failed", instance.module.bundlePath,
+          "result=" & $stateResult))
+  acquire(instance.mailbox.lock)
+  let pendingRestart = instance.mailbox.restartFlags
+  instance.mailbox.restartFlags = 0
+  release(instance.mailbox.lock)
+  if (pendingRestart and uint32(Vst3RestartReloadComponent or
+      Vst3RestartLatencyChanged or Vst3RestartNoteExpressionChanged or
+      Vst3RestartPrefetchChanged or Vst3RestartRoutingChanged or
+      Vst3RestartKeyswitchChanged)) != 0'u32:
+    return failOpen(instance, stateError(
+      "VST3 preset requested unsupported restart", instance.module.bundlePath,
+      "flags=" & $pendingRestart))
   var buses = collectBusMetadata(instance)
   if not buses.isOk:
     return failOpen(instance, move(buses.error))
@@ -967,3 +1073,63 @@ proc hostContextPointer*(instance: Vst3Instance): Vst3HostContext {.inline.} =
   if instance == nil: nil else: instance.context
 proc stateSynchronized*(instance: Vst3Instance): bool {.inline.} =
   instance != nil and instance.stateSynchronized
+
+proc selectedClassId*(instance: Vst3Instance): string =
+  if instance == nil: "" else: instance.selectedClassId
+
+proc captureState*(instance: Vst3Instance): Result[Vst3StateSnapshot] =
+  if instance == nil or instance.closed or instance.component == nil:
+    return failure[Vst3StateSnapshot](hostError(hsState, hekState,
+      "VST3 state capture requires an open instance"))
+  let componentOverhead = Vst3PresetHeaderBytes +
+    Vst3PresetListHeaderBytes + Vst3PresetEntryBytes
+  let componentMaximum = Vst3PresetMaximumBytes - componentOverhead
+  let componentStream = newVst3MemoryStream(maximum = componentMaximum)
+  if componentStream == nil:
+    return failure[Vst3StateSnapshot](hostError(hsState, hekState,
+      "VST3 component state stream allocation failed"))
+  let componentResult = instance.component.lpVtbl.getState(
+    cast[pointer](instance.component), cast[pointer](componentStream.interfacePointer()))
+  if componentResult != Vst3ResultOk and
+      componentResult != Vst3NotImplemented:
+    finishStateTransaction(instance, componentStream)
+    return failure[Vst3StateSnapshot](stateError(
+      "VST3 component state capture failed", instance.module.bundlePath,
+      "result=" & $componentResult))
+  if componentStream.failed():
+    finishStateTransaction(instance, componentStream)
+    return failure[Vst3StateSnapshot](stateError(
+      "VST3 component state stream failed", instance.module.bundlePath))
+  let componentBytes = componentStream.bytes()
+  finishStateTransaction(instance, componentStream)
+  var snapshot = Vst3StateSnapshot(component: componentBytes)
+  if instance.controller != nil:
+    let controllerOverhead = Vst3PresetHeaderBytes +
+      Vst3PresetListHeaderBytes + 2 * Vst3PresetEntryBytes
+    let remaining = Vst3PresetMaximumBytes - controllerOverhead -
+      componentBytes.len
+    let controllerMaximum = max(0, remaining)
+    let controllerStream = newVst3MemoryStream(maximum = controllerMaximum)
+    if controllerStream == nil:
+      return failure[Vst3StateSnapshot](hostError(hsState, hekState,
+        "VST3 controller state stream allocation failed"))
+    let controllerResult = instance.controller.lpVtbl.getState(
+      cast[pointer](instance.controller), cast[pointer](controllerStream.interfacePointer()))
+    if controllerResult == Vst3ResultOk:
+      if controllerStream.failed():
+        finishStateTransaction(instance, controllerStream)
+        return failure[Vst3StateSnapshot](stateError(
+          "VST3 controller state stream failed", instance.module.bundlePath))
+      if remaining < 0:
+        finishStateTransaction(instance, controllerStream)
+        return failure[Vst3StateSnapshot](stateError(
+          "VST3 state aggregate exceeds host bound", instance.module.bundlePath))
+      snapshot.controller = controllerStream.bytes()
+      snapshot.hasController = true
+    elif controllerResult != Vst3NotImplemented:
+      finishStateTransaction(instance, controllerStream)
+      return failure[Vst3StateSnapshot](stateError(
+        "VST3 controller state capture failed", instance.module.bundlePath,
+        "result=" & $controllerResult))
+    finishStateTransaction(instance, controllerStream)
+  success(move(snapshot))

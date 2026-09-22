@@ -1022,8 +1022,8 @@ This table is updated only when work is reviewed.
 | V1B — VST3 catalog/discovery | Approved | V1B review | Terminal bundle discovery, processor filtering, mixed-format catalog output, and unavailable-run policy accepted |
 | V2A — VST3 lifecycle/services | Approved | V2A review | Host objects, run loop, separate/combined ownership, streams, metadata, and cleanup accounting accepted |
 | V2B — VST3 headless processing | Approved | V2B review and continuation approval | Bounded float32 JACK slice, bus negotiation, parameter transport groundwork, live audio, and generated-C RT evidence accepted |
-| V3 — VST3 parameters/MIDI | Not started | — | Awaiting approval of the pre-code review package |
-| V4A/V4B — VST3 state/reconfiguration | Not started | — | Standard `.vstpreset` transactions and native reconfiguration |
+| V3 — VST3 parameters/MIDI | Approved | V3 review | Bounded parameter queues, controller gestures, MIDI-1 mapping, complete SysEx, representable output conversion, live JACK evidence, and RT audits accepted |
+| V4A/V4B — VST3 state/reconfiguration | In progress | V4A pre-code review | V4A bounded `.vstpreset` transactions approved for implementation; V4B native reconfiguration not started |
 | V5A/V5B — VST3 GUI | Not started | — | X11 editor ownership and protocol integration |
 | V6 — VST3 public cutover | Not started | — | Public `run`, complete regression matrix, and compatibility evidence |
 

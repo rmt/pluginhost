@@ -28,11 +28,11 @@ proc runLoop*(services: Vst3PluginServices): ptr Vst3RunLoop {.inline.} =
   else: services.context.runLoopPointer()
 
 proc openInstance*(services: Vst3PluginServices; module: var Vst3Module;
-                   classId: Vst3Tuid): Result[Vst3Instance] =
+                   classId: Vst3Tuid; loadStatePath = ""): Result[Vst3Instance] =
   if services == nil or services.context == nil:
     return failure[Vst3Instance](hostError(
       hsVst3, hekVst3Factory, "VST3 plugin services have no host context"))
-  openVst3Instance(module, classId, nil, services.context)
+  openVst3Instance(module, classId, nil, services.context, loadStatePath)
 
 proc close*(services: Vst3PluginServices): Result[Unit] =
   if services == nil or services.context == nil:

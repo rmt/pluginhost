@@ -3,10 +3,9 @@
 
 import ../domain/[errors, port_plan, result]
 import ../jack/backend
-import ../vst3/[audio_process, event_bridge, ffi, instance, module,
+import ../vst3/[audio_process, event_bridge, ffi, instance, module, state_codec,
   parameter_transport, port_inspector, uid]
 import ./vst3_plugin_services
-
 type
   Vst3AudioSliceState* = enum
     v3assEmpty
@@ -35,6 +34,14 @@ proc sliceError(message, path, pluginId, detail: string): HostError =
 
 proc sliceError(message, path, pluginId: string): HostError =
   sliceError(message, path, pluginId, "")
+proc sliceStateError(message, path, pluginId, detail: string): HostError =
+  var context = "path=" & path & "; id=" & pluginId
+  if detail.len > 0: context.add("; " & detail)
+  hostError(hsState, hekState, message, context)
+
+proc sliceStateError(message, path, pluginId: string): HostError =
+  sliceStateError(message, path, pluginId, "")
+
 
 proc appendVst3CleanupError(primary: var HostError;
                             cleanup: Result[Unit]; label: string) =
@@ -90,14 +97,15 @@ proc takeEventMetrics*(slice: var Vst3AudioSlice): Vst3EventMetrics =
 
 proc openVst3AudioSlice*(services: Vst3PluginServices;
                         module: var Vst3Module; classId: Vst3Tuid;
-                        backendConfig: JackBackendOpenConfig):
+                        backendConfig: JackBackendOpenConfig;
+                        loadStatePath = ""):
                         Result[Vst3AudioSlice] =
   if services == nil:
     return failure[Vst3AudioSlice](sliceError(
       "VST3 audio slice requires application-owned services", "", ""))
   let bundlePath = module.bundlePath()
   let pluginId = formatVst3Uid(classId)
-  var opened = services.openInstance(module, classId)
+  var opened = services.openInstance(module, classId, loadStatePath)
   if not opened.isOk:
     return failure[Vst3AudioSlice](move(opened.error))
   var slice = Vst3AudioSlice(instance: opened.value,
@@ -286,3 +294,25 @@ proc close*(slice: var Vst3AudioSlice): Result[Unit] =
     return instanceClosed
   slice.stateValue = v3assClosed
   success()
+
+proc saveState*(slice: var Vst3AudioSlice; path: string): Result[Unit] =
+  if slice.stateValue in {v3assEmpty, v3assClosed}:
+    return failure[Unit](sliceStateError("VST3 state save requires an open slice",
+      slice.path, slice.pluginId))
+  if slice.stateValue != v3assQuiesced:
+    return failure[Unit](sliceStateError("VST3 state save requires a quiesced slice",
+      slice.path, slice.pluginId, "state=" & $slice.stateValue))
+  if slice.componentActive:
+    let inactive = setVst3Active(slice.instance.componentPointer(), false)
+    if not inactive.isOk:
+      return failure[Unit](sliceStateError(
+        "VST3 component deactivation failed before state save",
+        slice.path, slice.pluginId, inactive.error.message &
+        (if inactive.error.context.len > 0: " (" & inactive.error.context & ")"
+         else: "")))
+    slice.componentActive = false
+  var captured = slice.instance.captureState()
+  if not captured.isOk: return failure[Unit](move(captured.error))
+  writeVst3Preset(path, slice.instance.selectedClassId(),
+    captured.value.component, captured.value.controller,
+    captured.value.hasController)

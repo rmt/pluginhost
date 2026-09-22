@@ -599,6 +599,41 @@ proc runVst3AudioTests() =
        "nim c -r --hints:off --path:src --path:tests " &
        dependencyPathsClause() & " --nimcache:build/nimcache/vst3-audio " &
        "--out:build/test/test_vst3_audio tests/fixtures/test_vst3_audio.nim"
+proc compileVst3V4aVariant(name: string; mode: int) =
+  exec "mkdir -p build/fixtures/vst3/" & name &
+       ".vst3/Contents/x86_64-linux"
+  exec "c++ -std=c++17 -fPIC -shared -fvisibility=hidden " &
+       "-Wall -Wextra -Werror -Itests/fixtures/vst3 " &
+       "-DPLUGINHOST_VST3_V4A_MODE=" & $mode & " " &
+       "tests/fixtures/vst3/v4a_fixture.cpp -o " &
+       "build/fixtures/vst3/" & name &
+       ".vst3/Contents/x86_64-linux/" & name & ".so"
+
+proc compileVst3V4aFixture() =
+  compileVst3V4aVariant("v4a", 0)
+  compileVst3V4aVariant("v4a-component-fail", 1)
+  compileVst3V4aVariant("v4a-controller-fail", 2)
+  compileVst3V4aVariant("v4a-overflow", 3)
+  compileVst3V4aVariant("v4a-capture-fail", 4)
+  compileVst3V4aVariant("v4a-retain", 5)
+  compileVst3V4aVariant("v4a-controller-omit", 6)
+  compileVst3V4aVariant("v4a-controller-capture-fail", 7)
+  compileVst3V4aVariant("v4a-controller-sync-fail", 8)
+  compileVst3V4aVariant("v4a-initial-overflow", 9)
+  compileVst3V4aVariant("v4a-notimpl-load", 10)
+  compileVst3V4aVariant("v4a-notimpl-capture", 11)
+
+
+proc runVst3V4aTests() =
+  compileVst3V4aFixture()
+  compileFakeJackFixture()
+  exec "mkdir -p build/nimcache/vst3-v4a build/test"
+  exec "PLUGINHOST_VST3_V4A_FIXTURE_DIR=$PWD/build/fixtures/vst3 " &
+       "PLUGINHOST_JACK_FAKE_FIXTURE=$PWD/build/fixtures/" &
+       "libpluginhost_jack_fake_fixture.so " &
+       "nim c -r --hints:off --path:src --path:tests " &
+       dependencyPathsClause() & " --nimcache:build/nimcache/vst3-v4a " &
+       "--out:build/test/test_vst3_v4a tests/fixtures/test_vst3_v4a.nim"
 
 proc runAbiTests() =
   exec "mkdir -p build/abi build/nimcache/abi build/test"
@@ -774,6 +809,8 @@ task testVst3Catalog, "Run VST3 discovery and catalog checks":
   runVst3CatalogTests()
 task testVst3Audio, "Run the bounded private VST3 float32 audio checks":
   runVst3AudioTests()
+task testVst3V4a, "Run bounded VST3 preset and stream transaction checks":
+  runVst3V4aTests()
 task testVst3Abi, "Run VST3 generated-C and C++ fixture ABI checks":
   runVst3AbiTests()
 task testVst3V2a, "Run VST3 V2A lifecycle, host, and run-loop checks":
@@ -814,6 +851,7 @@ task all, "Run compile checks, build the executable, and run tests":
        " --nimcache:build/nimcache/check src/pluginhost.nim"
   compileTestBinary()
   runVst3AudioTests()
+  runVst3V4aTests()
   runUnitTests()
   runAbiTests()
   runVst3AbiTests()

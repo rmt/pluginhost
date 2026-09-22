@@ -6,6 +6,10 @@
 #ifndef PLUGINHOST_VST3_V2A_MODE
 #define PLUGINHOST_VST3_V2A_MODE 0
 #endif
+#ifndef PLUGINHOST_VST3_V4A_MODE
+#define PLUGINHOST_VST3_V4A_MODE 0
+#endif
+
 
 using TUID = std::int8_t[16];
 using FIDString = const char*;
@@ -181,7 +185,14 @@ static std::uint32_t g_disconnect_component = 0;
 static std::uint32_t g_disconnect_controller = 0;
 static std::uint32_t g_state_get = 0;
 static std::uint32_t g_state_set = 0;
+static std::uint32_t g_controller_state_set = 0;
+static std::uint32_t g_combined_set_state_calls = 0;
 static std::uint32_t g_state_bytes_observed = 0;
+static std::uint32_t g_state_order[16] = {};
+static std::uint32_t g_state_order_count = 0;
+static void recordState(std::uint32_t value) {
+  if (g_state_order_count < 16) g_state_order[g_state_order_count++] = value;
+}
 static bool same(const void* a, const void* b) { return a && std::memcmp(a, b, 16) == 0; }
 static void setText(String128 out, const char* text) {
   std::memset(out, 0, sizeof(String128));
@@ -193,7 +204,7 @@ static std::int32_t g_runloop_pipe[2] = {-1, -1};
 static IRunLoop* g_runloop = nullptr;
 static bool g_runloop_fd_registered = false;
 static bool g_runloop_timer_registered = false;
-#if PLUGINHOST_VST3_V2A_MODE == 14
+#if PLUGINHOST_VST3_V2A_MODE == 14 || defined(PLUGINHOST_VST3_V4A_FIXTURE)
 static IBStream* g_retained_stream = nullptr;
 #endif
 
@@ -362,9 +373,55 @@ class FixtureObject final : public ComponentView, public ProcessorView,
   tresult getRoutingInfo(void*, void*) override { return 3; }
   tresult activateBus(std::int32_t, std::int32_t, std::int32_t, TBool) override { return 0; }
   tresult setActive(TBool) override { return 0; }
-  tresult setState(IBStream*) override { return 0; }
+  tresult setState(IBStream*) override {
+    ++g_combined_set_state_calls;
+#if PLUGINHOST_VST3_V4A_MODE == 10
+    return 3;
+#elif PLUGINHOST_VST3_V4A_MODE == 1
+    if (g_combined_set_state_calls == 1) return -42;
+#elif PLUGINHOST_VST3_V4A_MODE == 2
+    if (g_combined_set_state_calls > 1) return -42;
+#endif
+#if PLUGINHOST_VST3_V2A_MODE == 5
+    if (g_combined_set_state_calls > 1) {
+      ++g_controller_state_set;
+      recordState(5);
+      return 0;
+    }
+#endif
+    recordState(1);
+    return 0;
+  }
   tresult getState(IBStream* stream) override {
     ++g_state_get;
+    recordState(2);
+#if PLUGINHOST_VST3_V4A_MODE == 11
+    return 3;
+#elif PLUGINHOST_VST3_V4A_MODE == 4
+    if (g_state_get > 1) return -42;
+#elif PLUGINHOST_VST3_V4A_MODE == 6
+    if (g_state_get > 2) return 3;
+#elif PLUGINHOST_VST3_V4A_MODE == 7
+    if (g_state_get > 2) return -42;
+#elif PLUGINHOST_VST3_V4A_MODE == 9
+    if (g_state_get == 1 && stream != nullptr) {
+      std::int64_t position = 0;
+      std::uint8_t byte = 0;
+      (void)stream->seek(64 * 1024 * 1024, 0, &position);
+      std::int32_t written = 0;
+      (void)stream->write(&byte, 1, &written);
+      return 0;
+    }
+#elif PLUGINHOST_VST3_V4A_MODE == 3
+    if (g_state_get > 1 && stream != nullptr) {
+      std::int64_t position = 0;
+      std::uint8_t byte = 0;
+      (void)stream->seek(64 * 1024 * 1024, 0, &position);
+      std::int32_t written = 0;
+      (void)stream->write(&byte, 1, &written);
+      return 0;
+    }
+#endif
     (void)stream;
 #if PLUGINHOST_VST3_V2A_MODE == 7
     return 3;
@@ -374,7 +431,7 @@ class FixtureObject final : public ComponentView, public ProcessorView,
     std::int32_t written = 0;
     if (stream->write(const_cast<std::uint8_t*>(bytes), 4, &written) != 0 ||
         written != 4) return 2;
-#if PLUGINHOST_VST3_V2A_MODE == 14
+#if PLUGINHOST_VST3_V2A_MODE == 14 || PLUGINHOST_VST3_V4A_MODE == 5
     if (g_retained_stream == nullptr) {
       g_retained_stream = stream;
       g_retained_stream->addRef();
@@ -433,8 +490,12 @@ class FixtureObject final : public ComponentView, public ProcessorView,
   tresult process(void*) override { return 0; }
   std::uint32_t getTailSamples() override { return 0; }
   tresult setComponentState(IBStream* stream) override {
+    recordState(3);
     ++g_state_set;
     if (PLUGINHOST_VST3_V2A_MODE == 8) return 3;
+#if PLUGINHOST_VST3_V4A_MODE == 8
+    return -42;
+#endif
     if (stream == nullptr) return 2;
     std::uint8_t bytes[4] = {};
     std::int32_t read = 0;
@@ -483,7 +544,7 @@ class FixtureObject final : public ComponentView, public ProcessorView,
       retained_proxy_->release();
       retained_proxy_ = nullptr;
     }
-#if PLUGINHOST_VST3_V2A_MODE == 14
+#if PLUGINHOST_VST3_V2A_MODE == 14 || PLUGINHOST_VST3_V4A_MODE == 5
     if (g_retained_stream != nullptr) {
       g_retained_stream->release();
       g_retained_stream = nullptr;
@@ -537,9 +598,13 @@ class SeparateController final : public SeparateControllerView, public Controlle
     return (PLUGINHOST_VST3_V2A_MODE == 2 || PLUGINHOST_VST3_V2A_MODE == 11) ? -42 : 0;
   }
   tresult terminate() override { ++g_controller_terminate; return 0; }
-  tresult setComponentState(IBStream*) override { ++g_state_set; return PLUGINHOST_VST3_V2A_MODE == 8 ? 3 : 0; }
-  tresult setState(IBStream*) override { return 0; }
-  tresult getState(IBStream*) override { return 3; }
+  tresult setComponentState(IBStream*) override {
+    recordState(4);
+    ++g_state_set;
+    return PLUGINHOST_VST3_V2A_MODE == 8 ? 3 : 0;
+  }
+  tresult setState(IBStream*) override { ++g_controller_state_set; recordState(5); return 0; }
+  tresult getState(IBStream*) override { ++g_controller_state_set; return 3; }
   std::int32_t getParameterCount() override {
 #if PLUGINHOST_VST3_V2A_MODE == 10
     return 4097;
@@ -678,9 +743,12 @@ extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_
 extern "C" __attribute__((visibility("default"))) bool ModuleEntry(void*) { return true; }
 extern "C" __attribute__((visibility("default"))) bool ModuleExit() { ++g_module_exit; return true; }
 extern "C" __attribute__((visibility("default"))) IPluginFactory* GetPluginFactory() { ++g_factory_acquire; return &g_factory; }
+extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_state_order_count() { return g_state_order_count; }
+extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_state_order(std::uint32_t index) { return index < g_state_order_count ? g_state_order[index] : 0; }
 extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_component_initialize() { return g_component_initialize; }
 extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_component_terminate() { return g_component_terminate; }
 extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_controller_initialize() { return g_controller_initialize; }
+extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_controller_state_set() { return g_controller_state_set; }
 extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_controller_terminate() { return g_controller_terminate; }
 extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_state_get() { return g_state_get; }
 extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_state_set() { return g_state_set; }
