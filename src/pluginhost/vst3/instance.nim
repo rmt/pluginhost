@@ -21,6 +21,7 @@ const
 type
   Vst3StateSnapshot* = object
     component*: seq[uint8]
+    hasComponent*: bool
     controller*: seq[uint8]
     hasController*: bool
 
@@ -1147,7 +1148,9 @@ proc captureState*(instance: Vst3Instance): Result[Vst3StateSnapshot] =
       "VST3 component state stream failed", instance.module.bundlePath))
   let componentBytes = componentStream.bytes()
   finishStateTransaction(instance, componentStream)
-  var snapshot = Vst3StateSnapshot(component: componentBytes)
+  var snapshot = Vst3StateSnapshot(
+    component: componentBytes,
+    hasComponent: componentResult == Vst3ResultOk)
   if instance.controller != nil:
     let controllerOverhead = Vst3PresetHeaderBytes +
       Vst3PresetListHeaderBytes + 2 * Vst3PresetEntryBytes
@@ -1178,3 +1181,71 @@ proc captureState*(instance: Vst3Instance): Result[Vst3StateSnapshot] =
         "result=" & $controllerResult))
     finishStateTransaction(instance, controllerStream)
   success(move(snapshot))
+proc applyStateSnapshot*(instance: Vst3Instance;
+                         snapshot: Vst3StateSnapshot): Result[Unit] =
+  ## Apply bounded, rooted read-only streams before any audio configuration.
+  ## Each ABI call receives a fresh stream so a plugin cannot alter or
+  ## accidentally share the caller's snapshot cursor.
+  if instance == nil or instance.closed or instance.component == nil:
+    return failure[Unit](stateError(
+      "VST3 state restore requires an open instance",
+      if instance == nil: "" else: instance.module.bundlePath))
+  if snapshot.component.len > Vst3PresetMaximumBytes or
+      snapshot.controller.len > Vst3PresetMaximumBytes or
+      snapshot.component.len + snapshot.controller.len > Vst3PresetMaximumBytes:
+    return failure[Unit](stateError(
+      "VST3 state snapshot exceeds host bound", instance.module.bundlePath))
+  if snapshot.hasController and instance.controller == nil:
+    return failure[Unit](stateError(
+      "VST3 state snapshot contains controller state but plugin has no controller",
+      instance.module.bundlePath))
+
+  var controllerComponentResult = Vst3NotImplemented
+  if snapshot.hasComponent:
+    var componentStream = newVst3ReadOnlyStream(snapshot.component)
+    if componentStream == nil:
+      return failure[Unit](stateError(
+        "VST3 component state stream allocation failed",
+        instance.module.bundlePath))
+    let componentResult = instance.component.lpVtbl.setState(
+      cast[pointer](instance.component),
+      cast[pointer](componentStream.interfacePointer()))
+    finishStateTransaction(instance, componentStream)
+    if componentResult != Vst3ResultOk and componentResult != Vst3NotImplemented:
+      return failure[Unit](stateError(
+        "VST3 component state restore failed", instance.module.bundlePath,
+        "result=" & $componentResult))
+
+    if instance.controller != nil:
+      var controllerComponent = newVst3ReadOnlyStream(snapshot.component)
+      if controllerComponent == nil:
+        return failure[Unit](stateError(
+          "VST3 controller component-state stream allocation failed",
+          instance.module.bundlePath))
+      controllerComponentResult = instance.controller.lpVtbl.setComponentState(
+        cast[pointer](instance.controller),
+        cast[pointer](controllerComponent.interfacePointer()))
+      finishStateTransaction(instance, controllerComponent)
+      if controllerComponentResult != Vst3ResultOk and
+          controllerComponentResult != Vst3NotImplemented:
+        return failure[Unit](stateError(
+          "VST3 controller component-state restore failed",
+          instance.module.bundlePath, "result=" & $controllerComponentResult))
+
+  if snapshot.hasController:
+    var controllerState = newVst3ReadOnlyStream(snapshot.controller)
+    if controllerState == nil:
+      return failure[Unit](stateError(
+        "VST3 controller state stream allocation failed",
+        instance.module.bundlePath))
+    let controllerStateResult = instance.controller.lpVtbl.setState(
+      cast[pointer](instance.controller),
+      cast[pointer](controllerState.interfacePointer()))
+    finishStateTransaction(instance, controllerState)
+    if controllerStateResult != Vst3ResultOk and
+        controllerStateResult != Vst3NotImplemented:
+      return failure[Unit](stateError(
+        "VST3 controller state restore failed", instance.module.bundlePath,
+        "result=" & $controllerStateResult))
+  instance.stateSynchronized = controllerComponentResult == Vst3ResultOk
+  success()

@@ -211,7 +211,7 @@ suite "private VST3 V4B native reconfiguration":
     var opened = openSlice(services)
     require opened.isOk
     var slice = move(opened.value)
-    check trigger(Vst3RestartReloadComponent) == uint32(Vst3ResultOk)
+    check trigger(Vst3RestartNoteExpressionChanged) == uint32(Vst3ResultOk)
     let rejected = slice.serviceReconfiguration()
     check not rejected.isOk
     check slice.state() == v3assQuiesced

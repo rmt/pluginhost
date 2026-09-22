@@ -103,8 +103,18 @@ bool isCombined() { return PLUGINHOST_VST3_V2B_MODE == 1; }
 bool isInstrument() { return PLUGINHOST_VST3_V2B_MODE == 2; }
 bool isNonStereo() { return PLUGINHOST_VST3_V2B_MODE == 3; }
 bool hasInactiveSlots() { return PLUGINHOST_VST3_V2B_MODE == 4; }
-bool setupFails() { return PLUGINHOST_VST3_V2B_MODE == 5; }
-bool activationFails() { return PLUGINHOST_VST3_V2B_MODE == 6; }
+bool setupFails() {
+#ifdef PLUGINHOST_VST3_V4B2_FIXTURE
+  if (pluginhost_vst3_v4b2_setup_fail_enabled()) return true;
+#endif
+  return PLUGINHOST_VST3_V2B_MODE == 5;
+}
+bool activationFails() {
+#ifdef PLUGINHOST_VST3_V4B2_FIXTURE
+  if (pluginhost_vst3_v4b2_activation_fail_enabled()) return true;
+#endif
+  return PLUGINHOST_VST3_V2B_MODE == 6;
+}
 bool processFails() {
   return PLUGINHOST_VST3_V2B_MODE == 7 || PLUGINHOST_VST3_V3_MODE == 3;
 }
@@ -131,7 +141,7 @@ std::int32_t eventBusCount(Steinberg_Vst_BusDirection direction) {
 std::int32_t audioBusCount(Steinberg_Vst_BusDirection direction) {
   if (tooManyBuses()) return direction == Steinberg_Vst_BusDirections_kInput ? 1025 : 0;
   if (negativeBusCount()) return -1;
-#ifdef PLUGINHOST_VST3_V4B_FIXTURE
+#if defined(PLUGINHOST_VST3_V4B_FIXTURE) || defined(PLUGINHOST_VST3_V4B2_FIXTURE)
   if (pluginhost_vst3_v4b_structural_enabled()) return 2;
 #endif
   if (isInstrument()) return direction == Steinberg_Vst_BusDirections_kInput ? 0 : 1;
@@ -143,7 +153,7 @@ std::uint64_t arrangement(Steinberg_Vst_BusDirection direction, std::int32_t ind
   if (isNonStereo()) return 1ULL | (1ULL << 1) | (1ULL << 2);
   if (isInstrument()) return 3ULL;
   if (hasInactiveSlots()) return 1ULL;
-#ifdef PLUGINHOST_VST3_V4B_FIXTURE
+#if defined(PLUGINHOST_VST3_V4B_FIXTURE) || defined(PLUGINHOST_VST3_V4B2_FIXTURE)
   if (pluginhost_vst3_v4b_structural_enabled()) return 1ULL;
 #endif
   if (PLUGINHOST_VST3_V2B_MODE == 1 || arrangementsFalse() || outputParameter()) {
@@ -167,14 +177,24 @@ Steinberg_tresult controllerQuery(void* raw, const Steinberg_TUID iid, void** ob
 Steinberg_tresult mappingQuery(void* raw, const Steinberg_TUID iid, void** obj);
 Steinberg_tresult pointQuery(void* raw, const Steinberg_TUID iid, void** obj);
 Steinberg_tresult componentInitialize(void* raw, Steinberg_FUnknown*) {
+#ifdef PLUGINHOST_VST3_V4B2_FIXTURE
+  if (pluginhost_vst3_v4b2_component_initialize_fail_enabled())
+    return Steinberg_kResultFalse;
+#endif
   auto* object = static_cast<ComponentObject*>(raw);
   object->state->initialized = true;
+#ifdef PLUGINHOST_VST3_V4B2_FIXTURE
+  pluginhost_vst3_v4b2_component_initialized();
+#endif
   order(object->state, 1);
   return Steinberg_kResultOk;
 }
 Steinberg_tresult componentTerminate(void* raw) {
   auto* object = static_cast<ComponentObject*>(raw);
   object->state->initialized = false;
+#ifdef PLUGINHOST_VST3_V4B2_FIXTURE
+  pluginhost_vst3_v4b2_component_terminated();
+#endif
   order(object->state, 9);
   return Steinberg_kResultOk;
 }
@@ -218,7 +238,8 @@ Steinberg_tresult getRoutingInfo(void*, Steinberg_Vst_RoutingInfo*, Steinberg_Vs
 Steinberg_tresult activateBus(void* raw, Steinberg_Vst_MediaType type,
     Steinberg_Vst_BusDirection direction, std::int32_t index, Steinberg_TBool stateValue) {
   auto* state = static_cast<ComponentObject*>(raw)->state;
-  if (activationFails() && type == Steinberg_Vst_MediaTypes_kAudio &&
+  if (activationFails() && stateValue &&
+      type == Steinberg_Vst_MediaTypes_kAudio &&
       direction == Steinberg_Vst_BusDirections_kOutput && index == 0)
     return Steinberg_kResultFalse;
   if (stateValue) {
@@ -245,8 +266,48 @@ Steinberg_tresult setActive(void* raw, Steinberg_TBool active) {
 #endif
   return Steinberg_kResultOk;
 }
-Steinberg_tresult setState(void*, Steinberg_IBStream*) { return Steinberg_kResultOk; }
-Steinberg_tresult getState(void*, Steinberg_IBStream*) { return Steinberg_kNotImplemented; }
+Steinberg_tresult setState(void* raw, Steinberg_IBStream* stream) {
+#ifdef PLUGINHOST_VST3_V4B2_FIXTURE
+  if (pluginhost_vst3_v4b2_component_restore_fail_enabled())
+    return Steinberg_kResultFalse;
+  if (!stream || !stream->lpVtbl || !stream->lpVtbl->read)
+    return Steinberg_kInvalidArgument;
+  double value = 0.0;
+  Steinberg_int32 read = 0;
+  const auto code = stream->lpVtbl->read(stream, &value, sizeof(value), &read);
+  if (code != Steinberg_kResultOk ||
+      read != static_cast<Steinberg_int32>(sizeof(value)))
+    return Steinberg_kResultFalse;
+  static_cast<ComponentObject*>(raw)->state->gain = value;
+  return Steinberg_kResultOk;
+#else
+  (void)raw;
+  (void)stream;
+  return Steinberg_kResultOk;
+#endif
+}
+Steinberg_tresult getState(void* raw, Steinberg_IBStream* stream) {
+#ifdef PLUGINHOST_VST3_V4B2_FIXTURE
+  if (pluginhost_vst3_v4b2_state_not_implemented())
+    return Steinberg_kNotImplemented;
+  if (pluginhost_vst3_v4b2_capture_fail_enabled())
+    return Steinberg_kResultFalse;
+  if (pluginhost_vst3_v4b2_retain_stream_enabled() && stream)
+    pluginhost_vst3_v4b2_retain_stream(stream);
+#else
+  (void)raw;
+  (void)stream;
+  return Steinberg_kNotImplemented;
+#endif
+  if (!stream || !stream->lpVtbl || !stream->lpVtbl->write)
+    return Steinberg_kInvalidArgument;
+  double value = static_cast<ComponentObject*>(raw)->state->gain;
+  Steinberg_int32 written = 0;
+  const auto code = stream->lpVtbl->write(stream, &value, sizeof(value), &written);
+  return code == Steinberg_kResultOk &&
+      written == static_cast<Steinberg_int32>(sizeof(value))
+    ? Steinberg_kResultOk : Steinberg_kResultFalse;
+}
 
 Steinberg_tresult setBusArrangements(void* raw,
     Steinberg_Vst_SpeakerArrangement* inputs, std::int32_t numIns,
@@ -446,9 +507,68 @@ Steinberg_tresult controllerTerminate(void* raw) {
   order(state, 11);
   return Steinberg_kResultOk;
 }
-Steinberg_tresult controllerSetComponentState(void*, Steinberg_IBStream*) { return Steinberg_kResultOk; }
-Steinberg_tresult controllerSetState(void*, Steinberg_IBStream*) { return Steinberg_kResultOk; }
-Steinberg_tresult controllerGetState(void*, Steinberg_IBStream*) { return Steinberg_kNotImplemented; }
+Steinberg_tresult controllerSetComponentState(void* raw, Steinberg_IBStream* stream) {
+#ifdef PLUGINHOST_VST3_V4B2_FIXTURE
+  if (pluginhost_vst3_v4b2_controller_restore_fail_enabled())
+    return Steinberg_kResultFalse;
+  if (!stream || !stream->lpVtbl || !stream->lpVtbl->read)
+    return Steinberg_kInvalidArgument;
+  double value = 0.0;
+  Steinberg_int32 read = 0;
+  const auto code = stream->lpVtbl->read(stream, &value, sizeof(value), &read);
+  if (code != Steinberg_kResultOk ||
+      read != static_cast<Steinberg_int32>(sizeof(value)))
+    return Steinberg_kResultFalse;
+  static_cast<ControllerObject*>(raw)->state->gain = value;
+  return Steinberg_kResultOk;
+#else
+  (void)raw;
+  (void)stream;
+  return Steinberg_kResultOk;
+#endif
+}
+Steinberg_tresult controllerSetState(void* raw, Steinberg_IBStream* stream) {
+#ifdef PLUGINHOST_VST3_V4B2_FIXTURE
+  if (pluginhost_vst3_v4b2_controller_restore_fail_enabled())
+    return Steinberg_kResultFalse;
+  if (!stream || !stream->lpVtbl || !stream->lpVtbl->read)
+    return Steinberg_kInvalidArgument;
+  double value = 0.0;
+  Steinberg_int32 read = 0;
+  const auto code = stream->lpVtbl->read(stream, &value, sizeof(value), &read);
+  if (code != Steinberg_kResultOk ||
+      read != static_cast<Steinberg_int32>(sizeof(value)))
+    return Steinberg_kResultFalse;
+  static_cast<ControllerObject*>(raw)->state->outputValue = value;
+  return Steinberg_kResultOk;
+#else
+  (void)raw;
+  (void)stream;
+  return Steinberg_kResultOk;
+#endif
+}
+Steinberg_tresult controllerGetState(void* raw, Steinberg_IBStream* stream) {
+#ifdef PLUGINHOST_VST3_V4B2_FIXTURE
+  if (pluginhost_vst3_v4b2_state_not_implemented())
+    return Steinberg_kNotImplemented;
+  if (pluginhost_vst3_v4b2_controller_capture_fail_enabled())
+    return Steinberg_kResultFalse;
+  if (pluginhost_vst3_v4b2_retain_stream_enabled() && stream)
+    pluginhost_vst3_v4b2_retain_stream(stream);
+#else
+  (void)raw;
+  (void)stream;
+  return Steinberg_kNotImplemented;
+#endif
+  if (!stream || !stream->lpVtbl || !stream->lpVtbl->write)
+    return Steinberg_kInvalidArgument;
+  double value = static_cast<ControllerObject*>(raw)->state->outputValue;
+  Steinberg_int32 written = 0;
+  const auto code = stream->lpVtbl->write(stream, &value, sizeof(value), &written);
+  return code == Steinberg_kResultOk &&
+      written == static_cast<Steinberg_int32>(sizeof(value))
+    ? Steinberg_kResultOk : Steinberg_kResultFalse;
+}
 std::int32_t controllerParameterCount(void*) { return 2; }
 Steinberg_tresult controllerParameterInfo(void*, std::int32_t index, Steinberg_Vst_ParameterInfo* info) {
 #ifdef PLUGINHOST_VST3_V4B_FIXTURE
@@ -497,6 +617,12 @@ Steinberg_tresult pointNotify(void*, Steinberg_Vst_IMessage*) { return Steinberg
 
 Steinberg_uint32 oneRef(void*) { return 1; }
 Steinberg_uint32 zeroRelease(void*) { return 0; }
+Steinberg_uint32 componentRelease(void*) {
+#ifdef PLUGINHOST_VST3_V4B2_FIXTURE
+  pluginhost_vst3_v4b2_component_released();
+#endif
+  return 0;
+}
 Steinberg_uint32 mappingRelease(void* raw) {
   auto* state = static_cast<MappingObject*>(raw)->state;
   ++state->mappingReleases;
@@ -640,6 +766,9 @@ Steinberg_tresult factoryCreate(void*, const char* cid, const char* iid, void** 
         sizeof(Steinberg_TUID)) == 0;
   if (!componentRequest && !controllerRequest) return Steinberg_kNoInterface;
   if (componentRequest) {
+#ifdef PLUGINHOST_VST3_V4B2_FIXTURE
+    pluginhost_vst3_v4b2_component_created();
+#endif
     g_state = State();
     g_state.component.state = &g_state;
     g_state.processor.state = &g_state;
@@ -664,7 +793,7 @@ Steinberg_tresult factoryCreate(void*, const char* cid, const char* iid, void** 
 }
 
 Steinberg_Vst_IComponentVtbl componentVtable = {
-  componentQuery, oneRef, zeroRelease, componentInitialize, componentTerminate,
+  componentQuery, oneRef, componentRelease, componentInitialize, componentTerminate,
   getControllerClassId, setIoMode, getBusCount, getBusInfo, getRoutingInfo,
   activateBus, setActive, setState, getState};
 Steinberg_Vst_IAudioProcessorVtbl processorVtable = {
@@ -690,8 +819,21 @@ struct FactoryObject { Steinberg_IPluginFactory iface; } g_factory = {{&factoryV
 
 } // namespace
 
-EXPORT Steinberg_TBool ModuleEntry(void*) { return 1; }
-EXPORT Steinberg_TBool ModuleExit(void) { return 1; }
+EXPORT Steinberg_TBool ModuleEntry(void*) {
+#ifdef PLUGINHOST_VST3_V4B2_FIXTURE
+  if (pluginhost_vst3_v4b2_module_entry_fail_enabled()) return 0;
+#endif
+#ifdef PLUGINHOST_VST3_V4B2_FIXTURE
+  pluginhost_vst3_v4b2_module_entry();
+#endif
+  return 1;
+}
+EXPORT Steinberg_TBool ModuleExit(void) {
+#ifdef PLUGINHOST_VST3_V4B2_FIXTURE
+  pluginhost_vst3_v4b2_module_exit();
+#endif
+  return 1;
+}
 EXPORT Steinberg_IPluginFactory* GetPluginFactory(void) { return &g_factory.iface; }
 
 EXPORT std::uint32_t pluginhost_vst3_fixture_setup_calls(void) { return g_state.setupCalls; }
