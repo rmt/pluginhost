@@ -1023,8 +1023,8 @@ This table is updated only when work is reviewed.
 | V2A — VST3 lifecycle/services | Approved | V2A review | Host objects, run loop, separate/combined ownership, streams, metadata, and cleanup accounting accepted |
 | V2B — VST3 headless processing | Approved | V2B review and continuation approval | Bounded float32 JACK slice, bus negotiation, parameter transport groundwork, live audio, and generated-C RT evidence accepted |
 | V3 — VST3 parameters/MIDI | Approved | V3 review | Bounded parameter queues, controller gestures, MIDI-1 mapping, complete SysEx, representable output conversion, live JACK evidence, and RT audits accepted |
-| V4A/V4B — VST3 state/reconfiguration | In progress | V4A and V4B1 reviews; V4B2 pending review | V4A bounded state transactions and V4B1 in-place native reconfiguration are approved; V4B2 full component reload is implemented pending review |
-| V5A/V5B — VST3 GUI | Not started | — | X11 editor ownership and protocol integration |
+| V4A/V4B — VST3 state/reconfiguration | Approved | V4A, V4B1, and V4B2 reviews | Bounded state transactions, in-place native reconfiguration, and full component reload accepted |
+| V5A/V5B — VST3 GUI | In progress | V5A implementation | X11 editor ownership started; protocol integration remains V5B |
 | V6 — VST3 public cutover | Not started | — | Public `run`, complete regression matrix, and compatibility evidence |
 
 Allowed statuses: `Not started`, `In progress`, `Changes requested`, `Approved`, and `Deferred`.
