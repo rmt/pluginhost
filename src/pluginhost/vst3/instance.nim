@@ -225,6 +225,7 @@ proc validProcessor(processor: ptr Vst3AudioProcessor): bool =
     processor.lpVtbl.queryInterface != nil and processor.lpVtbl.release != nil and
     processor.lpVtbl.setBusArrangements != nil and
     processor.lpVtbl.setupProcessing != nil and processor.lpVtbl.setProcessing != nil and
+    processor.lpVtbl.getLatencySamples != nil and
     processor.lpVtbl.process != nil
 
 proc validController(controller: ptr Vst3EditController): bool =
@@ -534,14 +535,15 @@ proc addMetadataBytes(total: var uint64; values: openArray[string]): bool =
     total += uint64(value.len)
   true
 
-proc collectBusMetadata(instance: Vst3Instance): Result[Unit] =
+proc collectBusMetadata(instance: Vst3Instance): Result[seq[Vst3BusMetadata]] =
+  var buses: seq[Vst3BusMetadata]
   var totalBytes = 0'u64
   for mediaType in [Vst3MediaAudio, Vst3MediaEvent]:
     for direction in [Vst3DirectionInput, Vst3DirectionOutput]:
       let count = instance.component.lpVtbl.getBusCount(
         cast[pointer](instance.component), mediaType, direction)
       if count < 0 or count > Vst3MaxBusCount:
-        return failure[Unit](instanceError(hekVst3Descriptor,
+        return failure[seq[Vst3BusMetadata]](instanceError(hekVst3Descriptor,
           "VST3 bus count is outside the host bound", instance.module.bundlePath,
           "media=" & $mediaType & "; direction=" & $direction &
           "; count=" & $count))
@@ -550,35 +552,39 @@ proc collectBusMetadata(instance: Vst3Instance): Result[Unit] =
         if instance.component.lpVtbl.getBusInfo(
             cast[pointer](instance.component), mediaType, direction, index,
             addr info) != Vst3ResultOk:
-          return failure[Unit](instanceError(hekVst3Descriptor,
+          return failure[seq[Vst3BusMetadata]](instanceError(hekVst3Descriptor,
             "VST3 bus metadata query failed", instance.module.bundlePath,
             "media=" & $mediaType & "; direction=" & $direction &
             "; index=" & $index))
         if info.mediaType != mediaType or info.direction != direction or
             info.channelCount < 0 or info.channelCount > Vst3MaxBusChannels or
             (info.busType != Vst3BusTypeMain and info.busType != Vst3BusTypeAux):
-          return failure[Unit](instanceError(hekVst3Descriptor,
+          return failure[seq[Vst3BusMetadata]](instanceError(hekVst3Descriptor,
             "VST3 bus metadata is invalid", instance.module.bundlePath,
             "media=" & $mediaType & "; direction=" & $direction &
             "; index=" & $index))
         var name = copyUtf16Field(info.name)
-        if not name.isOk or not addMetadataBytes(totalBytes, [name.value]):
-          return failure[Unit](instanceError(hekVst3Descriptor,
-            "VST3 bus metadata text is invalid or exceeds the host bound",
+        if not name.isOk:
+          return failure[seq[Vst3BusMetadata]](move(name.error))
+        if not addMetadataBytes(totalBytes, [name.value]):
+          return failure[seq[Vst3BusMetadata]](instanceError(hekVst3Descriptor,
+            "VST3 bus metadata text exceeds the host bound",
             instance.module.bundlePath, "index=" & $index))
-        instance.buses.add(Vst3BusMetadata(
+        buses.add(Vst3BusMetadata(
           mediaType: info.mediaType, direction: info.direction,
-          channelCount: info.channelCount, name: move(name.value),
+          channelCount: info.channelCount, name: name.value,
           busType: info.busType, flags: info.flags))
-  success()
+  success(move(buses))
 
-proc collectParameterMetadata(instance: Vst3Instance): Result[Unit] =
+proc collectParameterMetadata(instance: Vst3Instance):
+    Result[seq[Vst3ParameterMetadata]] =
+  var parameters: seq[Vst3ParameterMetadata]
   if instance.controller == nil:
-    return success()
+    return success(move(parameters))
   let count = instance.controller.lpVtbl.getParameterCount(
     cast[pointer](instance.controller))
   if count < 0 or count > Vst3MaxParameterCount:
-    return failure[Unit](instanceError(hekVst3Descriptor,
+    return failure[seq[Vst3ParameterMetadata]](instanceError(hekVst3Descriptor,
       "VST3 parameter count is outside the host bound", instance.module.bundlePath,
       "count=" & $count))
   var totalBytes = 0'u64
@@ -586,34 +592,39 @@ proc collectParameterMetadata(instance: Vst3Instance): Result[Unit] =
     var info: Vst3ParameterInfo
     if instance.controller.lpVtbl.getParameterInfo(
         cast[pointer](instance.controller), index, addr info) != Vst3ResultOk:
-      return failure[Unit](instanceError(hekVst3Descriptor,
+      return failure[seq[Vst3ParameterMetadata]](instanceError(hekVst3Descriptor,
         "VST3 parameter metadata query failed", instance.module.bundlePath,
         "index=" & $index))
     if info.stepCount < 0 or classify(info.defaultNormalizedValue) in
         {fcNan, fcInf, fcNegInf} or info.defaultNormalizedValue < 0.0 or
         info.defaultNormalizedValue > 1.0:
-      return failure[Unit](instanceError(hekVst3Descriptor,
+      return failure[seq[Vst3ParameterMetadata]](instanceError(hekVst3Descriptor,
         "VST3 parameter metadata is invalid", instance.module.bundlePath,
         "index=" & $index))
-    for parameter in instance.parameters:
+    for parameter in parameters:
       if parameter.id == info.id:
-        return failure[Unit](instanceError(hekVst3Descriptor,
+        return failure[seq[Vst3ParameterMetadata]](instanceError(hekVst3Descriptor,
           "VST3 parameter metadata contains duplicate IDs",
           instance.module.bundlePath, "id=" & $info.id))
     var title = copyUtf16Field(info.title)
     var shortTitle = copyUtf16Field(info.shortTitle)
     var units = copyUtf16Field(info.units)
-    if not title.isOk or not shortTitle.isOk or not units.isOk or
-        not addMetadataBytes(totalBytes, [title.value, shortTitle.value, units.value]):
-      return failure[Unit](instanceError(hekVst3Descriptor,
-        "VST3 parameter metadata text is invalid or exceeds the host bound",
+    if not title.isOk:
+      return failure[seq[Vst3ParameterMetadata]](move(title.error))
+    if not shortTitle.isOk:
+      return failure[seq[Vst3ParameterMetadata]](move(shortTitle.error))
+    if not units.isOk:
+      return failure[seq[Vst3ParameterMetadata]](move(units.error))
+    if not addMetadataBytes(totalBytes, [title.value, shortTitle.value, units.value]):
+      return failure[seq[Vst3ParameterMetadata]](instanceError(hekVst3Descriptor,
+        "VST3 parameter metadata text exceeds the host bound",
         instance.module.bundlePath, "index=" & $index))
-    instance.parameters.add(Vst3ParameterMetadata(
-      id: info.id, title: move(title.value), shortTitle: move(shortTitle.value),
-      units: move(units.value), stepCount: info.stepCount,
+    parameters.add(Vst3ParameterMetadata(
+      id: info.id, title: title.value, shortTitle: shortTitle.value,
+      units: units.value, stepCount: info.stepCount,
       defaultNormalizedValue: info.defaultNormalizedValue, unitId: info.unitId,
       flags: info.flags))
-  success()
+  success(move(parameters))
 
 proc mergeCloseError(primary: var HostError; closeResult: Result[Unit]) =
   if not closeResult.isOk:
@@ -1001,7 +1012,26 @@ proc openVst3Instance*(module: var Vst3Module; classId: Vst3Tuid;
   var parameters = collectParameterMetadata(instance)
   if not parameters.isOk:
     return failOpen(instance, move(parameters.error))
+  instance.buses = move(buses.value)
+  instance.parameters = move(parameters.value)
   success(instance)
+
+proc refreshMetadata*(instance: Vst3Instance): Result[Unit] =
+  ## Re-query all copied metadata before publishing either replacement.
+  ## A failed query leaves both snapshots untouched.
+  if instance == nil or instance.closed or instance.component == nil:
+    return failure[Unit](instanceError(hekVst3Factory,
+      "VST3 metadata refresh requires an open instance",
+      if instance == nil: "" else: instance.module.bundlePath))
+  var buses = collectBusMetadata(instance)
+  if not buses.isOk:
+    return failure[Unit](move(buses.error))
+  var parameters = collectParameterMetadata(instance)
+  if not parameters.isOk:
+    return failure[Unit](move(parameters.error))
+  instance.buses = move(buses.value)
+  instance.parameters = move(parameters.value)
+  success()
 
 proc takeParameterEdits*(instance: Vst3Instance): seq[Vst3ParameterEdit] =
   if instance == nil: return @[]
@@ -1016,6 +1046,12 @@ proc takeRestartFlags*(instance: Vst3Instance): uint32 =
   result = instance.mailbox.restartFlags
   instance.mailbox.restartFlags = 0
   release(instance.mailbox.lock)
+proc restoreRestartFlags*(instance: Vst3Instance; flags: uint32) =
+  if instance == nil or flags == 0'u32: return
+  acquire(instance.mailbox.lock)
+  instance.mailbox.restartFlags = instance.mailbox.restartFlags or flags
+  release(instance.mailbox.lock)
+
 
 proc droppedParameterEdits*(instance: Vst3Instance): uint64 =
   if instance == nil: return 0'u64
@@ -1030,6 +1066,15 @@ proc parameterMetadata*(instance: Vst3Instance): seq[Vst3ParameterMetadata] =
 proc busMetadata*(instance: Vst3Instance): seq[Vst3BusMetadata] =
   if instance == nil: return @[]
   instance.buses
+proc processorLatencySamples*(instance: Vst3Instance): Result[uint32] =
+  if instance == nil or instance.closed or instance.processor == nil or
+      instance.processor.lpVtbl == nil or
+      instance.processor.lpVtbl.getLatencySamples == nil:
+    return failure[uint32](instanceError(hekVst3Factory,
+      "VST3 processor latency query is unavailable",
+      if instance == nil: "" else: instance.module.bundlePath))
+  success(instance.processor.lpVtbl.getLatencySamples(
+    cast[pointer](instance.processor)))
 proc attachVst3ParameterTransport*(instance: Vst3Instance;
                                    transport: ptr Vst3ParameterTransport): bool =
   if instance == nil or instance.closed or

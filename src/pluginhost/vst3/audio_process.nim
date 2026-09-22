@@ -518,6 +518,7 @@ proc newVst3AudioProcess*(processor: ptr Vst3AudioProcessor;
                           Result[Vst3AudioProcess] =
   if processor == nil or processor.lpVtbl == nil or
       processor.lpVtbl.canProcessSampleSize == nil or
+      processor.lpVtbl.getLatencySamples == nil or
       processor.lpVtbl.setupProcessing == nil or
       processor.lpVtbl.process == nil:
     return failure[Vst3AudioProcess](vst3ProcessError(hekVst3Factory,

@@ -634,6 +634,23 @@ proc runVst3V4aTests() =
        "nim c -r --hints:off --path:src --path:tests " &
        dependencyPathsClause() & " --nimcache:build/nimcache/vst3-v4a " &
        "--out:build/test/test_vst3_v4a tests/fixtures/test_vst3_v4a.nim"
+proc compileVst3V4bFixture() =
+  exec "mkdir -p build/fixtures/vst3/v4b.vst3/Contents/x86_64-linux"
+  exec "c++ -std=c++17 -fPIC -shared -fvisibility=hidden " &
+       "-Wall -Wextra -Werror -Ivendor -Itests/fixtures -Itests/fixtures/vst3 " &
+       "tests/fixtures/vst3/v4b_fixture.cpp -o " &
+       "build/fixtures/vst3/v4b.vst3/Contents/x86_64-linux/v4b.so"
+
+proc runVst3V4bTests() =
+  compileVst3V4bFixture()
+  compileFakeJackFixture()
+  exec "mkdir -p build/nimcache/vst3-v4b build/test"
+  exec "PLUGINHOST_VST3_V4B_FIXTURE_DIR=$PWD/build/fixtures/vst3 " &
+       "PLUGINHOST_JACK_FAKE_FIXTURE=$PWD/build/fixtures/" &
+       "libpluginhost_jack_fake_fixture.so " &
+       "nim c -r --hints:off --path:src --path:tests " &
+       dependencyPathsClause() & " --nimcache:build/nimcache/vst3-v4b " &
+       "--out:build/test/test_vst3_v4b tests/fixtures/test_vst3_v4b.nim"
 
 proc runAbiTests() =
   exec "mkdir -p build/abi build/nimcache/abi build/test"
@@ -811,6 +828,8 @@ task testVst3Audio, "Run the bounded private VST3 float32 audio checks":
   runVst3AudioTests()
 task testVst3V4a, "Run bounded VST3 preset and stream transaction checks":
   runVst3V4aTests()
+task testVst3V4b, "Run private VST3 native reconfiguration checks":
+  runVst3V4bTests()
 task testVst3Abi, "Run VST3 generated-C and C++ fixture ABI checks":
   runVst3AbiTests()
 task testVst3V2a, "Run VST3 V2A lifecycle, host, and run-loop checks":
@@ -852,6 +871,7 @@ task all, "Run compile checks, build the executable, and run tests":
   compileTestBinary()
   runVst3AudioTests()
   runVst3V4aTests()
+  runVst3V4bTests()
   runUnitTests()
   runAbiTests()
   runVst3AbiTests()

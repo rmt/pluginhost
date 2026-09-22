@@ -1,8 +1,9 @@
-## Private V2B composition root.  Public VST3 run routing intentionally does not
-## import this owner; focused fixture and embedding code may construct it directly.
+## Private V2B/V4B composition root.  Public VST3 run routing intentionally
+## does not import this owner; focused fixture and embedding code may construct it directly.
 
+import std/strutils
 import ../domain/[errors, port_plan, result]
-import ../jack/backend
+import ../jack/[backend, ports]
 import ../vst3/[audio_process, event_bridge, ffi, instance, module, state_codec,
   parameter_transport, port_inspector, uid]
 import ./vst3_plugin_services
@@ -26,6 +27,19 @@ type
     stateValue: Vst3AudioSliceState
     componentActive: bool
     processorActive: bool
+    lastConnectionLosses: seq[JackConnectionCandidate]
+
+  Vst3ReconfigurationReport* = object
+    requestedFlags*: uint32
+    appliedFlags*: uint32
+    lifecycleTurns*: uint32
+    latencySamples*: uint32
+    sampleRate*: uint32
+    bufferSize*: uint32
+    metadataRefreshed*: bool
+    midiMappingRebuilt*: bool
+    jackConfigurationChanged*: bool
+    connectionsLost*: seq[JackConnectionCandidate]
 
 proc sliceError(message, path, pluginId, detail: string): HostError =
   var context = "path=" & path & "; id=" & pluginId
@@ -74,6 +88,7 @@ proc `=sink`*(destination: var Vst3AudioSlice;
   destination.stateValue = source.stateValue
   destination.componentActive = source.componentActive
   destination.processorActive = source.processorActive
+  `=sink`(destination.lastConnectionLosses, source.lastConnectionLosses)
 
 proc state*(slice: Vst3AudioSlice): Vst3AudioSliceState {.inline.} =
   slice.stateValue
@@ -81,6 +96,8 @@ proc jackBackend*(slice: var Vst3AudioSlice): var JackBackend {.inline.} =
   slice.backend
 proc portPlan*(slice: Vst3AudioSlice): PortPlan {.inline.} = slice.plan
 proc instance*(slice: Vst3AudioSlice): Vst3Instance {.inline.} = slice.instance
+proc connectionLosses*(slice: Vst3AudioSlice): seq[JackConnectionCandidate] =
+  slice.lastConnectionLosses
 proc takeFault*(slice: var Vst3AudioSlice): bool = slice.process.takeVst3ProcessFault()
 proc drainParameterObservations*(slice: var Vst3AudioSlice): uint32 =
   slice.process.drainVst3ParameterObservations(slice.instance.controllerPointer())
@@ -90,6 +107,314 @@ proc drainParameterGestures*(slice: var Vst3AudioSlice;
                                Vst3ParameterEditRecord];
                              capacity: uint32): uint32 =
   slice.process.drainVst3ParameterGestures(destination, capacity)
+const
+  Vst3UnsupportedReconfigurationFlags = uint32(
+    Vst3RestartReloadComponent or Vst3RestartNoteExpressionChanged or
+    Vst3RestartPrefetchChanged or Vst3RestartRoutingChanged or
+    Vst3RestartKeyswitchChanged)
+  Vst3ProcessReconfigurationFlags = uint32(
+    Vst3RestartIoChanged or Vst3RestartIoTitlesChanged or
+    Vst3RestartMidiCCChanged)
+  Vst3MetadataReconfigurationFlags = uint32(
+    Vst3RestartIoChanged or Vst3RestartIoTitlesChanged or
+    Vst3RestartParamTitlesChanged)
+  Vst3MaxReconfigurationTurns = 4'u32
+
+proc reconfigurationError(message: string; slice: Vst3AudioSlice;
+                           detail = ""): HostError =
+  sliceError(message, slice.path, slice.pluginId, detail)
+
+proc failSilentAfterReconfiguration(slice: var Vst3AudioSlice;
+                                     primary: sink HostError): Result[Unit] =
+  ## The replacement path never republishes callbacks after a failure.  Keep
+  ## ownership intact so the regular close path can finish all resources.
+  slice.stateValue = v3assQuiesced
+  failure[Unit](move(primary))
+proc failReconfiguration(slice: var Vst3AudioSlice;
+                         primary: sink HostError):
+                         Result[Vst3ReconfigurationReport] =
+  var error = move(primary)
+  if slice.backend.state == jbsActive:
+    let suspended = slice.backend.suspendProcess()
+    appendVst3CleanupError(error, suspended, "failure quiescence")
+    if not suspended.isOk:
+      return failure[Vst3ReconfigurationReport](move(error))
+  if not slice.process.waitVst3ProcessQuiescence():
+    error.context.add("; failure quiescence=VST3 process did not quiesce")
+    return failure[Vst3ReconfigurationReport](move(error))
+  if slice.processorActive:
+    let stopped = setVst3Processing(slice.instance.processorPointer(), false)
+    appendVst3CleanupError(error, stopped, "processor stop")
+    if stopped.isOk:
+      slice.processorActive = false
+  slice.stateValue = v3assQuiesced
+  failure[Vst3ReconfigurationReport](move(error))
+
+
+proc refreshVst3Plan(slice: Vst3AudioSlice; ioChanged: bool;
+                     ioTitlesChanged: bool): Result[PortPlan] =
+  if not ioChanged and not ioTitlesChanged:
+    return success(slice.plan)
+  var arrangements: Result[seq[Vst3SpeakerArrangement]]
+  if ioChanged:
+    arrangements = setVst3BusArrangementsAndRequery(
+      slice.instance.componentPointer(), slice.instance.processorPointer(),
+      slice.path, slice.pluginId)
+  else:
+    arrangements = currentVst3Arrangements(
+      slice.instance.componentPointer(), slice.instance.processorPointer(),
+      slice.path, slice.pluginId)
+  if not arrangements.isOk:
+    return failure[PortPlan](move(arrangements.error))
+  inspectVst3Ports(slice.instance.componentPointer(),
+    slice.instance.processorPointer(), arrangements.value,
+    portPlanVersion(slice.plan.version.value + 1'u64),
+    slice.path, slice.pluginId)
+
+proc serviceVst3Latency(slice: var Vst3AudioSlice;
+                        wasActive: bool;
+                        report: var Vst3ReconfigurationReport): Result[Unit] =
+  if wasActive:
+    let suspended = slice.backend.suspendProcess()
+    if not suspended.isOk:
+      return suspended
+  var latency = slice.instance.processorLatencySamples()
+  if not latency.isOk:
+    slice.stateValue = v3assQuiesced
+    return failure[Unit](move(latency.error))
+  let published = slice.backend.setPluginLatency(latency.value)
+  if not published.isOk:
+    slice.stateValue = v3assQuiesced
+    return published
+  report.latencySamples = latency.value
+  if wasActive:
+    let resumed = slice.backend.activate()
+    if not resumed.isOk:
+      slice.stateValue = v3assQuiesced
+      return resumed
+    let recomputed = slice.backend.recomputeLatencies()
+    if not recomputed.isOk:
+      discard slice.backend.suspendProcess()
+      slice.stateValue = v3assQuiesced
+      return recomputed
+  success()
+
+proc serviceVst3ReconfigurationTurn(slice: var Vst3AudioSlice;
+                                    flags: uint32;
+                                    jackPending: bool;
+                                    report: var Vst3ReconfigurationReport):
+                                    Result[Unit] =
+  let unsupported = flags and Vst3UnsupportedReconfigurationFlags
+  if unsupported != 0'u32:
+    return failure[Unit](reconfigurationError(
+      "VST3 restart requested unsupported behavior", slice,
+      "flags=0x" & toHex(unsupported, 8)))
+  let valuesOnly =
+    (flags and uint32(Vst3RestartParamValuesChanged)) != 0'u32
+  let titlesChanged =
+    (flags and uint32(Vst3RestartParamTitlesChanged)) != 0'u32
+  let ioChanged = (flags and uint32(Vst3RestartIoChanged)) != 0'u32
+  let ioTitlesChanged =
+    (flags and uint32(Vst3RestartIoTitlesChanged)) != 0'u32
+  let midiChanged = (flags and uint32(Vst3RestartMidiCCChanged)) != 0'u32
+  let latencyChanged =
+    (flags and uint32(Vst3RestartLatencyChanged)) != 0'u32
+  if valuesOnly:
+    report.appliedFlags = report.appliedFlags or
+      uint32(Vst3RestartParamValuesChanged)
+  if titlesChanged and not ioChanged and not ioTitlesChanged:
+    let refreshed = slice.instance.refreshMetadata()
+    if not refreshed.isOk:
+      return refreshed
+    report.metadataRefreshed = true
+    report.appliedFlags = report.appliedFlags or
+      uint32(Vst3RestartParamTitlesChanged)
+  if latencyChanged and not (ioChanged or ioTitlesChanged or midiChanged or
+      jackPending):
+    let wasActive = slice.stateValue == v3assActive
+    let updated = slice.serviceVst3Latency(wasActive, report)
+    if not updated.isOk:
+      return updated
+    report.appliedFlags = report.appliedFlags or
+      uint32(Vst3RestartLatencyChanged)
+    return success()
+  if not (ioChanged or ioTitlesChanged or midiChanged or jackPending):
+    return success()
+
+  let wasActive = slice.stateValue == v3assActive
+  if wasActive:
+    let suspended = slice.backend.suspendProcess()
+    if not suspended.isOk:
+      return suspended
+  slice.stateValue = v3assQuiesced
+  if slice.processorActive:
+    var stopped = setVst3Processing(slice.instance.processorPointer(), false)
+    if not stopped.isOk:
+      return slice.failSilentAfterReconfiguration(move(stopped.error))
+    slice.processorActive = false
+  if slice.componentActive:
+    var inactive = setVst3Active(slice.instance.componentPointer(), false)
+    if not inactive.isOk:
+      return slice.failSilentAfterReconfiguration(move(inactive.error))
+    slice.componentActive = false
+  var busesStopped = deactivateVst3Buses(
+    slice.instance.componentPointer(), slice.activationLedger)
+  if not busesStopped.isOk:
+    return slice.failSilentAfterReconfiguration(move(busesStopped.error))
+
+  if jackPending:
+    var runtime = slice.backend.refreshRuntimeConfiguration()
+    if not runtime.isOk:
+      return slice.failSilentAfterReconfiguration(move(runtime.error))
+    var acknowledged = slice.backend.acknowledgeConfigurationChange()
+    if not acknowledged.isOk:
+      return slice.failSilentAfterReconfiguration(move(acknowledged.error))
+    report.sampleRate = runtime.value.sampleRate
+    report.bufferSize = runtime.value.bufferSize
+    report.jackConfigurationChanged = true
+
+  var newPlan = slice.refreshVst3Plan(ioChanged, ioTitlesChanged)
+  if not newPlan.isOk:
+    return slice.failSilentAfterReconfiguration(move(newPlan.error))
+  if ioChanged or ioTitlesChanged:
+    var refreshed = slice.instance.refreshMetadata()
+    if not refreshed.isOk:
+      return slice.failSilentAfterReconfiguration(move(refreshed.error))
+    report.metadataRefreshed = true
+    report.appliedFlags = report.appliedFlags or
+      (flags and Vst3MetadataReconfigurationFlags)
+  var replacementResult = newVst3AudioProcess(
+    slice.instance.processorPointer(), slice.instance.componentPointer(),
+    newPlan.value, slice.transport, slice.backend.bufferSize(),
+    slice.backend.sampleRate(), slice.backend.audioRoleGuard(), slice.path,
+    slice.pluginId, slice.process.samplePosition(),
+    controller = slice.instance.controllerPointer())
+  if not replacementResult.isOk:
+    return slice.failSilentAfterReconfiguration(move(replacementResult.error))
+  var replacement = move(replacementResult.value)
+  let structural = (ioChanged or ioTitlesChanged) and
+    not sameJackPortLayout(slice.plan, newPlan.value)
+  if structural:
+    var snapshot = slice.backend.snapshotConnections()
+    if not snapshot.isOk:
+      discard replacement.close()
+      return slice.failSilentAfterReconfiguration(move(snapshot.error))
+    slice.lastConnectionLosses = move(snapshot.value)
+    var deactivated = slice.backend.deactivate()
+    if not deactivated.isOk:
+      discard replacement.close()
+      return slice.failSilentAfterReconfiguration(move(deactivated.error))
+    var rebuilt = slice.backend.reconfigure(newPlan.value, replacement.endpoint())
+    if not rebuilt.isOk:
+      discard replacement.close()
+      return slice.failSilentAfterReconfiguration(move(rebuilt.error))
+    report.connectionsLost = slice.lastConnectionLosses
+  else:
+    var updated = slice.backend.updateProcessEndpoint(replacement.endpoint())
+    if not updated.isOk:
+      discard replacement.close()
+      return slice.failSilentAfterReconfiguration(move(updated.error))
+
+  var previous = move(slice.process)
+  var previousClosed = previous.close()
+  slice.process = move(replacement)
+  slice.plan = move(newPlan.value)
+  if not previousClosed.isOk:
+    return slice.failSilentAfterReconfiguration(move(previousClosed.error))
+  report.midiMappingRebuilt = midiChanged
+  report.appliedFlags = report.appliedFlags or
+    (flags and Vst3ProcessReconfigurationFlags)
+  if latencyChanged:
+    report.appliedFlags = report.appliedFlags or
+      uint32(Vst3RestartLatencyChanged)
+
+  var latency = slice.instance.processorLatencySamples()
+  if not latency.isOk:
+    return slice.failSilentAfterReconfiguration(move(latency.error))
+  var published = slice.backend.setPluginLatency(latency.value)
+  if not published.isOk:
+    return slice.failSilentAfterReconfiguration(move(published.error))
+  report.latencySamples = latency.value
+  if wasActive:
+    var activatedBuses = activateVst3Buses(
+      slice.instance.componentPointer(), slice.activationLedger)
+    if not activatedBuses.isOk:
+      return slice.failSilentAfterReconfiguration(move(activatedBuses.error))
+    var active = setVst3Active(slice.instance.componentPointer(), true)
+    if not active.isOk:
+      return slice.failSilentAfterReconfiguration(move(active.error))
+    slice.componentActive = true
+    var processing = setVst3Processing(slice.instance.processorPointer(), true)
+    if not processing.isOk:
+      discard setVst3Active(slice.instance.componentPointer(), false)
+      slice.componentActive = false
+      discard deactivateVst3Buses(slice.instance.componentPointer(),
+        slice.activationLedger)
+      return slice.failSilentAfterReconfiguration(move(processing.error))
+    slice.processorActive = true
+    var activated = slice.backend.activate()
+    if not activated.isOk:
+      var activationError = move(activated.error)
+      let stopped = setVst3Processing(slice.instance.processorPointer(), false)
+      appendVst3CleanupError(activationError, stopped, "processor rollback")
+      if stopped.isOk:
+        slice.processorActive = false
+      let inactive = setVst3Active(slice.instance.componentPointer(), false)
+      appendVst3CleanupError(activationError, inactive, "component rollback")
+      if inactive.isOk:
+        slice.componentActive = false
+      let busesInactive = deactivateVst3Buses(
+        slice.instance.componentPointer(), slice.activationLedger)
+      appendVst3CleanupError(activationError, busesInactive, "bus rollback")
+      return slice.failSilentAfterReconfiguration(move(activationError))
+    var recomputed = slice.backend.recomputeLatencies()
+    if not recomputed.isOk:
+      var latencyError = move(recomputed.error)
+      let suspended = slice.backend.suspendProcess()
+      appendVst3CleanupError(latencyError, suspended, "JACK suspension")
+      if suspended.isOk:
+        let stopped = setVst3Processing(
+          slice.instance.processorPointer(), false)
+        appendVst3CleanupError(latencyError, stopped, "processor rollback")
+        if stopped.isOk:
+          slice.processorActive = false
+        let inactive = setVst3Active(
+          slice.instance.componentPointer(), false)
+        appendVst3CleanupError(latencyError, inactive, "component rollback")
+        if inactive.isOk:
+          slice.componentActive = false
+        let busesInactive = deactivateVst3Buses(
+          slice.instance.componentPointer(), slice.activationLedger)
+        appendVst3CleanupError(latencyError, busesInactive, "bus rollback")
+      return slice.failSilentAfterReconfiguration(move(latencyError))
+    slice.stateValue = v3assActive
+  success()
+
+proc serviceReconfiguration*(slice: var Vst3AudioSlice):
+    Result[Vst3ReconfigurationReport] =
+  if slice.stateValue notin {v3assActive, v3assQuiesced}:
+    return failure[Vst3ReconfigurationReport](reconfigurationError(
+      "VST3 reconfiguration requires an active or quiesced slice", slice,
+      "state=" & $slice.stateValue))
+  var report = Vst3ReconfigurationReport()
+  slice.lastConnectionLosses.setLen(0)
+  while true:
+    let flags = slice.instance.takeRestartFlags()
+    let jackPending = slice.backend.configurationChangePending()
+    if flags == 0'u32 and not jackPending:
+      return success(move(report))
+    if report.lifecycleTurns >= Vst3MaxReconfigurationTurns:
+      slice.instance.restoreRestartFlags(flags)
+      return slice.failReconfiguration(reconfigurationError(
+        "VST3 reconfiguration request limit exceeded", slice,
+        "limit=" & $Vst3MaxReconfigurationTurns &
+        "; deferred-flags=0x" & toHex(flags, 8)))
+    inc report.lifecycleTurns
+    report.requestedFlags = report.requestedFlags or flags
+    var serviced = serviceVst3ReconfigurationTurn(slice, flags, jackPending,
+      report)
+    if not serviced.isOk:
+      return slice.failReconfiguration(move(serviced.error))
 proc takeEventMetrics*(slice: var Vst3AudioSlice): Vst3EventMetrics =
   slice.process.eventMetrics()
 
@@ -192,6 +517,30 @@ proc openVst3AudioSlice*(services: Vst3PluginServices;
     discard slice.backend.close()
     discard slice.instance.close()
     return failure[Vst3AudioSlice](move(configuredError))
+  var initialLatency = slice.instance.processorLatencySamples()
+  if not initialLatency.isOk:
+    var latencyError = move(initialLatency.error)
+    let rollback = deactivateVst3Buses(
+      slice.instance.componentPointer(), slice.activationLedger)
+    appendVst3CleanupError(latencyError, rollback, "bus rollback")
+    discard slice.process.close()
+    discard slice.backend.close()
+    discard slice.instance.detachVst3ParameterTransport(slice.transport)
+    closeVst3ParameterTransport(slice.transport)
+    discard slice.instance.close()
+    return failure[Vst3AudioSlice](move(latencyError))
+  var publishedLatency = slice.backend.setPluginLatency(initialLatency.value)
+  if not publishedLatency.isOk:
+    var latencyError = move(publishedLatency.error)
+    let rollback = deactivateVst3Buses(
+      slice.instance.componentPointer(), slice.activationLedger)
+    appendVst3CleanupError(latencyError, rollback, "bus rollback")
+    discard slice.process.close()
+    discard slice.backend.close()
+    discard slice.instance.detachVst3ParameterTransport(slice.transport)
+    closeVst3ParameterTransport(slice.transport)
+    discard slice.instance.close()
+    return failure[Vst3AudioSlice](move(latencyError))
   var active = setVst3Active(slice.instance.componentPointer(), true)
   if not active.isOk:
     var activeError = move(active.error)
@@ -236,6 +585,34 @@ proc openVst3AudioSlice*(services: Vst3PluginServices;
     closeVst3ParameterTransport(slice.transport)
     discard slice.instance.close()
     return failure[Vst3AudioSlice](move(startedError))
+  var recomputed = slice.backend.recomputeLatencies()
+  if not recomputed.isOk:
+    var latencyError = move(recomputed.error)
+    ## JACK must stop invoking the endpoint before the plugin lifecycle changes.
+    let jackStopped = slice.backend.deactivate()
+    appendVst3CleanupError(latencyError, jackStopped, "JACK rollback")
+    if jackStopped.isOk:
+      let processingStopped = setVst3Processing(
+        slice.instance.processorPointer(), false)
+      appendVst3CleanupError(
+        latencyError, processingStopped, "processor rollback")
+      if processingStopped.isOk:
+        slice.processorActive = false
+        let componentStopped = setVst3Active(
+          slice.instance.componentPointer(), false)
+        appendVst3CleanupError(
+          latencyError, componentStopped, "component rollback")
+        if componentStopped.isOk:
+          slice.componentActive = false
+          let busesStopped = deactivateVst3Buses(
+            slice.instance.componentPointer(), slice.activationLedger)
+          appendVst3CleanupError(latencyError, busesStopped, "bus rollback")
+    discard slice.backend.close()
+    discard slice.process.close()
+    discard slice.instance.detachVst3ParameterTransport(slice.transport)
+    closeVst3ParameterTransport(slice.transport)
+    discard slice.instance.close()
+    return failure[Vst3AudioSlice](move(latencyError))
   slice.stateValue = v3assActive
   success(move(slice))
 
@@ -265,6 +642,23 @@ proc close*(slice: var Vst3AudioSlice): Result[Unit] =
     if not stopped.isOk:
       ## Keep the entire ownership graph intact while a callback may still run.
       return stopped
+  # A failed reconfiguration can be quiesced at the application level while
+  # the JACK client remains active with callbacks suspended and the processor
+  # still owns an active lifecycle edge. Reconcile those edges before teardown.
+  if slice.backend.state == jbsActive:
+    let deactivatedBackend = slice.backend.deactivate()
+    if not deactivatedBackend.isOk:
+      return deactivatedBackend
+  if slice.processorActive:
+    if not slice.process.waitVst3ProcessQuiescence():
+      return failure[Unit](sliceError("VST3 process did not quiesce",
+        slice.path, slice.pluginId))
+    let stoppedProcessor = setVst3Processing(
+      slice.instance.processorPointer(), false)
+    if not stoppedProcessor.isOk:
+      return stoppedProcessor
+    slice.processorActive = false
+    slice.stateValue = v3assQuiesced
   if slice.componentActive:
     let inactive = setVst3Active(slice.instance.componentPointer(), false)
     if not inactive.isOk:
