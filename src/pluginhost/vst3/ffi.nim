@@ -82,6 +82,30 @@ const
   Vst3ParameterChangesIid* = "A47796630BB64A56B44384A8466FEB9D"
   Vst3ParamValueQueueIid* = "01263A18ED074F6F98C9D3564686F9BA"
   Vst3EventListIid* = "3A2C4214346349FEB2C4F397B9695A44"
+  Vst3MidiMappingIid* = "DF0FF9F749B74669B63AB7327ADBF5E5"
+  Vst3EventFlagIsLive* = 1'u16 shl 0
+  Vst3EventTypeNoteOn* = 0'u16
+  Vst3EventTypeNoteOff* = 1'u16
+  Vst3EventTypeData* = 2'u16
+  Vst3EventTypePolyPressure* = 3'u16
+  Vst3EventTypeLegacyMidiCcOut* = 0xFFFF'u16
+  Vst3DataTypeMidiSysEx* = 0'u32
+  Vst3NoteIdNone* = -1'i32
+  Vst3MidiControllerAftertouch* = 128'i32
+  Vst3MidiControllerPitchBend* = 129'i32
+  Vst3MidiControllerProgramChange* = 130'i32
+  Vst3MidiControllerPolyPressure* = 131'i32
+  Vst3MidiControllerQuarterFrame* = 132'i32
+  Vst3MidiControllerSongSelect* = 133'i32
+  Vst3MidiControllerSongPointer* = 134'i32
+  Vst3MidiControllerCableSelect* = 135'i32
+  Vst3MidiControllerTuneRequest* = 136'i32
+  Vst3MidiControllerClockStart* = 137'i32
+  Vst3MidiControllerClockContinue* = 138'i32
+  Vst3MidiControllerClockStop* = 139'i32
+  Vst3MidiControllerActiveSensing* = 140'i32
+  Vst3MidiControllerCount* = 132'i32
+  Vst3MidiChannelCount* = 16'i32
 type
   Vst3Tuid* = array[Vst3TuidBytes, uint8]
   Vst3FactoryInfo* {.bycopy.} = object
@@ -162,6 +186,12 @@ type
                          info: ptr Vst3ClassInfo2): int32 {.
       cdecl, raises: [].}
 
+  Vst3PluginFactory* {.bycopy.} = object
+    lpVtbl*: ptr Vst3PluginFactoryVtbl
+
+  Vst3PluginFactory2* {.bycopy.} = object
+    lpVtbl*: ptr Vst3PluginFactory2Vtbl
+
   Vst3PluginFactory3Vtbl* {.bycopy.} = object
     queryInterface*: proc(thisInterface: pointer; iid: ptr Vst3Tuid;
                           obj: ptr pointer): int32 {.cdecl, raises: [].}
@@ -186,12 +216,6 @@ type
     setHostContext*: proc(thisInterface: pointer; context: pointer): int32 {.
       cdecl, raises: [].}
 
-  Vst3PluginFactory* {.bycopy.} = object
-    lpVtbl*: ptr Vst3PluginFactoryVtbl
-
-  Vst3PluginFactory2* {.bycopy.} = object
-    lpVtbl*: ptr Vst3PluginFactory2Vtbl
-
   Vst3PluginFactory3* {.bycopy.} = object
     lpVtbl*: ptr Vst3PluginFactory3Vtbl
 
@@ -206,6 +230,10 @@ type
   Vst3VstString128* = array[128, Vst3TChar]
   Vst3ParamID* = uint32
   Vst3ParamValue* = float64
+  Vst3CtrlNumber* = int16
+  Vst3MidiChannel* = int16
+  Vst3MidiGroup* = uint8
+  Vst3BusIndex* = int32
 
 type
   Vst3BusInfo* {.bycopy.} = object
@@ -327,6 +355,20 @@ type
       cdecl, raises: [].}
   Vst3EditController* {.bycopy.} = object
     lpVtbl*: ptr Vst3EditControllerVtbl
+
+  Vst3MidiMappingVtbl* {.bycopy.} = object
+    queryInterface*: proc(thisInterface: pointer; iid: ptr Vst3Tuid;
+                          obj: ptr pointer): int32 {.cdecl, raises: [].}
+    addRef*: proc(thisInterface: pointer): uint32 {.cdecl, raises: [].}
+    release*: proc(thisInterface: pointer): uint32 {.cdecl, raises: [].}
+    getMidiControllerAssignment*: proc(thisInterface: pointer;
+                                      busIndex: Vst3BusIndex;
+                                      channel: Vst3MidiChannel;
+                                      midiControllerNumber: Vst3CtrlNumber;
+                                      id: ptr Vst3ParamID): int32 {.
+      cdecl, raises: [].}
+  Vst3MidiMapping* {.bycopy.} = object
+    lpVtbl*: ptr Vst3MidiMappingVtbl
 
   Vst3HostApplicationVtbl* {.bycopy.} = object
     queryInterface*: proc(thisInterface: pointer; iid: ptr Vst3Tuid;
@@ -520,6 +562,7 @@ type
     ppqPosition*: float64
     flags*: uint16
     eventType*: uint16
+    reserved*: uint32
     payload*: array[24, uint8]
   Vst3ProcessSetup* {.bycopy.} = object
     processMode*: int32

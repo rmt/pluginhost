@@ -4,8 +4,11 @@
 
 #include "vst3/vst3_c_api.h"
 
+#ifndef PLUGINHOST_VST3_V3_MODE
+#define PLUGINHOST_VST3_V3_MODE 0
+#endif
 #ifndef PLUGINHOST_VST3_V2B_MODE
-#define PLUGINHOST_VST3_V2B_MODE 0
+#define PLUGINHOST_VST3_V2B_MODE PLUGINHOST_VST3_V3_MODE
 #endif
 
 #define EXPORT extern "C" __attribute__((visibility("default")))
@@ -22,8 +25,10 @@ const Steinberg_TUID kControllerId = {0x20, 0x31, 0x42, 0x53, 0x64, 0x75,
   static_cast<char>(0xEC), static_cast<char>(0xFD), 0x0E, 0x1F};
 constexpr Steinberg_Vst_ParamID kGainId = 1;
 constexpr Steinberg_Vst_ParamID kOutputId = 3;
+const std::uint8_t kOutputSysEx[] = {0xF0, 0x7D, 0x01, 0xF7};
 struct State;
 struct ComponentObject { Steinberg_Vst_IComponent iface; State* state; };
+struct MappingObject { Steinberg_Vst_IMidiMapping iface; State* state; };
 struct ProcessorObject { Steinberg_Vst_IAudioProcessor iface; State* state; };
 struct ControllerObject { Steinberg_Vst_IEditController iface; State* state; };
 struct PointObject { Steinberg_Vst_IConnectionPoint iface; State* state; };
@@ -34,6 +39,7 @@ struct RequirementsObject {
 
 struct State {
   ComponentObject component;
+  MappingObject mapping;
   ProcessorObject processor;
   ControllerObject controller;
   PointObject componentPoint;
@@ -47,6 +53,7 @@ struct State {
   bool setupDone = false;
   double gain = 1.0;
   double outputValue = 0.0;
+  std::uint32_t outputSetCalls = 0;
   std::uint32_t processActive = 0;
   std::uint32_t setupCalls = 0;
   std::uint32_t processCalls = 0;
@@ -57,6 +64,7 @@ struct State {
   std::uint32_t activeCalls = 0;
   std::uint32_t processingCalls = 0;
   std::uint32_t arrangementCalls = 0;
+  std::uint32_t requirementsCalls = 0;
   std::uint32_t setupFrames = 0;
   std::uint32_t setupRate = 0;
   std::int32_t lastResult = 0;
@@ -69,13 +77,18 @@ struct State {
   std::int64_t lastSamplePosition = 0;
   std::uint32_t lastContextState = 0;
   std::int64_t lastContinuousTimeSamples = 0;
-  std::uint32_t outputSetCalls = 0;
-  std::uint32_t requirementsCalls = 0;
+  std::uint32_t lastInputParamQueues = 0;
+  std::uint32_t lastInputParamPoints = 0;
+  Steinberg_Vst_ParamID lastInputParamIds[16] = {};
+  std::int32_t lastInputParamOffsets[64] = {};
+  double lastInputParamValues[64] = {};
+  std::uint32_t mappingQueries = 0;
+  std::uint32_t mappingAssignments = 0;
+  std::uint32_t mappingReleases = 0;
   std::uint32_t eventAdds = 0;
   std::uint32_t order[64] = {};
   std::uint32_t orderCount = 0;
 };
-
 State g_state;
 
 void order(State* state, std::uint32_t value) {
@@ -92,7 +105,9 @@ bool isNonStereo() { return PLUGINHOST_VST3_V2B_MODE == 3; }
 bool hasInactiveSlots() { return PLUGINHOST_VST3_V2B_MODE == 4; }
 bool setupFails() { return PLUGINHOST_VST3_V2B_MODE == 5; }
 bool activationFails() { return PLUGINHOST_VST3_V2B_MODE == 6; }
-bool processFails() { return PLUGINHOST_VST3_V2B_MODE == 7; }
+bool processFails() {
+  return PLUGINHOST_VST3_V2B_MODE == 7 || PLUGINHOST_VST3_V3_MODE == 3;
+}
 bool arrangementsFalse() { return PLUGINHOST_VST3_V2B_MODE == 8; }
 bool float64Only() { return PLUGINHOST_VST3_V2B_MODE == 9; }
 bool silenceOutput() { return PLUGINHOST_VST3_V2B_MODE == 10; }
@@ -102,6 +117,16 @@ bool tooManyBuses() { return PLUGINHOST_VST3_V2B_MODE == 13; }
 bool negativeBusCount() { return PLUGINHOST_VST3_V2B_MODE == 14; }
 bool unsupportedRequirements() { return PLUGINHOST_VST3_V2B_MODE == 16; }
 bool supportedContinuousRequirements() { return PLUGINHOST_VST3_V2B_MODE == 17; }
+bool multiMidi() { return PLUGINHOST_VST3_V2B_MODE == 18; }
+bool mappingFailedCandidate() { return PLUGINHOST_VST3_V3_MODE == 19; }
+bool malformedEventChannels() { return PLUGINHOST_VST3_V3_MODE == 20; }
+bool outputOnlyMidi() { return PLUGINHOST_VST3_V3_MODE == 21; }
+
+std::int32_t eventBusCount(Steinberg_Vst_BusDirection direction) {
+  if (outputOnlyMidi())
+    return direction == Steinberg_Vst_BusDirections_kOutput ? 1 : 0;
+  return multiMidi() ? 2 : 1;
+}
 
 std::int32_t audioBusCount(Steinberg_Vst_BusDirection direction) {
   if (tooManyBuses()) return direction == Steinberg_Vst_BusDirections_kInput ? 1025 : 0;
@@ -134,8 +159,8 @@ const char* busName(Steinberg_Vst_BusDirection direction, std::int32_t index) {
 Steinberg_tresult componentQuery(void* raw, const Steinberg_TUID iid, void** obj);
 Steinberg_tresult processorQuery(void* raw, const Steinberg_TUID iid, void** obj);
 Steinberg_tresult controllerQuery(void* raw, const Steinberg_TUID iid, void** obj);
+Steinberg_tresult mappingQuery(void* raw, const Steinberg_TUID iid, void** obj);
 Steinberg_tresult pointQuery(void* raw, const Steinberg_TUID iid, void** obj);
-Steinberg_tresult requirementsQuery(void* raw, const Steinberg_TUID iid, void** obj);
 Steinberg_tresult componentInitialize(void* raw, Steinberg_FUnknown*) {
   auto* object = static_cast<ComponentObject*>(raw);
   object->state->initialized = true;
@@ -155,7 +180,7 @@ Steinberg_tresult getControllerClassId(void*, Steinberg_TUID cid) {
 }
 Steinberg_tresult setIoMode(void*, Steinberg_Vst_IoMode) { return Steinberg_kResultOk; }
 std::int32_t getBusCount(void*, Steinberg_Vst_MediaType type, Steinberg_Vst_BusDirection direction) {
-  if (type == Steinberg_Vst_MediaTypes_kEvent) return 1;
+  if (type == Steinberg_Vst_MediaTypes_kEvent) return eventBusCount(direction);
   return audioBusCount(direction);
 }
 Steinberg_tresult getBusInfo(void* raw, Steinberg_Vst_MediaType type,
@@ -166,9 +191,9 @@ Steinberg_tresult getBusInfo(void* raw, Steinberg_Vst_MediaType type,
   std::memset(info, 0, sizeof(*info));
   info->mediaType = type;
   info->direction = direction;
-  info->busType = index == 0 ? Steinberg_Vst_BusTypes_kMain : Steinberg_Vst_BusTypes_kAux;
   if (type == Steinberg_Vst_MediaTypes_kEvent) {
-    info->channelCount = 16;
+    if (index >= eventBusCount(direction)) return Steinberg_kInvalidArgument;
+    info->channelCount = malformedEventChannels() ? 17 : 1;
     const char* text = direction == Steinberg_Vst_BusDirections_kInput ? "EventIn" : "EventOut";
     for (std::size_t i = 0; text[i] && i + 1 < 128; ++i) info->name[i] = static_cast<Steinberg_Vst_TChar>(text[i]);
     return Steinberg_kResultOk;
@@ -255,23 +280,45 @@ Steinberg_tresult setProcessing(void* raw, Steinberg_TBool processing) {
   order(state, processing ? 6 : 7);
   return Steinberg_kResultOk;
 }
-
 float readGain(Steinberg_Vst_ProcessData* data, State* state) {
-  if (!data || !data->inputParameterChanges || !data->inputParameterChanges->lpVtbl) return static_cast<float>(state->gain);
+  float gain = static_cast<float>(state->gain);
+  if (!data || !data->inputParameterChanges || !data->inputParameterChanges->lpVtbl)
+    return gain;
   auto* changes = data->inputParameterChanges;
   std::int32_t count = changes->lpVtbl->getParameterCount(changes);
+  state->lastInputParamQueues = 0;
+  state->lastInputParamPoints = 0;
   for (std::int32_t i = 0; i < count; ++i) {
     auto* queue = changes->lpVtbl->getParameterData(changes, i);
-    if (!queue || queue->lpVtbl->getParameterId(queue) != kGainId) continue;
-    std::int32_t points = queue->lpVtbl->getPointCount(queue);
+    if (!queue || !queue->lpVtbl) continue;
+    const auto id = queue->lpVtbl->getParameterId(queue);
+    const std::int32_t points = queue->lpVtbl->getPointCount(queue);
+    if (state->lastInputParamQueues < 16)
+      state->lastInputParamIds[state->lastInputParamQueues++] = id;
+    for (std::int32_t point = 0; point < points &&
+         state->lastInputParamPoints < 64; ++point) {
+      std::int32_t offset = 0;
+      double value = 0.0;
+      if (queue->lpVtbl->getPoint(queue, point, &offset, &value) ==
+          Steinberg_kResultOk) {
+        const auto index = state->lastInputParamPoints++;
+        state->lastInputParamOffsets[index] = offset;
+        state->lastInputParamValues[index] = value;
+      }
+    }
     if (points <= 0) continue;
     std::int32_t offset = 0;
-    double value = state->gain;
-    queue->lpVtbl->getPoint(queue, points - 1, &offset, &value);
-    state->gain = value;
-    return static_cast<float>(value);
+    double value = 0.0;
+    if (queue->lpVtbl->getPoint(queue, points - 1, &offset, &value) !=
+        Steinberg_kResultOk)
+      continue;
+    if (id == kGainId)
+      gain = static_cast<float>(value);
+    else if (id == kOutputId)
+      state->outputValue = value;
   }
-  return static_cast<float>(state->gain);
+  state->gain = gain;
+  return gain;
 }
 Steinberg_tresult process(void* raw, Steinberg_Vst_ProcessData* data) {
   auto* state = static_cast<ProcessorObject*>(raw)->state;
@@ -314,17 +361,35 @@ Steinberg_tresult process(void* raw, Steinberg_Vst_ProcessData* data) {
   }
   if (data->outputEvents && data->outputEvents->lpVtbl &&
       data->outputEvents->lpVtbl->addEvent) {
-    Steinberg_Vst_Event event = {};
-    event.sampleOffset = 0;
-    event.type = Steinberg_Vst_Event_EventTypes_kNoteOnEvent;
-    event.Steinberg_Vst_Event_noteOn.channel = 0;
-    event.Steinberg_Vst_Event_noteOn.pitch = 60;
-    event.Steinberg_Vst_Event_noteOn.velocity = 1.0f;
-    event.Steinberg_Vst_Event_noteOn.tuning = 0.0f;
-    event.Steinberg_Vst_Event_noteOn.noteId = -1;
-    if (data->outputEvents->lpVtbl->addEvent(data->outputEvents, &event) ==
-        Steinberg_kResultOk) {
-      ++state->eventAdds;
+    const std::int32_t eventCount = multiMidi() ? 2 : 1;
+    for (std::int32_t bus = 0; bus < eventCount; ++bus) {
+      Steinberg_Vst_Event event = {};
+      event.busIndex = bus;
+      event.sampleOffset = 7;
+      event.type = Steinberg_Vst_Event_EventTypes_kNoteOnEvent;
+      event.Steinberg_Vst_Event_noteOn.channel = 0;
+      event.Steinberg_Vst_Event_noteOn.pitch = static_cast<std::int16_t>(
+          60 + bus + (state->outputValue > 0.75 ? 1 : 0));
+      event.Steinberg_Vst_Event_noteOn.tuning = 0.0f;
+      event.Steinberg_Vst_Event_noteOn.velocity = 1.0f;
+      event.Steinberg_Vst_Event_noteOn.length = 0;
+      event.Steinberg_Vst_Event_noteOn.noteId = -1;
+      if (data->outputEvents->lpVtbl->addEvent(data->outputEvents, &event) ==
+          Steinberg_kResultOk)
+        ++state->eventAdds;
+      if (multiMidi() && bus == 1) {
+        Steinberg_Vst_Event sysexEvent = {};
+        sysexEvent.busIndex = bus;
+        sysexEvent.sampleOffset = 7;
+        sysexEvent.type = Steinberg_Vst_Event_EventTypes_kDataEvent;
+        sysexEvent.Steinberg_Vst_Event_data.size = sizeof(kOutputSysEx);
+        sysexEvent.Steinberg_Vst_Event_data.type =
+            Steinberg_Vst_DataEvent_DataTypes_kMidiSysEx;
+        sysexEvent.Steinberg_Vst_Event_data.bytes = kOutputSysEx;
+        if (data->outputEvents->lpVtbl->addEvent(data->outputEvents,
+            &sysexEvent) == Steinberg_kResultOk)
+          ++state->eventAdds;
+      }
     }
   }
   if (outputParameter() && data->outputParameterChanges && data->outputParameterChanges->lpVtbl) {
@@ -407,6 +472,11 @@ Steinberg_tresult pointNotify(void*, Steinberg_Vst_IMessage*) { return Steinberg
 
 Steinberg_uint32 oneRef(void*) { return 1; }
 Steinberg_uint32 zeroRelease(void*) { return 0; }
+Steinberg_uint32 mappingRelease(void* raw) {
+  auto* state = static_cast<MappingObject*>(raw)->state;
+  ++state->mappingReleases;
+  return 0;
+}
 
 Steinberg_tresult componentQuery(void* raw, const Steinberg_TUID iid, void** obj) {
   auto* state = static_cast<ComponentObject*>(raw)->state;
@@ -454,10 +524,46 @@ Steinberg_tresult controllerQuery(void* raw, const Steinberg_TUID iid, void** ob
   auto* state = static_cast<ControllerObject*>(raw)->state;
   if (!obj) return Steinberg_kInvalidArgument;
   *obj = nullptr;
-  if (same(iid, Steinberg_FUnknown_iid) || same(iid, Steinberg_Vst_IEditController_iid)) *obj = &state->controller.iface;
-  else if (same(iid, Steinberg_Vst_IConnectionPoint_iid)) *obj = &state->controllerPoint.iface;
+  if (same(iid, Steinberg_FUnknown_iid) ||
+      same(iid, Steinberg_Vst_IEditController_iid))
+    *obj = &state->controller.iface;
+  else if (same(iid, Steinberg_Vst_IMidiMapping_iid)) {
+    ++state->mappingQueries;
+    *obj = &state->mapping.iface;
+    return mappingFailedCandidate() ? Steinberg_kNoInterface :
+      Steinberg_kResultOk;
+  } else if (same(iid, Steinberg_Vst_IConnectionPoint_iid))
+    *obj = &state->controllerPoint.iface;
   if (!*obj) return Steinberg_kNoInterface;
   return Steinberg_kResultOk;
+}
+Steinberg_tresult mappingGet(void* raw, Steinberg_int32 busIndex,
+    Steinberg_int16 channel, Steinberg_Vst_CtrlNumber controller,
+    Steinberg_Vst_ParamID* id) {
+  auto* state = static_cast<MappingObject*>(raw)->state;
+  ++state->mappingAssignments;
+  if (!id || busIndex < 0 || busIndex >= (multiMidi() ? 2 : 1) ||
+      channel < 0 || channel > 15)
+    return Steinberg_kInvalidArgument;
+  if (controller >= 0 &&
+      (controller < Steinberg_Vst_ControllerNumbers_kCountCtrlNumber ||
+       controller == Steinberg_Vst_ControllerNumbers_kCtrlProgramChange)) {
+    *id = controller == Steinberg_Vst_ControllerNumbers_kPitchBend
+      ? kOutputId : kGainId;
+    return Steinberg_kResultOk;
+  }
+  (void)state;
+  return Steinberg_kResultFalse;
+}
+Steinberg_tresult mappingQuery(void* raw, const Steinberg_TUID iid, void** obj) {
+  auto* state = static_cast<MappingObject*>(raw)->state;
+  ++state->mappingQueries;
+  if (!obj) return Steinberg_kInvalidArgument;
+  *obj = nullptr;
+  if (same(iid, Steinberg_FUnknown_iid) ||
+      same(iid, Steinberg_Vst_IMidiMapping_iid))
+    *obj = &state->mapping.iface;
+  return *obj ? Steinberg_kResultOk : Steinberg_kNoInterface;
 }
 Steinberg_tresult pointQuery(void* raw, const Steinberg_TUID iid, void** obj) {
   if (!obj) return Steinberg_kInvalidArgument;
@@ -492,6 +598,7 @@ Steinberg_tresult factoryCreate(void*, const char* cid, const char* iid, void** 
   extern Steinberg_Vst_IEditControllerVtbl controllerVtable;
   extern Steinberg_Vst_IConnectionPointVtbl pointVtable;
   extern Steinberg_Vst_IProcessContextRequirementsVtbl requirementsVtable;
+  extern Steinberg_Vst_IMidiMappingVtbl mappingVtable;
   if (!obj) return Steinberg_kInvalidArgument;
   *obj = nullptr;
   if (!cid || !iid ||
@@ -505,7 +612,7 @@ Steinberg_tresult factoryCreate(void*, const char* cid, const char* iid, void** 
   const bool controllerRequest =
       std::memcmp(cid, kControllerId, sizeof(kControllerId)) == 0 &&
       std::memcmp(iid, Steinberg_Vst_IEditController_iid,
-        sizeof(Steinberg_TUID)) == 0 && !isCombined();
+        sizeof(Steinberg_TUID)) == 0;
   if (!componentRequest && !controllerRequest) return Steinberg_kNoInterface;
   if (componentRequest) {
     g_state = State();
@@ -514,10 +621,12 @@ Steinberg_tresult factoryCreate(void*, const char* cid, const char* iid, void** 
     g_state.controller.state = &g_state;
     g_state.componentPoint.state = &g_state;
     g_state.controllerPoint.state = &g_state;
+    g_state.mapping.state = &g_state;
     g_state.requirements.state = &g_state;
     g_state.component.iface.lpVtbl = &componentVtable;
     g_state.processor.iface.lpVtbl = &processorVtable;
     g_state.controller.iface.lpVtbl = &controllerVtable;
+    g_state.mapping.iface.lpVtbl = &mappingVtable;
     g_state.componentPoint.iface.lpVtbl = &pointVtable;
     g_state.controllerPoint.iface.lpVtbl = &pointVtable;
     g_state.requirements.iface.lpVtbl = &requirementsVtable;
@@ -537,6 +646,8 @@ Steinberg_Vst_IAudioProcessorVtbl processorVtable = {
   processorQuery, oneRef, zeroRelease, setBusArrangements, getBusArrangement,
   canProcessSampleSize, getLatencySamples, setupProcessing, setProcessing,
   process, getTailSamples};
+Steinberg_Vst_IMidiMappingVtbl mappingVtable = {
+  mappingQuery, oneRef, mappingRelease, mappingGet};
 Steinberg_Vst_IProcessContextRequirementsVtbl requirementsVtable = {
   requirementsQuery, oneRef, zeroRelease, requirementsGet};
 Steinberg_Vst_IEditControllerVtbl controllerVtable = {
@@ -577,12 +688,26 @@ EXPORT std::uint64_t pluginhost_vst3_fixture_last_output_pointer(std::int32_t i)
 EXPORT std::int64_t pluginhost_vst3_fixture_last_sample_position(void) { return g_state.lastSamplePosition; }
 EXPORT std::uint32_t pluginhost_vst3_fixture_last_context_state(void) { return g_state.lastContextState; }
 EXPORT std::int64_t pluginhost_vst3_fixture_last_continuous_time_samples(void) { return g_state.lastContinuousTimeSamples; }
+EXPORT std::uint32_t pluginhost_vst3_fixture_last_input_param_queues(void) { return g_state.lastInputParamQueues; }
+EXPORT std::uint32_t pluginhost_vst3_fixture_last_input_param_points(void) { return g_state.lastInputParamPoints; }
+EXPORT std::uint32_t pluginhost_vst3_fixture_last_input_param_id(std::int32_t i) {
+  return i >= 0 && i < 16 ? g_state.lastInputParamIds[i] : 0;
+}
+EXPORT std::int32_t pluginhost_vst3_fixture_last_input_param_offset(std::int32_t i) {
+  return i >= 0 && i < 64 ? g_state.lastInputParamOffsets[i] : -1;
+}
+EXPORT double pluginhost_vst3_fixture_last_input_param_value(std::int32_t i) {
+  return i >= 0 && i < 64 ? g_state.lastInputParamValues[i] : 0.0;
+}
 EXPORT std::uint32_t pluginhost_vst3_fixture_controller_set_calls(void) { return g_state.outputSetCalls; }
 EXPORT std::uint32_t pluginhost_vst3_fixture_event_adds(void) { return g_state.eventAdds; }
 EXPORT double pluginhost_vst3_fixture_gain(void) { return g_state.gain; }
 EXPORT double pluginhost_vst3_fixture_output_value(void) { return g_state.outputValue; }
 EXPORT std::uint32_t pluginhost_vst3_fixture_order_count(void) { return g_state.orderCount; }
 EXPORT std::uint32_t pluginhost_vst3_fixture_order(std::uint32_t i) { return i < g_state.orderCount ? g_state.order[i] : 0; }
+EXPORT std::uint32_t pluginhost_vst3_fixture_mapping_queries(void) { return g_state.mappingQueries; }
+EXPORT std::uint32_t pluginhost_vst3_fixture_mapping_assignments(void) { return g_state.mappingAssignments; }
+EXPORT std::uint32_t pluginhost_vst3_fixture_mapping_releases(void) { return g_state.mappingReleases; }
 EXPORT void pluginhost_vst3_fixture_emit_gain_edit(double value) {
   if (!g_state.handler || !g_state.handler->lpVtbl) return;
   g_state.handler->lpVtbl->beginEdit(g_state.handler, kGainId);

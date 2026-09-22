@@ -127,6 +127,9 @@ proc compileLiveIntegrationSupport() =
        "$(pkg-config --libs jack) -ldl -Wl,-z,defs " &
        "-o build/integration/jack_midi_peer"
   exec "cc -std=gnu11 -fno-builtin -Wall -Wextra -Werror -pthread " &
+       "$(pkg-config --cflags jack) tests/integration/vst3_midi_peer.c " &
+       "$(pkg-config --libs jack) -o build/integration/vst3_midi_peer"
+  exec "cc -std=gnu11 -fno-builtin -Wall -Wextra -Werror -pthread " &
        "$(pkg-config --cflags jack) tests/integration/vst3_jack_peer.c " &
        "$(pkg-config --libs jack) -o build/integration/vst3_jack_peer"
   exec "cc -std=gnu11 -fno-builtin -Wall -Wextra -Werror -pthread " &
@@ -231,18 +234,21 @@ proc compileForeignThreadRaceFixture() =
 proc compileForeignThreadTeardownTest() =
   exec "nim c --hints:off -d:nimAllocStats --path:src --path:tests " &
        dependencyPathsClause() &
-       " --nimcache:build/nimcache/integration/foreign_thread_teardown " &
        " --out:build/test/foreign_thread_teardown " &
        "tests/integration/test_foreign_thread_teardown.nim"
 proc compileVst3V2bFixtures()
+proc compileVst3V3Fixtures()
 proc runIntegrationTests(checkPrerequisites = true) =
   if checkPrerequisites:
     checkIntegrationPrerequisites()
     checkClapSmokePrerequisite()
   compileLiveIntegrationSupport()
   compileVst3V2bFixtures()
+  compileVst3V3Fixtures()
   compileLiveIntegrationTest(
     "tests/integration/test_live_vst3_audio.nim", "live_vst3_audio")
+  compileLiveIntegrationTest(
+    "tests/integration/test_live_vst3_midi.nim", "live_vst3_midi")
   compileLiveIntegrationTest(
     "tests/integration/test_live_clap_audio.nim", "live_clap_audio")
   compileLiveIntegrationTest(
@@ -256,6 +262,12 @@ proc runIntegrationTests(checkPrerequisites = true) =
        "python3 tests/integration/run_pipewire_jack.py " &
        "--test build/test/live_vst3_audio " &
        "--peer build/integration/vst3_jack_peer"
+  exec "PLUGINHOST_VST3_V3_FIXTURE_DIR=$PWD/build/fixtures/vst3 " &
+       "PLUGINHOST_VST3_V3_FIXTURE_NAME=midi_multi " &
+       "PLUGINHOST_VST3_MIDI_PEER=$PWD/build/integration/vst3_midi_peer " &
+       "python3 tests/integration/run_pipewire_jack.py " &
+       "--test build/test/live_vst3_midi " &
+       "--peer build/integration/vst3_midi_peer"
   exec "PLUGINHOST_TEST_BIN=$PWD/build/test/pluginhost " &
        "PLUGINHOST_CLAP_AUDIO_FIXTURE_DIR=$PWD/build/fixtures/clap " &
        "python3 tests/integration/run_pipewire_jack.py " &
@@ -523,6 +535,24 @@ proc compileVst3V2bFixtures() =
   compileVst3V2bFixtureVariant("requirements_unsupported", 16)
   compileVst3V2bFixtureVariant("requirements_continuous", 17)
 
+proc compileVst3V3FixtureVariant(name: string; mode: int) =
+  exec "mkdir -p build/fixtures/vst3/" & name &
+       ".vst3/Contents/x86_64-linux"
+  exec "c++ -std=c++17 -fPIC -shared -fvisibility=hidden " &
+       "-Wall -Wextra -Werror -Ivendor " &
+       "-DPLUGINHOST_VST3_V3_MODE=" & $mode &
+       " tests/fixtures/vst3/v3_fixture.cpp -o build/fixtures/vst3/" &
+       name & ".vst3/Contents/x86_64-linux/" & name & ".so"
+
+proc compileVst3V3Fixtures() =
+  compileVst3V3FixtureVariant("midi", 0)
+  compileVst3V3FixtureVariant("midi_mapping", 1)
+  compileVst3V3FixtureVariant("midi_output", 2)
+  compileVst3V3FixtureVariant("midi_failure", 3)
+  compileVst3V3FixtureVariant("midi_multi", 18)
+  compileVst3V3FixtureVariant("midi_mapping_failed", 19)
+  compileVst3V3FixtureVariant("midi_bad_channels", 20)
+  compileVst3V3FixtureVariant("midi_output_only", 21)
 proc runVst3AbiTests() =
   exec "mkdir -p build/abi build/nimcache/vst3-abi build/test"
   exec "cc -std=gnu11 -Wall -Wextra -Werror -Ivendor " &
@@ -548,6 +578,17 @@ proc runVst3V2aTests() =
        "nim c -r --hints:off --path:src --path:tests " &
        dependencyPathsClause() & " --nimcache:build/nimcache/vst3-v2a " &
        "--out:build/test/test_vst3_v2a tests/fixtures/test_vst3_v2a.nim"
+
+proc runVst3V3Tests() =
+  compileVst3V3Fixtures()
+  compileFakeJackFixture()
+  exec "mkdir -p build/nimcache/vst3-v3 build/test"
+  exec "PLUGINHOST_VST3_V3_FIXTURE_DIR=$PWD/build/fixtures/vst3 " &
+       "PLUGINHOST_JACK_FAKE_FIXTURE=$PWD/build/fixtures/" &
+       "libpluginhost_jack_fake_fixture.so " &
+       "nim c -r --hints:off --path:src --path:tests " &
+       dependencyPathsClause() & " --nimcache:build/nimcache/vst3-v3 " &
+       "--out:build/test/test_vst3_v3 tests/fixtures/test_vst3_v3.nim"
 proc runVst3AudioTests() =
   compileVst3V2bFixtures()
   compileFakeJackFixture()
@@ -737,6 +778,8 @@ task testVst3Abi, "Run VST3 generated-C and C++ fixture ABI checks":
   runVst3AbiTests()
 task testVst3V2a, "Run VST3 V2A lifecycle, host, and run-loop checks":
   runVst3V2aTests()
+task testVst3V3, "Run VST3 V3 parameter and MIDI bridge checks":
+  runVst3V3Tests()
 
 task testFixtures, "Build and test the synthetic CLAP fixtures":
   compileTestBinary()
@@ -776,6 +819,7 @@ task all, "Run compile checks, build the executable, and run tests":
   runVst3AbiTests()
   runVst3CatalogTests()
   runVst3V2aTests()
+  runVst3V3Tests()
   runRtTests()
   runClapFixtureTests()
   compileHardeningTests()

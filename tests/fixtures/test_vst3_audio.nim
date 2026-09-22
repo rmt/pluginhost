@@ -101,7 +101,7 @@ suite "VST3 V2B bounded JACK audio":
     check requirementsCalls() == 1'u32
     check slice.portPlan.audioGroupCount == 2
     check slice.portPlan.audioChannelCount == 2
-    check slice.portPlan.notePortCount == 0
+    check slice.portPlan.notePortCount == 2
     controls.setAudioSample(0, 0, 2.0)
     check controls.invokeProcess(128) == 0
     check eventAdds() == 1
@@ -144,6 +144,7 @@ suite "VST3 V2B bounded JACK audio":
     var slice = move(opened.value)
     controls.setAudioSample(0, 0, 3.0)
     check controls.invokeProcess(128) == 0
+    check not slice.takeFault()
     check abs(controls.audioSample(3, 0) - 3.0) < 0.0001
     closeSlice(slice, services, controls)
 
@@ -341,6 +342,7 @@ suite "VST3 V2B bounded JACK audio":
     controls.setAudioSample(0, 0, 4.0)
     emitEdit(0.25)
     check controls.invokeProcess(128) == 0
+    check not slice.takeFault()
     check abs(controls.audioSample(3, 0) - 1.0) < 0.0001
     check slice.drainParameterObservations() == 1'u32
     check outputSetCalls() == 1

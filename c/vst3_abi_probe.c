@@ -146,6 +146,9 @@ typedef Steinberg_tresult (*pluginhost_event_list_get_signature)(
     void *, Steinberg_int32, struct Steinberg_Vst_Event *);
 typedef Steinberg_tresult (*pluginhost_event_list_add_signature)(
     void *, struct Steinberg_Vst_Event *);
+typedef Steinberg_tresult (*pluginhost_midi_assignment_signature)(
+    void *, Steinberg_int32, Steinberg_int16, Steinberg_Vst_CtrlNumber,
+    Steinberg_Vst_ParamID *);
 typedef Steinberg_Vst_ParamID (*pluginhost_param_queue_id_signature)(void *);
 typedef Steinberg_int32 (*pluginhost_param_queue_count_signature)(void *);
 typedef Steinberg_tresult (*pluginhost_param_queue_point_signature)(
@@ -200,9 +203,12 @@ static void pluginhost_vst3_check_callback_signatures(void) {
    struct Steinberg_Vst_IParamValueQueueVtbl *queue = 0;
    struct Steinberg_Vst_IParameterChangesVtbl *changes = 0;
    struct Steinberg_Vst_IProcessContextRequirementsVtbl *requirements = 0;
+   struct Steinberg_Vst_IMidiMappingVtbl *mapping = 0;
    pluginhost_event_list_get_signature eg = events->getEvent;
    pluginhost_event_list_add_signature ea = events->addEvent;
    pluginhost_param_queue_id_signature qid = queue->getParameterId;
+   pluginhost_midi_assignment_signature ma =
+      mapping->getMidiControllerAssignment;
    pluginhost_param_queue_count_signature qpc = queue->getPointCount;
    pluginhost_param_queue_point_signature qgp = queue->getPoint;
    pluginhost_param_queue_add_signature qap = queue->addPoint;
@@ -251,6 +257,7 @@ static void pluginhost_vst3_check_callback_signatures(void) {
    (void)ss; (void)gs; (void)ba; (void)ps; (void)pp; (void)pcs; (void)plu;
    (void)ptu; (void)sh; (void)cs; (void)pi; (void)psv; (void)pvs; (void)np;
    (void)pn; (void)pg; (void)cn; (void)dc; (void)no; (void)hn; (void)hi;
+   (void)ma;
    (void)rf; (void)uf; (void)rt; (void)ut; (void)sr; (void)sw; (void)sk;
    (void)asi; (void)agi; (void)asf; (void)agf; (void)ass; (void)ags; (void)asb;
    (void)agb; (void)mgi; (void)msi; (void)mga; (void)be; (void)pe; (void)ee;
@@ -295,6 +302,7 @@ uint64_t pluginhost_vst3_abi_size(int32_t type_id) {
       case 429: return sizeof(struct Steinberg_Vst_IParamValueQueueVtbl);
       case 430: return sizeof(struct Steinberg_Vst_IParameterChangesVtbl);
       case 431: return sizeof(struct Steinberg_Vst_IProcessContextRequirementsVtbl);
+      case 432: return sizeof(struct Steinberg_Vst_IMidiMappingVtbl);
       default: return 0;
    }
 }
@@ -331,6 +339,7 @@ uint64_t pluginhost_vst3_abi_align(int32_t type_id) {
       case 429: return _Alignof(struct Steinberg_Vst_IParamValueQueueVtbl);
       case 430: return _Alignof(struct Steinberg_Vst_IParameterChangesVtbl);
       case 431: return _Alignof(struct Steinberg_Vst_IProcessContextRequirementsVtbl);
+      case 432: return _Alignof(struct Steinberg_Vst_IMidiMappingVtbl);
       default: return 0;
    }
 }
@@ -359,6 +368,7 @@ uint64_t pluginhost_vst3_abi_offset(int32_t field_id) {
       ABI_FIELD_CASE(411, 1, struct Steinberg_Vst_ParameterInfo, id);
       ABI_FIELD_CASE(411, 2, struct Steinberg_Vst_ParameterInfo, title);
       ABI_FIELD_CASE(411, 3, struct Steinberg_Vst_ParameterInfo, defaultNormalizedValue);
+      ABI_FIELD_CASE(427, 1, struct Steinberg_Vst_Event, Steinberg_Vst_Event_noteOn);
       ABI_FIELD_CASE(412, 1, struct Steinberg_Vst_IComponentVtbl, queryInterface);
       ABI_FIELD_CASE(412, 2, struct Steinberg_Vst_IComponentVtbl, addRef);
       ABI_FIELD_CASE(412, 3, struct Steinberg_Vst_IComponentVtbl, release);
@@ -484,6 +494,12 @@ uint64_t pluginhost_vst3_abi_offset(int32_t field_id) {
       ABI_FIELD_CASE(431, 1,
                      struct Steinberg_Vst_IProcessContextRequirementsVtbl,
                      getProcessContextRequirements);
+      ABI_FIELD_CASE(432, 1, struct Steinberg_Vst_IMidiMappingVtbl,
+                     queryInterface);
+      ABI_FIELD_CASE(432, 2, struct Steinberg_Vst_IMidiMappingVtbl, addRef);
+      ABI_FIELD_CASE(432, 3, struct Steinberg_Vst_IMidiMappingVtbl, release);
+      ABI_FIELD_CASE(432, 4, struct Steinberg_Vst_IMidiMappingVtbl,
+                     getMidiControllerAssignment);
       ABI_FIELD_CASE(422, 10, struct Steinberg_Vst_IAudioProcessorVtbl, process);
       ABI_FIELD_CASE(422, 11, struct Steinberg_Vst_IAudioProcessorVtbl, getTailSamples);
       default: return UINT64_MAX;

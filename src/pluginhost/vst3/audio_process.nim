@@ -6,8 +6,7 @@ import std/[posix, typetraits]
 
 import ../domain/[errors, port_plan, result]
 import ../rt/[atomic_pod, engine, role_guard]
-import ./[ffi, parameter_transport, uid]
-
+import ./[event_bridge, ffi, parameter_transport, uid]
 const
   Vst3AudioProcessMaxFrames* = uint32(high(int32))
   Vst3AudioProcessMaxParameterPoints* = 16_384'u32
@@ -47,19 +46,11 @@ type
     queueValues: array[Vst3AudioProcessMaxParameterQueues,
       ptr Vst3ParameterQueueState]
 
-  Vst3EventListState = object
-    iface: Vst3EventList
-    vtable: Vst3EventListVtbl
-    owner: pointer
-    output: bool
-    count: uint32
-    events: array[Vst3AudioProcessMaxEvents, Vst3Event]
-    dataArena: array[256 * 1024, uint8]
-    dataUsed: uint32
   Vst3AudioProcessContext = object
     processor: ptr Vst3AudioProcessor
     role: ptr AudioRoleGuard
     transport: ptr Vst3ParameterTransport
+    eventBridge: ptr Vst3EventBridge
     maxFrames: uint32
     currentFrames: uint32
     sampleRate: float64
@@ -84,8 +75,6 @@ type
       Vst3ParameterQueueState]
     outputQueues: array[Vst3AudioProcessMaxParameterQueues,
       Vst3ParameterQueueState]
-    inputEvents: Vst3EventListState
-    outputEvents: Vst3EventListState
     outputObservations: array[Vst3AudioProcessMaxParameterPoints,
       Vst3ParameterObservation]
     callsInFlight: RtAtomicU32
@@ -142,63 +131,6 @@ proc iidMatches(iid: ptr Vst3Tuid; expected: array[16, uint8]): bool {.
     if iid[][index] != expected[index]: return false
   true
 
-proc eventQuery(thisInterface: pointer; iid: ptr Vst3Tuid;
-                obj: ptr pointer): int32 {.
-    cdecl, gcsafe, raises: [], exportc: "pluginhost_vst3_event_query".} =
-  let state = cast[ptr Vst3EventListState](thisInterface)
-  if obj == nil or state == nil or
-      (not iidMatches(iid, Vst3FUnknownIidBytes) and
-       not iidMatches(iid, Vst3EventListIidBytes)):
-    if obj != nil: obj[] = nil
-    return Vst3NoInterface
-  obj[] = thisInterface
-  Vst3ResultOk
-proc eventAddRef(thisInterface: pointer): uint32 {.
-    cdecl, gcsafe, raises: [], exportc: "pluginhost_vst3_event_add_ref".} =
-  if thisInterface == nil: 0'u32 else: 1'u32
-proc eventRelease(thisInterface: pointer): uint32 {.
-    cdecl, gcsafe, raises: [], exportc: "pluginhost_vst3_event_release".} =
-  if thisInterface == nil: 0'u32 else: 1'u32
-proc eventCount(thisInterface: pointer): int32 {.
-    cdecl, gcsafe, raises: [], exportc: "pluginhost_vst3_event_count".} =
-  let state = cast[ptr Vst3EventListState](thisInterface)
-  if state == nil: -1 else: int32(state.count)
-proc eventGet(thisInterface: pointer; index: int32;
-              event: ptr Vst3Event): int32 {.
-    cdecl, gcsafe, raises: [], exportc: "pluginhost_vst3_event_get".} =
-  let state = cast[ptr Vst3EventListState](thisInterface)
-  if state == nil or event == nil or index < 0 or
-      uint32(index) >= state.count:
-    return Vst3InvalidArgument
-  event[] = state.events[uint32(index)]
-  Vst3ResultOk
-proc eventAdd(thisInterface: pointer; event: ptr Vst3Event): int32 {.
-    cdecl, gcsafe, raises: [], exportc: "pluginhost_vst3_event_add".} =
-  let state = cast[ptr Vst3EventListState](thisInterface)
-  if state == nil or event == nil or not state.output or
-      state.count >= Vst3AudioProcessMaxEvents or state.owner == nil:
-    return Vst3ResultFalse
-  let context = cast[ptr Vst3AudioProcessContext](state.owner)
-  if event.sampleOffset < 0 or uint32(event.sampleOffset) >= context.currentFrames:
-    return Vst3InvalidArgument
-  var copy = event[]
-  ## kDataEvent is the only V2B output payload that can contain a pointer.
-  ## Copy its bytes into the fixed arena before exposing the borrowed event.
-  if event.eventType == 2'u16:
-    let data = cast[ptr Vst3DataEvent](addr event.payload[0])
-    if data.size > uint32(state.dataArena.len) - state.dataUsed or
-        (data.size > 0'u32 and data.bytes == nil):
-      return Vst3ResultFalse
-    if data.size > 0'u32:
-      copyMem(addr state.dataArena[int(state.dataUsed)], data.bytes,
-        int(data.size))
-    let copyData = cast[ptr Vst3DataEvent](addr copy.payload[0])
-    copyData.bytes = if data.size == 0'u32: nil else:
-      addr state.dataArena[int(state.dataUsed)]
-    state.dataUsed += data.size
-  state.events[state.count] = copy
-  inc state.count
-  Vst3ResultOk
 
 proc queueState(thisInterface: pointer): ptr Vst3ParameterQueueState {.inline.} =
   cast[ptr Vst3ParameterQueueState](thisInterface)
@@ -245,10 +177,14 @@ proc queueAddPoint(thisInterface: pointer; offset: int32;
     return Vst3InvalidArgument
   let context = cast[ptr Vst3AudioProcessContext](queue.owner)
   if uint32(offset) >= context.currentFrames or
-      value != value or value < 0.0 or value > 1.0:
+      value != value or value < 0.0 or value > 1.0 or
+      (queue.points > 0'u32 and
+       offset < queue.offsets[queue.points - 1'u32]):
+    recordVst3ParameterOutputDrop(context.eventBridge)
     return Vst3InvalidArgument
   if queue.points >= Vst3AudioProcessMaxParameterPointsPerQueue or
       context.outputPoints >= Vst3AudioProcessMaxParameterPoints:
+    recordVst3ParameterOutputDrop(context.eventBridge)
     return Vst3ResultFalse
   let position = queue.points
   queue.offsets[position] = offset
@@ -303,9 +239,10 @@ proc changesAdd(thisInterface: pointer; id: ptr Vst3ParamID;
       if index != nil: index[] = int32(queueIndex)
       return addr queue[].iface
     queueIndex += 1'u32
-  if changes.queues >= Vst3AudioProcessMaxParameterQueues:
-    return nil
   let context = cast[ptr Vst3AudioProcessContext](changes.owner)
+  if changes.queues >= Vst3AudioProcessMaxParameterQueues:
+    recordVst3ParameterOutputDrop(context.eventBridge)
+    return nil
   let queue = addr context.outputQueues[changes.queues]
   queue[].id = id[]
   queue[].points = 0'u32
@@ -338,14 +275,6 @@ proc initChanges(changes: var Vst3ParameterChangesState; owner: pointer;
     getParameterData: changesGet, addParameterData: changesAdd)
   changes.iface.lpVtbl = addr changes.vtable
 
-proc initEvents(events: var Vst3EventListState; owner: pointer; output: bool) =
-  events = Vst3EventListState()
-  events.owner = owner
-  events.output = output
-  events.vtable = Vst3EventListVtbl(
-    queryInterface: eventQuery, addRef: eventAddRef, release: eventRelease,
-    getEventCount: eventCount, getEvent: eventGet, addEvent: eventAdd)
-  events.iface.lpVtbl = addr events.vtable
 
 proc resetInputChanges(context: ptr Vst3AudioProcessContext) {.
     inline, gcsafe, raises: [].} =
@@ -362,7 +291,8 @@ proc resetInputChanges(context: ptr Vst3AudioProcessContext) {.
       if edit.kind != v3pekPerform:
         continue
       if context.inputChanges.queues >= Vst3AudioProcessMaxParameterQueues:
-        break
+        recordVst3ParameterInputDrop(context.eventBridge)
+        continue
       queueIndex = 0'u32
       while queueIndex < context.inputChanges.queues and
           context.inputQueues[queueIndex].id != edit.id:
@@ -380,6 +310,40 @@ proc resetInputChanges(context: ptr Vst3AudioProcessContext) {.
         queue[].values[queue[].points] = edit.value
         inc queue[].points
         inc context.inputPoints
+      else:
+        recordVst3ParameterInputDrop(context.eventBridge)
+  if context.eventBridge != nil:
+    var pointIndex = 0'u32
+    let totalPointCount = vst3InputParameterPointCount(context.eventBridge)
+    let pointCount = min(totalPointCount,
+      Vst3AudioProcessMaxParameterPoints - context.inputPoints)
+    if totalPointCount > pointCount:
+      recordVst3ParameterInputDrop(context.eventBridge,
+        uint64(totalPointCount - pointCount))
+    while pointIndex < pointCount:
+      let point = vst3InputParameterPoint(context.eventBridge, pointIndex)
+      var queueIndex = 0'u32
+      while queueIndex < context.inputChanges.queues and
+          context.inputQueues[queueIndex].id != point.id:
+        inc queueIndex
+      if queueIndex == context.inputChanges.queues:
+        if context.inputChanges.queues >= Vst3AudioProcessMaxParameterQueues:
+          recordVst3ParameterInputDrop(context.eventBridge)
+          break
+        let queue = addr context.inputQueues[queueIndex]
+        queue[].id = point.id
+        queue[].points = 0'u32
+        context.inputChanges.queueValues[queueIndex] = queue
+        inc context.inputChanges.queues
+      let queue = addr context.inputQueues[queueIndex]
+      if queue[].points < Vst3AudioProcessMaxParameterPointsPerQueue:
+        queue[].offsets[queue[].points] = point.sampleOffset
+        queue[].values[queue[].points] = point.value
+        inc queue[].points
+        inc context.inputPoints
+      else:
+        recordVst3ParameterInputDrop(context.eventBridge)
+      inc pointIndex
   let previousOutputQueues = context.outputChanges.queues
   queueIndex = 0'u32
   while queueIndex < previousOutputQueues:
@@ -387,10 +351,6 @@ proc resetInputChanges(context: ptr Vst3AudioProcessContext) {.
     inc queueIndex
   context.outputChanges.queues = 0'u32
   context.outputPoints = 0'u32
-  context.inputEvents.count = 0'u32
-  context.inputEvents.dataUsed = 0'u32
-  context.outputEvents.count = 0'u32
-  context.outputEvents.dataUsed = 0'u32
 proc discardOutputCycle(context: ptr Vst3AudioProcessContext) {.
     inline, gcsafe, raises: [].} =
   let previousOutputQueues = context.outputChanges.queues
@@ -400,8 +360,6 @@ proc discardOutputCycle(context: ptr Vst3AudioProcessContext) {.
     inc queueIndex
   context.outputChanges.queues = 0'u32
   context.outputPoints = 0'u32
-  context.outputEvents.count = 0'u32
-  context.outputEvents.dataUsed = 0'u32
 
 proc bindBusPointers(context: ptr Vst3AudioProcessContext;
                      engine: ptr RtEngine): cint {.
@@ -468,7 +426,12 @@ proc processVst3Audio*(argument: pointer; engine: ptr RtEngine;
     if status == RtProcessOk:
       status = bindBusPointers(context, engine)
     if status == RtProcessOk:
-      if context.samplePosition > high(int64) - int64(nframes):
+      if context.eventBridge == nil or
+          not beginVst3EventCycle(context.eventBridge, engine, nframes,
+            context.role):
+        status = RtProcessEndpointFailure
+      elif context.samplePosition > high(int64) - int64(nframes):
+        endVst3EventCycle(context.eventBridge)
         status = RtProcessEndpointFailure
       else:
         context.currentFrames = nframes
@@ -483,22 +446,31 @@ proc processVst3Audio*(argument: pointer; engine: ptr RtEngine;
         let processProc = context.processor.lpVtbl.process
         let nativeResult = processProc(
           cast[pointer](context.processor), addr context.processData)
+        if nativeResult != Vst3ResultOk:
+          discardOutputCycle(context)
+          clearVst3MidiOutputsRaw(context.eventBridge)
+        endVst3EventCycle(context.eventBridge)
         context.lastResult = nativeResult
         inc context.processCalls
         if nativeResult != Vst3ResultOk:
           status = RtProcessEndpointFailure
-          discardOutputCycle(context)
         else:
           if context.transport != nil:
             if not hasVst3ParameterObservationCapacity(context.transport,
                 context.outputPoints):
+              recordVst3ParameterOutputDrop(context.eventBridge,
+                uint64(context.outputPoints))
               status = RtProcessEndpointFailure
               discardOutputCycle(context)
             else:
               var observationIndex = 0'u32
               while observationIndex < context.outputPoints:
-                discard publishVst3ParameterObservation(context.transport,
-                  context.outputObservations[observationIndex])
+                if not publishVst3ParameterObservation(context.transport,
+                    context.outputObservations[observationIndex]):
+                  recordVst3ParameterOutputDrop(context.eventBridge)
+                  status = RtProcessEndpointFailure
+                  discardOutputCycle(context)
+                  break
                 inc observationIndex
           elif context.outputPoints > 0'u32:
             status = RtProcessEndpointFailure
@@ -522,10 +494,11 @@ proc processVst3Audio*(argument: pointer; engine: ptr RtEngine;
   if status != RtProcessOk:
     let clearFrames = if nframes > engine.maxFrames: engine.maxFrames else: nframes
     discard zeroRtOutputs(engine, clearFrames)
+    if context.eventBridge != nil:
+      clearVst3MidiOutputsForEngine(context.eventBridge, engine)
     context.faultLatched.storeRelease(1'u32)
   discard context.callsInFlight.fetchSubRelease(1'u32)
   status
-
 {.pop.}
 proc releaseRequirementsObject(candidate: pointer) {.inline, raises: [].} =
   if candidate == nil: return
@@ -540,7 +513,9 @@ proc newVst3AudioProcess*(processor: ptr Vst3AudioProcessor;
                           maxFrames: uint32; sampleRate: uint32;
                           role: ptr AudioRoleGuard;
                           path, pluginId: string;
-                          initialSamplePosition: int64 = 0): Result[Vst3AudioProcess] =
+                          initialSamplePosition: int64 = 0;
+                          controller: ptr Vst3EditController = nil):
+                          Result[Vst3AudioProcess] =
   if processor == nil or processor.lpVtbl == nil or
       processor.lpVtbl.canProcessSampleSize == nil or
       processor.lpVtbl.setupProcessing == nil or
@@ -616,6 +591,11 @@ proc newVst3AudioProcess*(processor: ptr Vst3AudioProcessor;
   context.sampleRate = float64(sampleRate)
   context.samplePosition = initialSamplePosition
   context.transport = transport
+  var bridgeResult = newVst3EventBridge(controller, plan, role, path, pluginId)
+  if not bridgeResult.isOk:
+    deallocShared(context)
+    return failure[Vst3AudioProcess](move(bridgeResult.error))
+  context.eventBridge = bridgeResult.value
   context.processData = Vst3ProcessData(
     processMode: Vst3ProcessModeRealtime,
     symbolicSampleSize: Vst3SymbolicSample32,
@@ -624,13 +604,11 @@ proc newVst3AudioProcess*(processor: ptr Vst3AudioProcessor;
     outputs: addr context.outputs[0],
     inputParameterChanges: addr context.inputChanges.iface,
     outputParameterChanges: addr context.outputChanges.iface,
-    inputEvents: addr context.inputEvents.iface,
-    outputEvents: addr context.outputEvents.iface,
+    inputEvents: vst3EventInputInterface(context.eventBridge),
+    outputEvents: vst3EventOutputInterface(context.eventBridge),
     processContext: addr context.processContext)
   initChanges(context.inputChanges, addr context[], false)
   initChanges(context.outputChanges, addr context[], true)
-  initEvents(context.inputEvents, addr context[], false)
-  initEvents(context.outputEvents, addr context[], true)
   var queueIndex = 0'u32
   while queueIndex < Vst3AudioProcessMaxParameterQueues:
     initQueue(context.inputQueues[queueIndex], addr context[], false)
@@ -640,11 +618,13 @@ proc newVst3AudioProcess*(processor: ptr Vst3AudioProcessor;
   var outputCount = 0'u32
   for group in plan.audioGroups:
     if group.channelCount > Vst3MaxBusChannels:
+      closeVst3EventBridge(context.eventBridge)
       deallocShared(context)
       return failure[Vst3AudioProcess](vst3ProcessError(hekVst3Descriptor,
         "VST3 bus channel count exceeds process storage", path, pluginId, ""))
     if group.direction == pdInput:
       if group.index >= Vst3MaxBusCount or group.flattenedPast > Vst3MaxBusChannels:
+        closeVst3EventBridge(context.eventBridge)
         deallocShared(context)
         return failure[Vst3AudioProcess](vst3ProcessError(hekVst3Descriptor,
           "VST3 input bus mapping exceeds process storage", path, pluginId, ""))
@@ -657,6 +637,7 @@ proc newVst3AudioProcess*(processor: ptr Vst3AudioProcessor;
       context.inputChannelCount = max(context.inputChannelCount, group.flattenedPast)
     else:
       if group.index >= Vst3MaxBusCount or group.flattenedPast > Vst3MaxBusChannels:
+        closeVst3EventBridge(context.eventBridge)
         deallocShared(context)
         return failure[Vst3AudioProcess](vst3ProcessError(hekVst3Descriptor,
           "VST3 output bus mapping exceeds process storage", path, pluginId, ""))
@@ -712,6 +693,7 @@ proc close*(process: var Vst3AudioProcess): Result[Unit] =
   if not process.waitVst3ProcessQuiescence():
     return failure[Unit](vst3ProcessError(hekVst3Factory,
       "VST3 process callbacks remained active during teardown", "", "", ""))
+  closeVst3EventBridge(process.context.eventBridge)
   deallocShared(process.context)
   process.context = nil
   success()
@@ -730,6 +712,27 @@ proc drainVst3ParameterObservations*(process: Vst3AudioProcess;
     discard controller.lpVtbl.setParamNormalized(cast[pointer](controller),
       observation.id, observation.value)
     inc result
+
+proc drainVst3ParameterGestures*(process: Vst3AudioProcess;
+                                 destination: ptr UncheckedArray[
+                                   Vst3ParameterEditRecord];
+                                 capacity: uint32): uint32 =
+  if process.context == nil or destination == nil or capacity == 0'u32:
+    return 0'u32
+  var edit: Vst3ParameterEditRecord
+  while result < capacity and
+      dequeueVst3ParameterGesture(process.context.transport, edit):
+    destination[result] = edit
+    inc result
+
+proc eventMetrics*(process: Vst3AudioProcess): Vst3EventMetrics {.inline.} =
+  if process.context == nil:
+    return Vst3EventMetrics()
+  result = vst3EventMetrics(process.context.eventBridge)
+  if process.context.transport != nil:
+    result.parameterInputDrops +=
+      takeDroppedVst3ParameterEdits(process.context.transport) +
+      takeDroppedVst3ParameterGestures(process.context.transport)
 proc activationFailure(primary: HostError;
                        rollback: Result[Unit]): Result[Unit] =
   var error = primary

@@ -161,12 +161,28 @@ suite "VST3 raw ABI and module ownership":
     check uint64(sizeof(Vst3AudioBusBuffers)) == vst3AbiSize(425)
     check uint64(sizeof(Vst3ProcessData)) == vst3AbiSize(426)
     check uint64(sizeof(Vst3Event)) == vst3AbiSize(427)
+    check uint64(offsetOf(Vst3Event, payload)) ==
+      vst3AbiOffset(vst3FieldId(427, 1))
     check uint64(sizeof(Vst3EventListVtbl)) == vst3AbiSize(428)
     check uint64(sizeof(Vst3ParamValueQueueVtbl)) == vst3AbiSize(429)
     check uint64(sizeof(Vst3ParameterChangesVtbl)) == vst3AbiSize(430)
     check uint64(sizeof(Vst3ProcessContextRequirementsVtbl)) ==
       vst3AbiSize(431)
-    check uint64(alignof(Vst3ProcessContext)) == vst3AbiAlign(423)
+    check uint64(sizeof(Vst3MidiMappingVtbl)) == vst3AbiSize(432)
+    check uint64(alignof(Vst3MidiMappingVtbl)) == vst3AbiAlign(432)
+    check uint64(offsetOf(Vst3MidiMappingVtbl, queryInterface)) ==
+      vst3AbiOffset(vst3FieldId(432, 1))
+    check uint64(offsetOf(Vst3MidiMappingVtbl, getMidiControllerAssignment)) ==
+      vst3AbiOffset(vst3FieldId(432, 4))
+    check Vst3EventTypeNoteOn == 0'u16
+    check Vst3EventTypeNoteOff == 1'u16
+    check Vst3EventTypeData == 2'u16
+    check Vst3EventTypePolyPressure == 3'u16
+    check Vst3EventTypeLegacyMidiCcOut == 0xFFFF'u16
+    check Vst3DataTypeMidiSysEx == 0'u32
+    check Vst3MidiControllerPitchBend == 129'i32
+    check Vst3MidiControllerProgramChange == 130'i32
+    check Vst3MidiMappingIid == "DF0FF9F749B74669B63AB7327ADBF5E5"
     check uint64(alignof(Vst3ProcessSetup)) == vst3AbiAlign(424)
     check uint64(alignof(Vst3AudioBusBuffers)) == vst3AbiAlign(425)
     check uint64(alignof(Vst3ProcessData)) == vst3AbiAlign(426)

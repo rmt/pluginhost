@@ -61,19 +61,8 @@ CLAP_ROOTS = (
 CLAP_PROCESS_ROOTS = (
     "pluginhost_clap_process_audio",
 )
-
 VST3_PROCESS_ROOTS = (
     "pluginhost_vst3_process_audio",
-    "pluginhost_vst3_event_query",
-    "pluginhost_vst3_event_add_ref",
-    "pluginhost_vst3_event_release",
-    "pluginhost_vst3_event_count",
-    "pluginhost_vst3_event_get",
-    "pluginhost_vst3_event_add",
-    "pluginhost_vst3_queue_query",
-    "pluginhost_vst3_queue_add_ref",
-    "pluginhost_vst3_queue_release",
-    "pluginhost_vst3_queue_parameter_id",
     "pluginhost_vst3_queue_point_count",
     "pluginhost_vst3_queue_get_point",
     "pluginhost_vst3_queue_add_point",
@@ -83,6 +72,24 @@ VST3_PROCESS_ROOTS = (
     "pluginhost_vst3_changes_count",
     "pluginhost_vst3_changes_get",
     "pluginhost_vst3_changes_add",
+)
+
+VST3_EVENT_ROOTS = (
+    "pluginhost_vst3_event_bridge_begin",
+    "pluginhost_vst3_event_bridge_end",
+    "pluginhost_vst3_event_bridge_clear_outputs",
+    "pluginhost_vst3_event_bridge_event_add",
+    "pluginhost_vst3_event_bridge_input_query",
+    "pluginhost_vst3_event_bridge_output_query",
+    "pluginhost_vst3_event_bridge_input_add_ref",
+    "pluginhost_vst3_event_bridge_input_release",
+    "pluginhost_vst3_event_bridge_output_add_ref",
+    "pluginhost_vst3_event_bridge_output_release",
+    "pluginhost_vst3_event_bridge_input_count",
+    "pluginhost_vst3_event_bridge_output_count",
+    "pluginhost_vst3_event_bridge_input_get",
+    "pluginhost_vst3_event_bridge_input_add",
+    "pluginhost_vst3_event_bridge_output_get",
 )
 
 CLAP_EVENT_ROOTS = (
@@ -133,7 +140,7 @@ C_KEYWORDS = {
 }
 ALLOWED_EXTERNALS = {
     "memcpy", "memset", "pthread_self", "pthread_equal", "callback", "processProc",
-    "N_CDECL", "N_INLINE", "N_NIMCALL", "IL64",
+    "N_CDECL", "N_INLINE", "N_NIMCALL", "NIM_UNLIKELY", "IL64",
     "__builtin_unreachable", "portGetBuffer", "portGetLatencyRange",
     "portSetLatencyRange", "midiGetEventCount", "midiEventGet",
     "midiClearBuffer", "midiEventReserve", "midiGetLostEventCount",
@@ -151,6 +158,7 @@ ALLOWED_EXTERNAL_PREFIXES = (
     "initAudioRoleGuard__",
     "initRtEngine__",
     "pluginhost_clap_event_cycle_",
+    "pluginhost_vst3_event_bridge_",
     "tryPushOutput__OOZOOZsrcZpluginhostZclapZparameter95transport_",
 )
 
@@ -378,6 +386,21 @@ def audit_main(nimcache: Path) -> int:
             VST3_PROCESS_ROOTS)
         failures.extend(vst3_failures)
 
+    vst3_event_matches = [(path, source) for path, source in sources.items()
+                          if path.name == "@ppluginhost@svst3@sevent_bridge.nim.c"]
+    vst3_event_count = 0
+    if len(vst3_event_matches) != 1:
+        failures.append(
+            "expected one generated VST3 event bridge module, "
+            f"found {len(vst3_event_matches)}"
+        )
+    else:
+        vst3_event_path, vst3_event_source = vst3_event_matches[0]
+        audited.add(vst3_event_path)
+        vst3_event_failures, vst3_event_count = audit_closure(
+            vst3_event_path, vst3_event_source, VST3_EVENT_ROOTS)
+        failures.extend(vst3_event_failures)
+
     event_matches = [(path, source) for path, source in sources.items()
                      if path.name == "@ppluginhost@sclap@sevent_bridge.nim.c"]
     event_count = 0
@@ -405,7 +428,7 @@ def audit_main(nimcache: Path) -> int:
     paths += ", c/rt_atomic.h"
     print(
         "Complete generated callback audit passed "
-        f"({bridge_count + audio_count + event_count + vst3_count} "
+        f"({bridge_count + audio_count + event_count + vst3_count + vst3_event_count} "
         f"CLAP/VST3 callback/helper functions): {paths}"
     )
     return 0

@@ -209,6 +209,8 @@ proc inspectVst3Ports*(component: ptr Vst3Component;
   var inputTotal = 0'u32
   var outputTotal = 0'u32
   var audioTotal = 0'u32
+  var inputNoteOrdinal = 0'u32
+  var outputNoteOrdinal = 0'u32
   var arrangementIndex = 0
   for mediaType in [Vst3MediaAudio, Vst3MediaEvent]:
     for direction in [Vst3DirectionInput, Vst3DirectionOutput]:
@@ -237,6 +239,11 @@ proc inspectVst3Ports*(component: ptr Vst3Component;
             "VST3 bus metadata is invalid",
             "media=" & $mediaType & "; direction=" & $direction &
             "; index=" & $index))
+        if mediaType == Vst3MediaEvent and
+            (info.channelCount <= 0 or info.channelCount > 16):
+          return failure[PortPlan](vst3PortError(path, pluginId,
+            "VST3 event bus MIDI channel count is invalid",
+            "direction=" & $direction & "; index=" & $index))
         var name = copyVst3Name(info.name, path, pluginId, direction, index,
           totalBytes)
         if not name.isOk: return failure[PortPlan](move(name.error))
@@ -281,9 +288,27 @@ proc inspectVst3Ports*(component: ptr Vst3Component;
           else: outputTotal = past
           inc arrangementIndex
         else:
-          ## V2B validates native event buses but does not expose JACK MIDI
-          ## ports until the complete event transport path is implemented.
-          discard
+          ## VST3 event-bus indices remain native and layout-local.  JACK
+          ## ordinals are deterministic, while the copied id/index preserve
+          ## the native bus identity for process-data busIndex fields.
+          let pd = if direction == Vst3DirectionInput: pdInput else: pdOutput
+          var ordinal: uint32
+          if pd == pdInput:
+            inc inputNoteOrdinal
+            ordinal = inputNoteOrdinal
+          else:
+            inc outputNoteOrdinal
+            ordinal = outputNoteOrdinal
+          notes.add(NotePortPlan(
+            index: uint32(index),
+            id: uint32(index),
+            direction: pd,
+            channelCount: uint32(info.channelCount),
+            name: move(name.value),
+            supportedDialects: {ndMidi},
+            preferredDialect: ndMidi,
+            shortName: (if pd == pdInput: "midi_in_" else: "midi_out_") &
+              $ordinal))
   if arrangementIndex != arrangements.len:
     return failure[PortPlan](vst3PortError(path, pluginId,
       "VST3 arrangement snapshot has extra entries",

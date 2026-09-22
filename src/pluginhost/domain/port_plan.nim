@@ -49,6 +49,7 @@ type
     index*: uint32
     id*: uint32
     direction*: PortDirection
+    channelCount*: uint32
     name*: string
     supportedDialects*: NoteDialects
     preferredDialect*: NoteDialect

@@ -3,8 +3,8 @@
 
 import ../domain/[errors, port_plan, result]
 import ../jack/backend
-import ../vst3/[audio_process, ffi, instance, module, parameter_transport,
-  port_inspector, uid]
+import ../vst3/[audio_process, event_bridge, ffi, instance, module,
+  parameter_transport, port_inspector, uid]
 import ./vst3_plugin_services
 
 type
@@ -78,6 +78,15 @@ proc takeFault*(slice: var Vst3AudioSlice): bool = slice.process.takeVst3Process
 proc drainParameterObservations*(slice: var Vst3AudioSlice): uint32 =
   slice.process.drainVst3ParameterObservations(slice.instance.controllerPointer())
 
+proc drainParameterGestures*(slice: var Vst3AudioSlice;
+                             destination: ptr UncheckedArray[
+                               Vst3ParameterEditRecord];
+                             capacity: uint32): uint32 =
+  slice.process.drainVst3ParameterGestures(destination, capacity)
+proc takeEventMetrics*(slice: var Vst3AudioSlice): Vst3EventMetrics =
+  slice.process.eventMetrics()
+
+
 
 proc openVst3AudioSlice*(services: Vst3PluginServices;
                         module: var Vst3Module; classId: Vst3Tuid;
@@ -138,7 +147,7 @@ proc openVst3AudioSlice*(services: Vst3PluginServices;
     slice.instance.processorPointer(), slice.instance.componentPointer(),
     slice.plan, slice.transport, slice.backend.bufferSize(),
     slice.backend.sampleRate(), slice.backend.audioRoleGuard(), slice.path,
-    slice.pluginId)
+    slice.pluginId, controller = slice.instance.controllerPointer())
   if not processResult.isOk:
     discard slice.instance.detachVst3ParameterTransport(slice.transport)
     closeVst3ParameterTransport(slice.transport)
