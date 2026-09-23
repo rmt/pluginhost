@@ -6,7 +6,12 @@ import ../domain/[errors, result]
 import ../support/diagnostics
 import ../version
 
+
 import ../vst3/catalog as vst3_catalog
+## Failed native teardown can still own JACK callbacks or borrowed reactor
+## registrations. Keep the session graph pinned until process exit rather than
+## run move-only destructors against resources that could still be referenced.
+var quarantinedSessions: seq[ref HostSession]
 
 proc vst3InnerPathError(path: string): HostError =
   hostError(
@@ -25,21 +30,17 @@ proc loadPluginCatalog(path: string): Result[PluginCatalog] =
 
 proc executeRun(config: RunConfig; errorOutput: File): int =
   if vst3_catalog.isVst3InnerPath(config.pluginPath):
-    errorOutput.writeDiagnostic(vst3InnerPathError(config.pluginPath))
-    return ExitClap
-  if vst3_catalog.isVst3BundlePath(config.pluginPath):
-    errorOutput.writeDiagnostic(hostError(
-      hsVst3,
-      hekVst3Unavailable,
-      "VST3 run is unavailable until the VST3 runtime increment",
-      config.pluginPath,
-    ))
-    return ExitClap
+    let error = vst3InnerPathError(config.pluginPath)
+    errorOutput.writeDiagnostic(error)
+    return error.exitCode()
 
-  var session = initHostSession()
-  let runResult = session.run(config, errorOutput)
-  let closeResult = session.close(errorOutput)
-
+  var session: ref HostSession
+  new(session)
+  session[] = initHostSession()
+  let runResult = session[].run(config, errorOutput)
+  let closeResult = session[].close(errorOutput)
+  if not closeResult.isOk:
+    quarantinedSessions.add(session)
   if not runResult.isOk:
     errorOutput.writeDiagnostic(runResult.error)
     if not closeResult.isOk:
@@ -49,6 +50,7 @@ proc executeRun(config: RunConfig; errorOutput: File): int =
     errorOutput.writeDiagnostic(closeResult.error)
     return closeResult.error.exitCode()
   ExitSuccess
+
 proc executeList(config: ListConfig; output, errorOutput: File): int =
   var catalog = loadPluginCatalog(config.pluginPath)
   if not catalog.isOk:

@@ -485,7 +485,7 @@ class FixtureObject final : public ComponentView, public ProcessorView,
       static_cast<IEditController*>(this)->addRef();
     }
 #endif
-    if (!*object) return -1;
+    if (!*object) return same(iid, kControllerIid) ? 1 : -1;
     return 0;
   }
   tresult getControllerClassId(TUID cid) override {

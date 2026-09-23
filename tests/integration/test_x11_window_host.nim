@@ -90,6 +90,9 @@ proc dispatchCombinedEvents(reactor: var MainReactor;
       require instance.callOnFd(serviceEvent.get.fd,
         serviceEvent.get.fdFlags).isOk
   require controller.handleWindowEvents(ready.value).isOk
+  # The fixture FD is level-triggered and may keep wait() immediately ready;
+  # yield so the X server can process a newly flushed map/resize request.
+  sleep(5)
   true
 
 proc waitForCombinedServices(reactor: var MainReactor;
@@ -171,7 +174,7 @@ method height(backend: TraceWindowBackend): uint32 {.raises: [].} =
   backend.inner.height
 
 suite "X11 window-host integration":
-  test "Xvfb window lifecycle and reactor readiness are deterministic":
+  test "Xvfb window lifecycle handles reactor and buffered Xlib events":
     require getEnv("DISPLAY").len > 0
     var opened = openX11WindowHost(width = 160, height = 90,
       title = "pluginhost-10a")
@@ -210,16 +213,22 @@ suite "X11 window-host integration":
     var sawDestroyed = false
     var configureWidth = 0'u32
     var configureHeight = 0'u32
-    require reactor.waitForWindowFd(token.value)
     drainEvents(host, sawMap, sawUnmap, sawConfigure, sawClose,
       sawDestroyed, configureWidth, configureHeight)
+    if not sawMap:
+      require reactor.waitForWindowFd(token.value)
+      drainEvents(host, sawMap, sawUnmap, sawConfigure, sawClose,
+        sawDestroyed, configureWidth, configureHeight)
     check sawMap
     check host.state == whVisible
 
     require host.resize(240, 120).isOk
-    require reactor.waitForWindowFd(token.value)
     drainEvents(host, sawMap, sawUnmap, sawConfigure, sawClose,
       sawDestroyed, configureWidth, configureHeight)
+    if configureWidth != 240:
+      require reactor.waitForWindowFd(token.value)
+      drainEvents(host, sawMap, sawUnmap, sawConfigure, sawClose,
+        sawDestroyed, configureWidth, configureHeight)
     check configureWidth == 240
     check configureHeight == 120
     check host.width == 240
@@ -229,9 +238,12 @@ suite "X11 window-host integration":
     require sender.len > 0 and fileExists(sender)
     let sent = execCmdEx(sender & " " & $host.windowId)
     check sent.exitCode == 0
-    require reactor.waitForWindowFd(token.value)
     drainEvents(host, sawMap, sawUnmap, sawConfigure, sawClose,
       sawDestroyed, configureWidth, configureHeight)
+    if not sawClose:
+      require reactor.waitForWindowFd(token.value)
+      drainEvents(host, sawMap, sawUnmap, sawConfigure, sawClose,
+        sawDestroyed, configureWidth, configureHeight)
     check sawClose
     check not sawDestroyed
     check host.state == whVisible
@@ -243,9 +255,12 @@ suite "X11 window-host integration":
 
     require host.hide().isOk
     require host.hide().isOk
-    require reactor.waitForWindowFd(token.value)
     drainEvents(host, sawMap, sawUnmap, sawConfigure, sawClose,
       sawDestroyed, configureWidth, configureHeight)
+    if not sawUnmap:
+      require reactor.waitForWindowFd(token.value)
+      drainEvents(host, sawMap, sawUnmap, sawConfigure, sawClose,
+        sawDestroyed, configureWidth, configureHeight)
     check sawUnmap
     check host.state == whHidden
 
@@ -292,31 +307,19 @@ suite "X11 window-host integration":
     check controller.isCreated
     check api.createCalls() == 1
     check api.showCalls() == 1
-    var sawEvents = false
-    for ignored in 0 ..< 8:
-      discard ignored
-      var events = reactor.wait(monotonicNanos(100_000_000))
-      require events.isOk
-      if events.value.len > 0:
-        sawEvents = true
-        require controller.handleWindowEvents(events.value).isOk
-        break
-    check sawEvents
 
     let sender = getEnv("PLUGINHOST_X11_SEND_DELETE")
     require sender.len > 0 and fileExists(sender)
     let sent = execCmdEx(sender & " " & $produced.handle.id)
     check sent.exitCode == 0
-    var restoredFromClose = false
-    for ignored in 0 ..< 8:
-      discard ignored
+    require controller.handleWindowEvents(@[]).isOk
+    var restoredFromClose = controller.state == gcsHidden
+    for _ in 0 ..< 8:
+      if restoredFromClose: break
       var events = reactor.wait(monotonicNanos(100_000_000))
       require events.isOk
-      if events.value.len > 0:
-        require controller.handleWindowEvents(events.value).isOk
-        if controller.state == gcsHidden:
-          restoredFromClose = true
-          break
+      require controller.handleWindowEvents(events.value).isOk
+      restoredFromClose = controller.state == gcsHidden
     check restoredFromClose
     check controller.state == gcsHidden
     check api.hideCalls() == 1
@@ -380,6 +383,9 @@ suite "X11 window-host integration":
 
     check waitForCombinedServices(reactor, services, instance, controller,
       api, 3'u32, 3'u32)
+    for _ in 0 ..< 12:
+      if produced.mapEvents > 0'u32: break
+      discard dispatchCombinedEvents(reactor, services, instance, controller)
     check produced.mapEvents >= 1'u32
 
     let configureBefore = produced.configureEvents

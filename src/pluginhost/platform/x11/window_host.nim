@@ -16,6 +16,8 @@ const
 
   WmProtocolsName = "WM_PROTOCOLS"
   WmDeleteWindowName = "WM_DELETE_WINDOW"
+  XembedMessageName = "_XEMBED"
+  XembedInfoName = "_XEMBED_INFO"
 
 type
   X11WindowHost* = object
@@ -158,7 +160,14 @@ proc openX11WindowHost*(displayName: string = "";
     display, WmProtocolsName.cstring, 0)
   let wmDeleteWindow = api.functions.internAtom(
     display, WmDeleteWindowName.cstring, 0)
-  if wmProtocols == 0 or wmDeleteWindow == 0:
+  # Embedded plugin toolkits may look these up with only_if_exists=True before
+  # setting properties or sending XEmbed messages. Register them before attach.
+  let xembedMessage = api.functions.internAtom(
+    display, XembedMessageName.cstring, 0)
+  let xembedInfo = api.functions.internAtom(
+    display, XembedInfoName.cstring, 0)
+  if wmProtocols == 0 or wmDeleteWindow == 0 or
+      xembedMessage == 0 or xembedInfo == 0:
     var primary = x11Error(
       "could not register X11 window-manager protocol atoms",
       pathDetail(displayName))
@@ -387,11 +396,11 @@ proc pollEvent*(host: var X11WindowHost): Result[WindowPollResult] =
     if focus.window == host.window:
       return success(WindowPollResult(available: true,
         event: WindowEvent(kind: wekFocusOut)))
+  # Map/unmap notifications may arrive after a newer show/hide request.
+  # Keep stateValue owned by those requests; report events separately.
   of X11MapNotify:
-    host.stateValue = whVisible
     return success(WindowPollResult(available: true, event: WindowEvent(kind: wekMap)))
   of X11UnmapNotify:
-    host.stateValue = whHidden
     return success(WindowPollResult(available: true, event: WindowEvent(kind: wekUnmap)))
   of X11DestroyNotify:
     host.window = 0

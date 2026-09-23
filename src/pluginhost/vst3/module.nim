@@ -685,7 +685,8 @@ proc setFactoryHostContext*(module: Vst3Module; context: pointer): Result[Unit] 
       module.bundlePath))
   let code = vtable.setHostContext(view.objectPointer, context)
   var released = releaseFactoryView(module, view)
-  if code != Vst3ResultOk:
+  if code != Vst3ResultOk and code != Vst3NotImplemented and
+      code != Vst3ResultFalse:
     return failure[Unit](vst3Error(
       hekVst3Factory, "VST3 factory rejected the host context",
       module.bundlePath, "result=" & $code))

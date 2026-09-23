@@ -34,11 +34,18 @@ proc openInstance*(services: Vst3PluginServices; module: var Vst3Module;
       hsVst3, hekVst3Factory, "VST3 plugin services have no host context"))
   openVst3Instance(module, classId, nil, services.context, loadStatePath)
 
-proc close*(services: Vst3PluginServices): Result[Unit] =
+proc close*(services: Vst3PluginServices;
+            allowRetainedHostReferences = false): Result[Unit] =
   if services == nil or services.context == nil:
     return success()
-  services.context.close()
-  if services.context.hasRetainedCallbacks() or services.context.hasRetainedObjects():
-    return failure[Unit](hostError(hsVst3, hekVst3Factory,
-      "VST3 plugin services remain retained during shutdown"))
+  if allowRetainedHostReferences:
+    if not services.context.retire():
+      return failure[Unit](hostError(hsVst3, hekVst3Factory,
+        "VST3 plugin services could not remove all callback registrations"))
+  else:
+    services.context.close()
+    if services.context.hasRetainedCallbacks() or
+        services.context.hasRetainedObjects():
+      return failure[Unit](hostError(hsVst3, hekVst3Factory,
+        "VST3 plugin services remain retained during shutdown"))
   success()

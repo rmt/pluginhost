@@ -1,5 +1,5 @@
-## Private V2B/V4B composition root.  Public VST3 run routing intentionally
-## does not import this owner; focused fixture and embedding code may construct it directly.
+## VST3 audio composition for the public process and focused embedding tests.
+## All JACK and plugin lifecycle edges are owned here.
 
 import std/strutils
 import ../domain/[errors, port_plan, result]
@@ -28,6 +28,7 @@ type
     pluginId: string
     stateValue: Vst3AudioSliceState
     componentActive: bool
+    allowRetainedHostReferences: bool
     processorActive: bool
     lastConnectionLosses: seq[JackConnectionCandidate]
 
@@ -92,6 +93,7 @@ proc `=sink`*(destination: var Vst3AudioSlice;
   destination.stateValue = source.stateValue
   destination.componentActive = source.componentActive
   destination.processorActive = source.processorActive
+  destination.allowRetainedHostReferences = source.allowRetainedHostReferences
   `=sink`(destination.lastConnectionLosses, source.lastConnectionLosses)
 
 proc state*(slice: Vst3AudioSlice): Vst3AudioSliceState {.inline.} =
@@ -188,7 +190,8 @@ proc failTerminalReconfiguration(slice: var Vst3AudioSlice;
 proc serviceVst3ComponentReload(slice: var Vst3AudioSlice;
                                 flags: uint32;
                                 jackPending: bool;
-                                report: var Vst3ReconfigurationReport):
+                                report: var Vst3ReconfigurationReport;
+                                beforeReload: proc(): Result[Unit] {.closure.} = nil):
                                 Result[Unit] =
   let wasActive = slice.stateValue == v3assActive
   if wasActive:
@@ -223,8 +226,18 @@ proc serviceVst3ComponentReload(slice: var Vst3AudioSlice;
   ## Capture is deliberately before destroying any old owner.  A failed
   ## capture leaves the old quiesced instance available to ordinary close.
   var captured = slice.instance.captureState()
+
   if not captured.isOk:
     return failure[Unit](move(captured.error))
+  ## The callback runs after JACK/process quiescence and all old VST3
+  ## lifecycle edges are stopped, but before any process, transport, instance,
+  ## or module owner is closed.  A callback failure therefore leaves every
+  ## old owner available to the normal close path.
+  if beforeReload != nil:
+    var callbackResult = beforeReload()
+    if not callbackResult.isOk:
+      return slice.failSilentAfterReconfiguration(
+        move(callbackResult.error))
   let samplePosition = slice.process.samplePosition()
   let oldPlan = slice.plan
 
@@ -237,7 +250,7 @@ proc serviceVst3ComponentReload(slice: var Vst3AudioSlice;
         "VST3 parameter transport ownership changed during reload", slice))
     closeVst3ParameterTransport(slice.transport)
     slice.transport = nil
-  var oldClosed = slice.instance.close()
+  var oldClosed = slice.instance.close(slice.allowRetainedHostReferences)
   if not oldClosed.isOk:
     return slice.failTerminalReconfiguration(move(oldClosed.error))
 
@@ -407,11 +420,13 @@ proc serviceVst3Latency(slice: var Vst3AudioSlice;
 proc serviceVst3ReconfigurationTurn(slice: var Vst3AudioSlice;
                                     flags: uint32;
                                     jackPending: bool;
-                                    report: var Vst3ReconfigurationReport):
+                                    report: var Vst3ReconfigurationReport;
+                                    beforeReload: proc(): Result[Unit] {.closure.} = nil):
                                     Result[Unit] =
   let reload = flags and uint32(Vst3RestartReloadComponent)
   if reload != 0'u32:
-    return slice.serviceVst3ComponentReload(flags, jackPending, report)
+    return slice.serviceVst3ComponentReload(flags, jackPending, report,
+      beforeReload)
   let unsupported = flags and Vst3UnsupportedReconfigurationFlags
   if unsupported != 0'u32:
     return failure[Unit](reconfigurationError(
@@ -598,7 +613,8 @@ proc serviceVst3ReconfigurationTurn(slice: var Vst3AudioSlice;
     slice.stateValue = v3assActive
   success()
 
-proc serviceReconfiguration*(slice: var Vst3AudioSlice):
+proc serviceReconfiguration*(slice: var Vst3AudioSlice;
+                             beforeReload: proc(): Result[Unit] {.closure.} = nil):
     Result[Vst3ReconfigurationReport] =
   if slice.stateValue notin {v3assActive, v3assQuiesced}:
     return failure[Vst3ReconfigurationReport](reconfigurationError(
@@ -620,7 +636,7 @@ proc serviceReconfiguration*(slice: var Vst3AudioSlice):
     inc report.lifecycleTurns
     report.requestedFlags = report.requestedFlags or flags
     var serviced = serviceVst3ReconfigurationTurn(slice, flags, jackPending,
-      report)
+      report, beforeReload)
     if not serviced.isOk:
       if slice.stateValue == v3assFailed:
         return failure[Vst3ReconfigurationReport](move(serviced.error))
@@ -633,7 +649,8 @@ proc takeEventMetrics*(slice: var Vst3AudioSlice): Vst3EventMetrics =
 proc openVst3AudioSlice*(services: Vst3PluginServices;
                         module: var Vst3Module; classId: Vst3Tuid;
                         backendConfig: JackBackendOpenConfig;
-                        loadStatePath = ""):
+                        loadStatePath = "";
+                        allowRetainedHostReferences = false):
                         Result[Vst3AudioSlice] =
   if services == nil:
     return failure[Vst3AudioSlice](sliceError(
@@ -646,6 +663,7 @@ proc openVst3AudioSlice*(services: Vst3PluginServices;
   var slice = Vst3AudioSlice(instance: opened.value,
     services: services,
     path: bundlePath, pluginId: pluginId,
+    allowRetainedHostReferences: allowRetainedHostReferences,
     stateValue: v3assEmpty)
   var initialPlan = inspectVst3Ports(slice.instance.componentPointer(),
     slice.instance.processorPointer(), portPlanVersion(1), slice.path,
@@ -895,7 +913,8 @@ proc close*(slice: var Vst3AudioSlice): Result[Unit] =
   let backendClosed = slice.backend.close()
   if not backendClosed.isOk:
     return backendClosed
-  let instanceClosed = slice.instance.close()
+  let instanceClosed = slice.instance.close(
+    slice.allowRetainedHostReferences)
   if not instanceClosed.isOk:
     return instanceClosed
   slice.stateValue = v3assClosed

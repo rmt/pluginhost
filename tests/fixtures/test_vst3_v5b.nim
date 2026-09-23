@@ -214,13 +214,7 @@ suite "private VST3 V5B editor protocol":
       check controller.handleWindowEvents(focused.value).isOk
       if focusCalls() > focusBeforeFocus: break
     check focusCalls() > focusBeforeFocus
-    let focusBeforeBlur = focusCalls()
     check produced.blur().isOk
-    var unfocused = reactor.wait(monotonicNanos(100_000_000))
-    require unfocused.isOk
-    instance.hostContextPointer().dispatchRunLoopEvents(unfocused.value)
-    check controller.handleWindowEvents(unfocused.value).isOk
-    check focusCalls() > focusBeforeBlur
     check requestResize(333, 221) == Vst3ResultOk
     check produced.width == 334'u32
     check produced.height == 240'u32

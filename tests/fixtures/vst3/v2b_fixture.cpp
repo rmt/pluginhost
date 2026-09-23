@@ -102,6 +102,8 @@ bool tooManyBuses() { return PLUGINHOST_VST3_V2B_MODE == 13; }
 bool negativeBusCount() { return PLUGINHOST_VST3_V2B_MODE == 14; }
 bool unsupportedRequirements() { return PLUGINHOST_VST3_V2B_MODE == 16; }
 bool supportedContinuousRequirements() { return PLUGINHOST_VST3_V2B_MODE == 17; }
+bool processingNotImplemented() { return PLUGINHOST_VST3_V2B_MODE == 18; }
+bool processingRejected() { return PLUGINHOST_VST3_V2B_MODE == 19; }
 
 std::int32_t audioBusCount(Steinberg_Vst_BusDirection direction) {
   if (tooManyBuses()) return direction == Steinberg_Vst_BusDirections_kInput ? 1025 : 0;
@@ -250,10 +252,11 @@ Steinberg_tresult setupProcessing(void* raw, Steinberg_Vst_ProcessSetup* setup) 
 Steinberg_tresult setProcessing(void* raw, Steinberg_TBool processing) {
   auto* state = static_cast<ProcessorObject*>(raw)->state;
   if (processing && (!state->active || !state->setupDone)) return Steinberg_kResultFalse;
+  if (processing && processingRejected()) return Steinberg_kResultFalse;
   state->processing = processing != 0;
   ++state->processingCalls;
   order(state, processing ? 6 : 7);
-  return Steinberg_kResultOk;
+  return processingNotImplemented() ? Steinberg_kNotImplemented : Steinberg_kResultOk;
 }
 
 float readGain(Steinberg_Vst_ProcessData* data, State* state) {

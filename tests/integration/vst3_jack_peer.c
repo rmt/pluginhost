@@ -12,6 +12,7 @@ typedef struct peer_state {
     jack_port_t *capture;
     jack_port_t *playback;
     uint32_t frames;
+    float gain;
     _Atomic uint32_t armed;
     _Atomic uint64_t cycles;
     _Atomic uint64_t valid;
@@ -46,9 +47,10 @@ static int process(jack_nframes_t frames, void *raw) {
         return 0;
     }
     for (jack_nframes_t frame = 0; frame < frames; ++frame) {
-        const jack_default_audio_sample_t expected =
+        const jack_default_audio_sample_t input =
             (jack_default_audio_sample_t)(1000U + frame);
-        playback[frame] = expected;
+        const jack_default_audio_sample_t expected = input * state->gain;
+        playback[frame] = input;
         if (atomic_load_explicit(&state->armed, memory_order_acquire) != 0 &&
             capture[frame] != expected) {
             atomic_fetch_add_explicit(&state->errors, 1, memory_order_relaxed);
@@ -154,12 +156,17 @@ static int command_loop(peer_state *state, jack_client_t *client, const char *ho
 }
 
 int main(int argc, char **argv) {
-    if (argc != 4) return 2;
+    if (argc != 4 && argc != 5) return 2;
     char *end = NULL;
     const unsigned long frames = strtoul(argv[2], &end, 10);
     if (end == argv[2] || *end != '\0' || frames == 0 || frames > UINT32_MAX) return 2;
     const unsigned long long required = strtoull(argv[3], &end, 10);
     if (end == argv[3] || *end != '\0' || required == 0) return 2;
+    float gain = 1.0f;
+    if (argc == 5) {
+        gain = strtof(argv[4], &end);
+        if (end == argv[4] || *end != '\0' || gain <= 0.0f) return 2;
+    }
     jack_status_t status = 0;
     jack_client_t *client = jack_client_open("pluginhost-vst3-peer", JackNoStartServer, &status);
     if (client == NULL) {
@@ -167,7 +174,7 @@ int main(int argc, char **argv) {
                 (unsigned)status);
         return 1;
     }
-    peer_state state = {.frames = (uint32_t)frames};
+    peer_state state = {.frames = (uint32_t)frames, .gain = gain};
     state.capture = jack_port_register(client, "capture_1", JACK_DEFAULT_AUDIO_TYPE,
                                         JackPortIsInput, 0);
     state.playback = jack_port_register(client, "playback_1", JACK_DEFAULT_AUDIO_TYPE,
@@ -180,6 +187,7 @@ int main(int argc, char **argv) {
         jack_activate(client) != 0 ||
         connect_peer_to_host(client, argv[1], "playback_1", "audio_in_1") != 0 ||
         connect_ports(client, argv[1], "audio_out_1", "capture_1") != 0) {
+        fprintf(stderr, "vst3 peer could not connect required JACK ports for %s\n", argv[1]);
         jack_client_close(client);
         return result;
     }
@@ -193,6 +201,12 @@ int main(int argc, char **argv) {
     fflush(stdout);
     result = command_loop(&state, client, argv[1]) == 0 ? 0 : 1;
 cleanup:
+    if (result != 0)
+        fprintf(stderr, "vst3 peer stopped: cycles=%llu valid=%llu errors=%llu gain=%g\n",
+                (unsigned long long)atomic_load_explicit(&state.cycles, memory_order_acquire),
+                (unsigned long long)atomic_load_explicit(&state.valid, memory_order_acquire),
+                (unsigned long long)atomic_load_explicit(&state.errors, memory_order_acquire),
+                (double)state.gain);
     atomic_store_explicit(&state.armed, 0, memory_order_release);
     (void)jack_deactivate(client);
     (void)jack_client_close(client);

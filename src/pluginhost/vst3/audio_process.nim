@@ -793,7 +793,7 @@ proc deactivateVst3Buses*(component: ptr Vst3Component;
     let bus = ledger.entries[int(position)]
     let code = component.lpVtbl.activateBus(cast[pointer](component),
       bus.mediaType, bus.direction, bus.index, 0'u8)
-    if code != Vst3ResultOk:
+    if code != Vst3ResultOk and code != Vst3ResultFalse:
       return failure[Unit](vst3ProcessError(hekVst3Factory,
         "VST3 component refused bus deactivation", "", "",
         "media=" & $bus.mediaType & "; direction=" & $bus.direction &
@@ -822,7 +822,10 @@ proc setVst3Processing*(processor: ptr Vst3AudioProcessor;
       "VST3 processor has no processing-state ABI", "", "", ""))
   let processingValue: uint8 = if processing: 1'u8 else: 0'u8
   let code = processor.lpVtbl.setProcessing(cast[pointer](processor), processingValue)
-  if code != Vst3ResultOk:
+  # Steinberg's base AudioEffect leaves this notification unimplemented while
+  # derived processors may still implement process(). Both transitions remain
+  # paired; explicit rejection and other errors are still fatal.
+  if code != Vst3ResultOk and code != Vst3NotImplemented:
     return failure[Unit](vst3ProcessError(hekVst3Factory,
       "VST3 processor processing-state transition failed", "", "",
       "result=" & $code))

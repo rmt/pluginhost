@@ -2,9 +2,13 @@
 #include "vst3/vst3_c_api.h"
 /*
  * V4B2 is an independent native reload fixture.  The V3 processor remains
- * the ABI implementation; these controls only make lifecycle, state, and
- * failure edges deterministic for the private reload tests.
+ * the ABI implementation; these controls make lifecycle, state, and failure
+ * edges deterministic for the private reload tests.
  */
+#ifndef PLUGINHOST_VST3_V4B2_PUBLIC_RELOAD
+#define PLUGINHOST_VST3_V4B2_PUBLIC_RELOAD 0
+#endif
+static bool g_public_reload_requested = false;
 static bool g_structural = false;
 static bool g_capture_fail = false;
 static bool g_component_capture_fail = false;
@@ -95,6 +99,14 @@ extern "C" void pluginhost_vst3_v4b2_module_entry() {
 extern "C" void pluginhost_vst3_v4b2_module_exit() {
   g_module_event = 2;
   ++g_module_exits;
+}
+
+extern "C" bool pluginhost_vst3_v4b2_public_reload_enabled() {
+  return PLUGINHOST_VST3_V4B2_PUBLIC_RELOAD != 0 &&
+    !g_public_reload_requested;
+}
+extern "C" void pluginhost_vst3_v4b2_public_reload_requested() {
+  g_public_reload_requested = true;
 }
 
 #define PLUGINHOST_VST3_V4B2_FIXTURE 1

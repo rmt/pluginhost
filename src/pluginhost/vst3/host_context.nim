@@ -35,6 +35,7 @@ type
     wrongThreadCallbacks: RtAtomicU64
     timerRearmFailures: uint32
     closed: bool
+    retired: bool
     dispatching: bool
     closeRequested: bool
     fds: seq[Vst3FdRegistration]
@@ -201,7 +202,7 @@ proc validTimerHandler(handler: pointer): bool {.inline.} =
 proc hostQueryInterface(thisInterface: pointer; iid: ptr Vst3Tuid;
                         obj: ptr pointer): int32 {.cdecl, raises: [].} =
   let context = hostState(thisInterface)
-  if context == nil or context.closed or obj == nil:
+  if context == nil or context.closed or context.retired or obj == nil:
     if obj != nil: obj[] = nil
     return Vst3NoInterface
   obj[] = nil
@@ -240,7 +241,7 @@ proc hostGetName(thisInterface: pointer; name: ptr Vst3VstString128): int32 {.
 proc hostCreateInstance(thisInterface: pointer; cid, iid: ptr Vst3Tuid;
                         obj: ptr pointer): int32 {.cdecl, raises: [].} =
   let context = hostState(thisInterface)
-  if context == nil or context.closed or obj == nil:
+  if context == nil or context.closed or context.retired or obj == nil:
     if obj != nil: obj[] = nil
     return Vst3NoInterface
   obj[] = nil
@@ -259,7 +260,7 @@ proc hostCreateInstance(thisInterface: pointer; cid, iid: ptr Vst3Tuid;
 proc supportQueryInterface(thisInterface: pointer; iid: ptr Vst3Tuid;
                            obj: ptr pointer): int32 {.cdecl, raises: [].} =
   let context = supportState(thisInterface)
-  if context == nil or context.closed or obj == nil:
+  if context == nil or context.closed or context.retired or obj == nil:
     if obj != nil: obj[] = nil
     return Vst3NoInterface
   obj[] = nil
@@ -294,7 +295,7 @@ proc supportIsPlugInterfaceSupported(thisInterface: pointer;
                                      iid: ptr Vst3Tuid): int32 {.
     cdecl, raises: [].} =
   let context = supportState(thisInterface)
-  if context == nil or context.closed:
+  if context == nil or context.closed or context.retired:
     return Vst3ResultFalse
   if uidMatches(iid, Vst3ConnectionPointIid):
     return Vst3ResultOk
@@ -303,7 +304,7 @@ proc supportIsPlugInterfaceSupported(thisInterface: pointer;
 proc runLoopQueryInterface(thisInterface: pointer; iid: ptr Vst3Tuid;
                            obj: ptr pointer): int32 {.cdecl, raises: [].} =
   let context = runLoopState(thisInterface)
-  if context == nil or context.closed or obj == nil:
+  if context == nil or context.closed or context.retired or obj == nil:
     if obj != nil: obj[] = nil
     return Vst3NoInterface
   obj[] = nil
@@ -351,7 +352,8 @@ proc runLoopRegisterEventHandler(thisInterface, handler: pointer;
                                  fd: Vst3FileDescriptor): int32 {.
     cdecl, raises: [].} =
   let context = runLoopState(thisInterface)
-  if context == nil or context.closed or not context.isMainThread() or
+  if context == nil or context.closed or context.retired or
+      not context.isMainThread() or
       context.reactor == nil or fd < 0 or not validFdHandler(handler) or
       context.fds.len >= Vst3MaxRunLoopFds or context.hasFd(handler, fd) or
       not retainHandler(handler):
@@ -389,7 +391,8 @@ proc runLoopRegisterTimer(thisInterface, handler: pointer;
                           milliseconds: Vst3TimerInterval): int32 {.
     cdecl, raises: [].} =
   let context = runLoopState(thisInterface)
-  if context == nil or context.closed or not context.isMainThread() or
+  if context == nil or context.closed or context.retired or
+      not context.isMainThread() or
       context.reactor == nil or not validTimerHandler(handler) or
       milliseconds == 0'u64 or context.timers.len >= Vst3MaxRunLoopTimers or
       context.hasTimer(handler) or
@@ -440,7 +443,7 @@ proc closeNow(context: Vst3HostContext) {.raises: [].}
 
 proc dispatchRunLoopEvents*(context: Vst3HostContext;
                             events: openArray[ReactorEvent]) {.raises: [].} =
-  if context == nil or context[].closed or
+  if context == nil or context[].closed or context[].retired or
       not isMainThread(addr context[]):
     if context != nil and not isMainThread(addr context[]):
       incrementWrongThread(addr context[].wrongThreadCallbacks)
@@ -555,6 +558,19 @@ proc close*(context: Vst3HostContext) {.raises: [].} =
     context.closeRequested = true
     return
   closeNow(context)
+
+proc retire*(context: Vst3HostContext): bool {.raises: [].} =
+  ## Public process shutdown can outlive plugin-held host references. Remove
+  ## all reactor registrations first; only then revoke the borrowed reactor
+  ## pointer. The rooted ABI objects remain valid for eventual Release calls.
+  if context == nil:
+    return true
+  context.close()
+  if context.dispatching or context.hasRetainedCallbacks():
+    return false
+  context.retired = true
+  context.reactor = nil
+  true
 proc newVst3HostContext*(reactor: ptr MainReactor = nil;
                          hostName = "pluginhost"): Vst3HostContext =
   new(result)

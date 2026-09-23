@@ -17,4 +17,5 @@ suite "version information":
     check text.startsWith("pluginhost " & Version & "\n")
     check text.contains("Nim " & NimVersion)
     check text.contains("CLAP SDK 1.2.10")
+    check text.contains("VST3 SDK 3.8.1")
     check text.contains("JACK ABI libjack.so.0")

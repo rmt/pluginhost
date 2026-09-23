@@ -3,7 +3,7 @@
 # the numeric core of VERSION.
 version       = "0.1.0"
 author        = "pluginhost contributors"
-description   = "A standalone Linux JACK host for CLAP plugins"
+description   = "A standalone Linux JACK host for CLAP and VST3 plugins"
 license       = "MIT"
 srcDir        = "src"
 bin           = @["pluginhost"]
@@ -206,6 +206,42 @@ proc checkReleaseAcceptancePrerequisites() =
     if getEnv(name).len == 0:
       echo "release acceptance prerequisite missing: set " & name
       quit(1)
+
+proc checkVst3RequiredPath(name: string) =
+  let path = getEnv(name)
+  if path.len == 0:
+    echo "VST3 public compatibility prerequisite missing: set " & name
+    quit(1)
+  if path[0] != '/':
+    echo "VST3 public compatibility prerequisite must be absolute: " & name
+    quit(1)
+  if not path.toLowerAscii.endsWith(".vst3") or
+      (not fileExists(path) and not dirExists(path)):
+    echo "VST3 public compatibility prerequisite must be an existing .vst3 bundle: " &
+      path
+    quit(1)
+
+proc checkVst3PublicPrerequisites() =
+  for name in [
+      "PLUGINHOST_VST3_INSTRUMENT_PLUGIN",
+      "PLUGINHOST_VST3_EFFECT_PLUGIN",
+    ]:
+    checkVst3RequiredPath(name)
+  for name in [
+      "PLUGINHOST_VST3_INSTRUMENT_ID",
+      "PLUGINHOST_VST3_EFFECT_ID",
+    ]:
+    if getEnv(name).len == 0:
+      echo "VST3 public compatibility prerequisite missing: set " & name
+      quit(1)
+
+
+
+proc checkVst3PublicGuiPrerequisites() =
+  exec "command -v Xvfb >/dev/null 2>&1 || { " &
+       "echo 'Xvfb is required for VST3 public GUI evidence' >&2; exit 1; }"
+  exec "command -v xvfb-run >/dev/null 2>&1 || { " &
+       "echo 'xvfb-run is required for VST3 public GUI evidence' >&2; exit 1; }"
 
 proc checkIntegrationPrerequisites() =
   verifyIntegrationPrerequisiteFailure()
@@ -534,6 +570,8 @@ proc compileVst3V2bFixtures() =
   compileVst3V2bFixtureVariant("negative_buses", 14)
   compileVst3V2bFixtureVariant("requirements_unsupported", 16)
   compileVst3V2bFixtureVariant("requirements_continuous", 17)
+  compileVst3V2bFixtureVariant("processing_notimpl", 18)
+  compileVst3V2bFixtureVariant("processing_rejected", 19)
 
 proc compileVst3V3FixtureVariant(name: string; mode: int) =
   exec "mkdir -p build/fixtures/vst3/" & name &
@@ -603,6 +641,7 @@ proc compileVst3V4aVariant(name: string; mode: int) =
   exec "mkdir -p build/fixtures/vst3/" & name &
        ".vst3/Contents/x86_64-linux"
   exec "c++ -std=c++17 -fPIC -shared -fvisibility=hidden " &
+
        "-Wall -Wextra -Werror -Itests/fixtures/vst3 " &
        "-DPLUGINHOST_VST3_V4A_MODE=" & $mode & " " &
        "tests/fixtures/vst3/v4a_fixture.cpp -o " &
@@ -647,6 +686,40 @@ proc compileVst3V4b2Fixture() =
        "-Wall -Wextra -Werror -Ivendor -Itests/fixtures -Itests/fixtures/vst3 " &
        "tests/fixtures/vst3/v4b2_fixture.cpp -o " &
        "build/fixtures/vst3/v4b2.vst3/Contents/x86_64-linux/v4b2.so"
+proc compileVst3V4b2PublicFixture() =
+  exec "mkdir -p build/fixtures/vst3/public_reload.vst3/Contents/x86_64-linux"
+  exec "c++ -std=c++17 -fPIC -shared -fvisibility=hidden " &
+       "-Wall -Wextra -Werror -Ivendor -Itests/fixtures -Itests/fixtures/vst3 " &
+       "-DPLUGINHOST_VST3_V4B2_PUBLIC_RELOAD=1 " &
+       "tests/fixtures/vst3/v4b2_fixture.cpp -o " &
+       "build/fixtures/vst3/public_reload.vst3/Contents/x86_64-linux/public_reload.so"
+
+proc compileVst3PublicPeer() =
+  exec "mkdir -p build/integration"
+  exec "cc -std=gnu11 -fno-builtin -Wall -Wextra -Werror -pthread " &
+       "$(pkg-config --cflags jack) tests/integration/vst3_jack_peer.c " &
+       "$(pkg-config --libs jack) -o build/integration/vst3_jack_peer"
+
+proc runVst3PublicTests(checkPrerequisites = true) =
+  if checkPrerequisites:
+    checkIntegrationPrerequisites()
+    checkVst3PublicPrerequisites()
+    checkVst3PublicGuiPrerequisites()
+
+  compileVst3V2bFixtures()
+  compileVst3V4b2Fixture()
+  compileVst3V4b2PublicFixture()
+  compileVst3PublicPeer()
+  compileControlIntegrationTest(
+    "tests/integration/test_public_vst3.nim", "public_vst3")
+  exec "PLUGINHOST_TEST_BIN=$PWD/build/test/pluginhost " &
+       "PLUGINHOST_VST3_PUBLIC_FIXTURE_DIR=$PWD/build/fixtures/vst3 " &
+       "PLUGINHOST_VST3_JACK_PEER=$PWD/build/integration/vst3_jack_peer " &
+       "xvfb-run -a -s '-screen 0 1024x768x24 -nolisten tcp' " &
+       "python3 tests/integration/run_pipewire_jack.py " &
+       "--test build/test/public_vst3 " &
+       "--peer build/integration/vst3_jack_peer"
+
 
 proc runVst3V4b2Tests() =
   compileVst3V4b2Fixture()
@@ -681,7 +754,7 @@ proc runVst3V5bTests() =
   exec "command -v xvfb-run >/dev/null 2>&1 || { " &
        "echo 'xvfb-run is required for VST3 V5B tests' >&2; exit 1; }"
   exec "PLUGINHOST_VST3_V5B_FIXTURE_DIR=$PWD/build/fixtures/vst3 " &
-       "xvfb-run -a -s '-screen 0 1024x768x24 -extension GLX -nolisten tcp' " &
+       "xvfb-run -a -s '-screen 0 1024x768x24 -extension GLX -noreset -nolisten tcp' " &
        "nim c -r --hints:off --path:src --path:tests " &
        dependencyPathsClause() & " --nimcache:build/nimcache/vst3-v5b " &
        "--out:build/test/test_vst3_v5b tests/fixtures/test_vst3_v5b.nim"
@@ -858,7 +931,7 @@ proc runGuiTests() =
        "echo 'unexpected eager libdbus-1 dependency in D-Bus tray test host' >&2; exit 1; fi"
   exec "PLUGINHOST_X11_SEND_DELETE=$PWD/build/integration/x11_send_wm_delete " &
        "PLUGINHOST_CLAP_FIXTURE_DIR=$PWD/build/fixtures/clap " &
-       "xvfb-run -a -s '-screen 0 1024x768x24 -extension GLX -nolisten tcp' " &
+       "xvfb-run -a -s '-screen 0 1024x768x24 -extension GLX -noreset -nolisten tcp' " &
        "build/test/x11_window_host"
   exec "PLUGINHOST_DBUS_FAKE_WATCHER=$PWD/build/integration/dbus_fake_watcher " &
        "dbus-run-session -- xvfb-run -a " &
@@ -895,6 +968,13 @@ task testVst3V2a, "Run VST3 V2A lifecycle, host, and run-loop checks":
   runVst3V2aTests()
 task testVst3V3, "Run VST3 V3 parameter and MIDI bridge checks":
   runVst3V3Tests()
+task testVst3Public, "Run strict public VST3 process, state, and GUI checks":
+  checkIntegrationPrerequisites()
+  checkVst3PublicPrerequisites()
+  checkVst3PublicGuiPrerequisites()
+  compileTestBinary()
+  runVst3PublicTests(false)
+
 
 task testFixtures, "Build and test the synthetic CLAP fixtures":
   compileTestBinary()
@@ -902,10 +982,10 @@ task testFixtures, "Build and test the synthetic CLAP fixtures":
 
 task testRt, "Run callback allocation and generated-code safety checks":
   runRtTests()
-
 task testIntegration, "Run isolated live PipeWire-JACK integration tests":
   compileTestBinary()
   runIntegrationTests()
+
 
 task testAcceptance, "Run the public release acceptance matrix":
   runReleaseAcceptanceTests()
@@ -919,15 +999,17 @@ task testHardening, "Run hostile-input and resource-ownership checks":
 
 task sanitize, "Run generated-C sanitizers and ownership checks":
   runSanitizeTask()
-
 task all, "Run compile checks, build the executable, and run tests":
   checkIntegrationPrerequisites()
   checkClapSmokePrerequisite()
   checkReleaseAcceptancePrerequisites()
+  checkVst3PublicPrerequisites()
+  checkVst3PublicGuiPrerequisites()
   exec "mkdir -p build/nimcache/check"
   exec "nim check --hints:off --path:src " & dependencyPathsClause() &
        " --nimcache:build/nimcache/check src/pluginhost.nim"
   compileTestBinary()
+  runVst3PublicTests(false)
   runVst3AudioTests()
   runVst3V4aTests()
   runVst3V4bTests()

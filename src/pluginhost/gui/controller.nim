@@ -477,16 +477,13 @@ proc handleWindowEvents*(controller: GuiController;
                          events: seq[ReactorEvent]): Result[Unit] =
   if controller == nil or not controller.tokenRegistered or controller.window == nil:
     return success()
-  var ready = false
   for event in events:
     if event.kind == rekFd and event.token == controller.token:
       if riError in event.interests or riHangup in event.interests:
         return failure[Unit](controllerError(
           "X11 connection became unavailable", "fd=" & $controller.window.fileDescriptor))
-      if riRead in event.interests:
-        ready = true
-  if not ready:
-    return success()
+  # Xlib may have already moved socket events into its own queue, leaving the
+  # descriptor unreadable. Drain that queue on every reactor turn.
 
   for ignored in 0 ..< MaxWindowEventsPerTurn:
     discard ignored
@@ -542,10 +539,12 @@ proc handleWindowEvents*(controller: GuiController;
           return failure[Unit](controllerError(
             "plugin rejected the host-requested GUI size"))
     of wekMap:
-      if controller.stateValue != gcsHidden:
+      if controller.window.state == whVisible and
+          controller.stateValue != gcsHidden:
         controller.stateValue = gcsVisible
     of wekUnmap:
-      if controller.stateValue == gcsVisible:
+      if controller.window.state == whHidden and
+          controller.stateValue == gcsVisible:
         controller.stateValue = gcsHidden
     of wekFocusIn, wekFocusOut:
       var focused = controller.plugin.focus(

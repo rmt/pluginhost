@@ -148,6 +148,39 @@ suite "VST3 V2B bounded JACK audio":
     check abs(controls.audioSample(3, 0) - 3.0) < 0.0001
     closeSlice(slice, services, controls)
 
+  test "unimplemented processing notification still processes and closes":
+    var controlsResult = openFakeJackControls()
+    require controlsResult.isOk
+    var controls = move(controlsResult.value)
+    controls.reset()
+    var services = newServices()
+    var observer = openObserver("processing_notimpl")
+    let processCalls = resolveU32(observer,
+      "pluginhost_vst3_fixture_process_calls")
+    var opened = openSlice("processing_notimpl", services)
+    require opened.isOk
+    var slice = move(opened.value)
+    controls.setAudioSample(0, 0, 3.0)
+    check controls.invokeProcess(128) == 0
+    check not slice.takeFault()
+    check abs(controls.audioSample(1, 0) - 3.0) < 0.0001
+    check processCalls() == 1'u32
+    closeSlice(slice, services, controls)
+    check observer.close().isOk
+
+  test "explicit processing rejection remains a startup failure":
+    var controlsResult = openFakeJackControls()
+    require controlsResult.isOk
+    var controls = move(controlsResult.value)
+    controls.reset()
+    var services = newServices()
+    let opened = openSlice("processing_rejected", services)
+    check not opened.isOk
+    if not opened.isOk:
+      check opened.error.context.contains("result=1")
+    discard services.close()
+    discard controls.close()
+
   test "process context requirements expose only the free-running clock":
     var controlsResult = openFakeJackControls()
     require controlsResult.isOk

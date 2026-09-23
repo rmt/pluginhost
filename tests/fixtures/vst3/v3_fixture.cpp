@@ -491,6 +491,16 @@ Steinberg_tresult process(void* raw, Steinberg_Vst_ProcessData* data) {
     state->lastResult = Steinberg_kResultOk;
   }
   --state->processActive;
+#ifdef PLUGINHOST_VST3_V4B2_FIXTURE
+  if (state->processCalls == 1 &&
+      pluginhost_vst3_v4b2_public_reload_enabled() &&
+      state->handler != nullptr && state->handler->lpVtbl != nullptr &&
+      state->handler->lpVtbl->restartComponent != nullptr) {
+    pluginhost_vst3_v4b2_public_reload_requested();
+    (void)state->handler->lpVtbl->restartComponent(
+      state->handler, Steinberg_Vst_RestartFlags_kReloadComponent);
+  }
+#endif
   return state->lastResult;
 }
 std::uint32_t getTailSamples(void*) { return 0; }

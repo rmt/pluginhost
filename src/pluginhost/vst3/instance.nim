@@ -204,7 +204,8 @@ proc queryInterface(obj: pointer; iidText: string): Result[pointer] =
       "iid=" & iidText))
   var output: pointer = nil
   let code = base.lpVtbl.queryInterface(obj, addr iidResult.value, addr output)
-  if code == Vst3NoInterface:
+  if output == nil and (code == Vst3NoInterface or
+      code == Vst3ResultFalse or code == Vst3NotImplemented):
     return success(pointer(nil))
   if code != Vst3ResultOk or output == nil:
     return failure[pointer](instanceError(
@@ -633,8 +634,8 @@ proc mergeCloseError(primary: var HostError; closeResult: Result[Unit]) =
     primary.context.add("; cleanup=" & closeResult.error.message)
     if closeResult.error.context.len > 0:
       primary.context.add(" (" & closeResult.error.context & ")")
-
-proc close*(instance: Vst3Instance): Result[Unit] =
+proc close*(instance: Vst3Instance;
+            allowRetainedHostReferences = false): Result[Unit] =
   if instance == nil or instance.closed: return success()
   instance.closingState.storeRelease(1'u32)
   if instance.activeCallbacks.loadAcquire() != 0'u32:
@@ -701,14 +702,16 @@ proc close*(instance: Vst3Instance): Result[Unit] =
   if instance.component != nil:
     releaseInterface(cast[pointer](instance.component))
     instance.component = nil
-  # The application-owned context remains usable after a borrowed instance
-  # closes, but retained callback/object ownership must still be checked before
-  # this instance's module can be unloaded.
+  # Run-loop registrations must drain before module shutdown. The public
+  # process permits plugin-held host interfaces only because the module stays
+  # mapped and application teardown retires the context before reactor close;
+  # private owners retain the strict reference check.
   if instance.ownsContext and instance.context != nil:
     instance.context.close()
   if instance.context != nil and
       (instance.context.hasRetainedCallbacks() or
-       instance.context.hasRetainedObjects()):
+       ((not allowRetainedHostReferences or instance.ownsContext) and
+        instance.context.hasRetainedObjects())):
     return failure[Unit](instanceError(hekVst3Factory,
       "VST3 host context retained callbacks or objects during shutdown",
       instance.module.bundlePath))
@@ -1148,8 +1151,10 @@ proc createEditor*(instance: Vst3Instance; parentWindowId: uint64;
     return failure[Vst3Editor](instanceError(hekVst3Unavailable,
       "VST3 instance already owns an editor",
       instance.module.bundlePath))
+  var frameHost = host
+  frameHost.runLoop = instance.context.runLoopPointer()
   var created = createVst3Editor(instance.controller, instance.mainThread,
-    parentWindowId, host)
+    parentWindowId, frameHost)
   if not created.isOk:
     # A failed plugin callback may retain the stable frame. Preserve the
     # partial editor under the instance so module teardown cannot pass it.

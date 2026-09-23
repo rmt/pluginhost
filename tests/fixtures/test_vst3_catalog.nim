@@ -141,7 +141,7 @@ suite "VST3 catalog and discovery boundary":
     check report.plugins[0].descriptor.id != report.plugins[1].descriptor.id
     check report.plugins[0].descriptor.format == pfVst3
     check report.plugins[0].path.endsWith("a/multi_class.vst3")
-  test "list and scan render mixed-format fields and VST3 run is unavailable":
+  test "list, scan, and VST3 selection errors preserve the public boundary":
     let list = runHost(@["list", "--json", fixturePath("valid")])
     check list.exitCode == 0
     check list.errorOutput.len == 0
@@ -170,10 +170,12 @@ suite "VST3 catalog and discovery boundary":
     check innerList.exitCode == ExitClap
     check innerList.errorOutput.contains("inside a VST3 bundle")
 
-    let innerRun = runHost(@[inner])
-    check innerRun.exitCode == ExitClap
-    check innerRun.errorOutput.contains("inside a VST3 bundle")
-    let run = runHost(@[fixturePath("valid")])
-    check run.exitCode == ExitClap
-    check run.output.len == 0
-    check run.errorOutput.contains("VST3 run is unavailable")
+    let invalidSelection = runHost(@[
+      "--plugin-id", "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+      fixturePath("valid"),
+    ])
+    check invalidSelection.exitCode == ExitUsage
+    check invalidSelection.output.len == 0
+    check invalidSelection.errorOutput.contains("VST3")
+    check invalidSelection.errorOutput.contains("plugin ID was not found")
+    check not invalidSelection.errorOutput.contains("run is unavailable")

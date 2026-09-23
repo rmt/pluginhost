@@ -6,14 +6,14 @@ import ./run_config
 import ../domain/[errors, result]
 
 let commandParser = newParser("pluginhost"):
-  help("""Inspect native CLAP or VST3 plugins; host one CLAP plugin as a JACK client.
+  help("""Inspect native CLAP or VST3 plugins; host one native plugin as a JACK client.
 
 The 'run' subcommand may be omitted: pluginhost [run options] PLUGIN_PATH""")
   flag("-V", "--version", shortcircuit = true,
        help = "Display version information")
 
   command("run"):
-    help("Run one CLAP plugin as a JACK client; VST3 run is unavailable until V6.")
+    help("Run one native CLAP or VST3 plugin as a JACK client.")
     flag("-V", "--version", shortcircuit = true,
          help = "Display version information")
     option("--plugin-id", help = "Select a descriptor by stable native plugin ID")
@@ -28,8 +28,8 @@ The 'run' subcommand may be omitted: pluginhost [run options] PLUGIN_PATH""")
     flag("--require-gui", help = "Fail if a usable GUI cannot be shown")
     option("--gui-scale", help = "Request a positive GUI scale")
     option("--icon", help = "Use a bounded PPM image for the GUI/tray icon")
-    option("--load-state", help = "Load CLAP state before activation")
-    option("--save-state", help = "Save CLAP state on clean shutdown")
+    option("--load-state", help = "Load native plugin state before activation")
+    option("--save-state", help = "Save native plugin state on clean shutdown")
     option("--pid-file", help = "Write the running process ID to this file")
     flag("-v", "--verbose", help = "Enable diagnostic logging")
     flag("-q", "--quiet", help = "Suppress non-error host messages")

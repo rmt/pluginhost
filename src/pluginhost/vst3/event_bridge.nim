@@ -592,7 +592,10 @@ proc translateMidi(bridge: ptr Vst3EventBridge; port: uint32;
   while index < source.size:
     if source.data[int(index)] >= 0x80'u8: return -1
     inc index
-  let channel = first and 0x0F'u8
+  # A one-channel VST3 bus has no destination for other JACK MIDI channels.
+  # Route them to its only channel; preserve identity on multichannel buses.
+  let channel = if bridge.inputChannelCounts[int(port)] == 1'u8:
+      0'u8 else: first and 0x0F'u8
   if uint32(channel) >= uint32(bridge.inputChannelCounts[int(port)]):
     return -1
   event = Vst3Event(busIndex: bridge.inputBusIndices[int(port)],
@@ -600,6 +603,7 @@ proc translateMidi(bridge: ptr Vst3EventBridge; port: uint32;
     flags: Vst3EventFlagIsLive, eventType: Vst3EventTypeNoteOn)
   case status
   of 0x80'u8:
+    event.eventType = Vst3EventTypeNoteOff
     let note = cast[ptr Vst3NoteOffEvent](addr event.payload[0])
     note[] = Vst3NoteOffEvent(channel: int16(channel),
       pitch: int16(source.data[1]), velocity: cfloat(source.data[2]) / 127.0,

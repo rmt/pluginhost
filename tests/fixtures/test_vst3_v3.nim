@@ -611,6 +611,93 @@ suite "VST3 V3 event bridge":
     require services.close().isOk
     require controls.close().isOk
 
+  test "single-channel event bus routes JACK MIDI to its only channel":
+    inputCountValue = 2
+    inputTimes[0] = 2
+    inputTimes[1] = 3
+    inputSizes[0] = 3
+    inputSizes[1] = 3
+    inputPayloads[0] = [0x91'u8, 60, 100, 0]
+    inputPayloads[1] = [0x81'u8, 60, 64, 0]
+    var plan = newPortPlan(portPlanVersion(1), @[], @[], @[
+      NotePortPlan(index: 0, id: 0, direction: pdInput, channelCount: 1,
+        name: "Mono MIDI", supportedDialects: {ndMidi},
+        preferredDialect: ndMidi, shortName: "midi_in_1")])
+    var role: AudioRoleGuard
+    role.initAudioRoleGuard()
+    require tryEnterAudioRole(addr role)
+    var opened = newVst3EventBridge(nil, plan, addr role, "fixture", "mono-midi")
+    require opened.isOk
+    var bridge = opened.value
+    defer:
+      endVst3EventCycle(bridge)
+      closeVst3EventBridge(bridge)
+      discard leaveAudioRole(addr role)
+    var engine: RtEngine
+    engine.noteInputCount = 1
+    engine.noteInputBuffers[0] = cast[pointer](addr inputPayloads[0][0])
+    engine.midiIo = RtMidiIo(context: cast[pointer](addr inputPayloads[0][0]),
+      eventCount: inputCount, eventGet: inputGet)
+    require beginVst3EventCycle(bridge, addr engine, 64, addr role)
+    let input = vst3EventInputInterface(bridge)
+    check input.lpVtbl.getEventCount(cast[pointer](input)) == 2
+    var event: Vst3Event
+    require input.lpVtbl.getEvent(cast[pointer](input), 0, addr event) ==
+      Vst3ResultOk
+    check event.busIndex == 0
+    check event.sampleOffset == 2
+    check event.eventType == Vst3EventTypeNoteOn
+    check cast[ptr Vst3NoteOnEvent](addr event.payload[0])[].channel == 0
+    require input.lpVtbl.getEvent(cast[pointer](input), 1, addr event) ==
+      Vst3ResultOk
+    check event.sampleOffset == 3
+    check event.eventType == Vst3EventTypeNoteOff
+    check cast[ptr Vst3NoteOffEvent](addr event.payload[0])[].channel == 0
+    endVst3EventCycle(bridge)
+    let metrics = vst3EventMetrics(bridge)
+    check metrics.acceptedInput == 2'u64
+    check metrics.malformedInput == 0'u64
+
+  test "multichannel event bus retains channel identity and bounds":
+    inputCountValue = 2
+    inputTimes[0] = 2
+    inputTimes[1] = 3
+    inputSizes[0] = 3
+    inputSizes[1] = 3
+    inputPayloads[0] = [0x92'u8, 60, 100, 0]
+    inputPayloads[1] = [0x93'u8, 61, 100, 0]
+    var plan = newPortPlan(portPlanVersion(1), @[], @[], @[
+      NotePortPlan(index: 0, id: 0, direction: pdInput, channelCount: 3,
+        name: "Three-channel MIDI", supportedDialects: {ndMidi},
+        preferredDialect: ndMidi, shortName: "midi_in_1")])
+    var role: AudioRoleGuard
+    role.initAudioRoleGuard()
+    require tryEnterAudioRole(addr role)
+    var opened = newVst3EventBridge(nil, plan, addr role, "fixture", "multi-midi")
+    require opened.isOk
+    var bridge = opened.value
+    defer:
+      endVst3EventCycle(bridge)
+      closeVst3EventBridge(bridge)
+      discard leaveAudioRole(addr role)
+    var engine: RtEngine
+    engine.noteInputCount = 1
+    engine.noteInputBuffers[0] = cast[pointer](addr inputPayloads[0][0])
+    engine.midiIo = RtMidiIo(context: cast[pointer](addr inputPayloads[0][0]),
+      eventCount: inputCount, eventGet: inputGet)
+    require beginVst3EventCycle(bridge, addr engine, 64, addr role)
+    let input = vst3EventInputInterface(bridge)
+    check input.lpVtbl.getEventCount(cast[pointer](input)) == 1
+    var event: Vst3Event
+    require input.lpVtbl.getEvent(cast[pointer](input), 0, addr event) ==
+      Vst3ResultOk
+    check event.sampleOffset == 2
+    check cast[ptr Vst3NoteOnEvent](addr event.payload[0])[].channel == 2
+    endVst3EventCycle(bridge)
+    let metrics = vst3EventMetrics(bridge)
+    check metrics.acceptedInput == 1'u64
+    check metrics.malformedInput == 1'u64
+
   test "input notes, poly pressure, and complete split SysEx preserve order":
     reserveEnabled = true
     inputCountValue = 0'u32

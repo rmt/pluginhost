@@ -8,7 +8,7 @@
 import std/[math, posix]
 
 import ../domain/[errors, result]
-import ./[ffi, uid]
+import ./[ffi, host_context, uid]
 
 type
   Vst3EditorResizeProc* = proc(context: pointer; width, height: uint32): bool {.
@@ -20,6 +20,7 @@ type
   Vst3EditorHost* {.bycopy.} = object
     context*: pointer
     resize*: Vst3EditorResizeProc
+    runLoop*: ptr Vst3RunLoop
 
   Vst3EditorSize* {.bycopy.} = object
     width*: uint32
@@ -141,8 +142,14 @@ proc frameQueryInterface(thisInterface: pointer; iid: ptr Vst3Tuid;
     return Vst3NoInterface
   var fUnknown = parseVst3Uid(Vst3FUnknownIid)
   var plugFrame = parseVst3Uid(Vst3PlugFrameIid)
-  if not fUnknown.isOk or not plugFrame.isOk:
+  var runLoop = parseVst3Uid(Vst3RunLoopIid)
+  if not fUnknown.isOk or not plugFrame.isOk or not runLoop.isOk:
     return Vst3NoInterface
+  if sameUid(iid, addr runLoop.value) and frame.owner.host.runLoop != nil:
+    let service = frame.owner.host.runLoop
+    obj[] = cast[pointer](service)
+    discard service.lpVtbl.addRef(obj[])
+    return Vst3ResultOk
   if not sameUid(iid, addr fUnknown.value) and
       not sameUid(iid, addr plugFrame.value):
     return Vst3NoInterface

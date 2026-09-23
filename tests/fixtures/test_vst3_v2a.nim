@@ -768,6 +768,39 @@ suite "VST3 V2A lifecycle boundary":
     check services.close().isOk
     check contextRootCount() == initialContextRoots
     check reactor.close().isOk
+  test "retiring a host context revokes its reactor without invalidating retained ABI refs":
+    var driver = FakeDriver(nowValue: 10_000)
+    var reactorResult = initMainReactor(driver)
+    require reactorResult.isOk
+    var reactor = move(reactorResult.value)
+    let originalRoots = contextRootCount()
+    let context = newVst3HostContext(addr reactor)
+    let host = context.hostApplicationPointer()
+    let runLoop = context.runLoopPointer()
+    let hostPointer = cast[pointer](host)
+    check host.lpVtbl.addRef(hostPointer) == 2'u32
+    check context.retire()
+    check context.hasRetainedObjects()
+    check contextRootCount() == originalRoots + 1
+    check reactor.close().isOk
+    var iid = parseVst3Uid(Vst3RunLoopIid)
+    require iid.isOk
+    var queried: pointer
+    check host.lpVtbl.queryInterface(hostPointer, addr iid.value,
+      addr queried) == Vst3NoInterface
+    check queried == nil
+    var timer = TimerHandler(references: 1, runLoop: runLoop)
+    timer.vtable = Vst3RunLoopTimerHandlerVtbl(
+      queryInterface: timerQuery, addRef: timerAddRef, release: timerRelease,
+      onTimer: timerCallback)
+    timer.iface.lpVtbl = addr timer.vtable
+    check runLoop.lpVtbl.registerTimer(cast[pointer](runLoop),
+      addr timer.iface, 1'u64) == Vst3ResultFalse
+    check timer.references == 1
+    check host.lpVtbl.release(hostPointer) == 1'u32
+    context.close()
+    check contextRootCount() == originalRoots
+
   test "run loop close requested from dispatch drains callback ownership":
     var driver = FakeDriver(nowValue: 10_000)
     var reactorResult = initMainReactor(driver)
