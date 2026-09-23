@@ -1024,7 +1024,7 @@ This table is updated only when work is reviewed.
 | V2B — VST3 headless processing | Approved | V2B review and continuation approval | Bounded float32 JACK slice, bus negotiation, parameter transport groundwork, live audio, and generated-C RT evidence accepted |
 | V3 — VST3 parameters/MIDI | Approved | V3 review | Bounded parameter queues, controller gestures, MIDI-1 mapping, complete SysEx, representable output conversion, live JACK evidence, and RT audits accepted |
 | V4A/V4B — VST3 state/reconfiguration | Approved | V4A, V4B1, and V4B2 reviews | Bounded state transactions, in-place native reconfiguration, and full component reload accepted |
-| V5A/V5B — VST3 GUI | In progress | V5A review | Editor ABI, stable frame ownership, X11 attachment, and synchronous resize accepted; protocol integration remains V5B |
+| V5A/V5B — VST3 GUI | Approved | V5A and V5B reviews | Editor ABI and stable frame ownership; embedded X11 controller, focus, content scale, synchronous resize, hide/show/recreate, and retained run-loop service accepted. V5B's four focused Xvfb cases, X11 GUI integration, ABI, and available regression suites passed. |
 | V6 — VST3 public cutover | Not started | — | Public `run`, complete regression matrix, and compatibility evidence |
 
 Allowed statuses: `Not started`, `In progress`, `Changes requested`, `Approved`, and `Deferred`.
@@ -1077,6 +1077,9 @@ This workstream is separate from the approved CLAP 0.1.0 increments. It does
 not change the historical approval rows or start the unreleased MVP increment.
 The VST3 scope amendment is accepted for implementation planning; each gate
 still requires its own owner review before the next gate begins.
+
+V5A and V5B are approved. The next review gate is V6 public cutover;
+VST3 `run` remains unavailable until that gate is implemented and reviewed.
 
 ### V0 — Scope and boundary
 

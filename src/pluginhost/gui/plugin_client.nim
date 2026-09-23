@@ -1,6 +1,6 @@
-## Main-thread-only capability used by GuiController for CLAP GUI calls.
+## Main-thread-only capability used by GuiController for native plugin GUI calls.
 ##
-## The concrete CLAP adapter owns the raw plugin pointer and converts every
+## The concrete format adapter owns its raw plugin pointer and converts every
 ## operation to bounded internal values before it reaches controller policy.
 
 import ../domain/[errors, result]
@@ -24,12 +24,18 @@ method isApiSupported*(client: GuiPluginClient; api: GuiWindowApi;
   false
 
 method create*(client: GuiPluginClient; api: GuiWindowApi;
-               floating: bool): Result[bool] {.base, raises: [].} =
+               floating: bool; host: GuiWindowHost): Result[bool] {.
+    base, raises: [].} =
   discard client
   discard api
   discard floating
-  failure[bool](pluginGuiError("CLAP GUI client does not support creation"))
+  discard host
+  failure[bool](pluginGuiError("plugin GUI client does not support creation"))
 
+method hasRetainedResources*(client: GuiPluginClient): bool {.
+    base, raises: [].} =
+  discard client
+  false
 method destroy*(client: GuiPluginClient): Result[Unit] {.base, raises: [].} =
   discard client
   failure[Unit](pluginGuiError("CLAP GUI client does not support destruction"))
@@ -91,4 +97,10 @@ method show*(client: GuiPluginClient): Result[bool] {.base, raises: [].} =
 
 method hide*(client: GuiPluginClient): Result[bool] {.base, raises: [].} =
   discard client
-  failure[bool](pluginGuiError("CLAP GUI client does not support hiding"))
+  failure[bool](pluginGuiError("plugin GUI client does not support hiding"))
+
+method focus*(client: GuiPluginClient; focused: bool): Result[bool] {.
+    base, raises: [].} =
+  discard client
+  discard focused
+  success(true)

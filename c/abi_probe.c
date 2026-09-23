@@ -440,6 +440,7 @@ uint64_t pluginhost_abi_size(int32_t type_id) {
       ABI_TYPE_CASE(303, XEvent);
       ABI_TYPE_CASE(304, XConfigureEvent);
       ABI_TYPE_CASE(305, XClientMessageEvent);
+      ABI_TYPE_CASE(306, XFocusChangeEvent);
       ABI_TYPE_CASE(307, DBusError);
       ABI_TYPE_CASE(308, DBusMessageIter);
       ABI_TYPE_CASE(309, DBusObjectPathVTable);
@@ -521,6 +522,7 @@ uint64_t pluginhost_abi_align(int32_t type_id) {
       ABI_ALIGN_CASE(303, XEvent);
       ABI_ALIGN_CASE(304, XConfigureEvent);
       ABI_ALIGN_CASE(305, XClientMessageEvent);
+      ABI_ALIGN_CASE(306, XFocusChangeEvent);
       ABI_ALIGN_CASE(307, DBusError);
       ABI_ALIGN_CASE(308, DBusMessageIter);
       ABI_ALIGN_CASE(309, DBusObjectPathVTable);
@@ -749,6 +751,7 @@ uint64_t pluginhost_abi_offset(int32_t field_id) {
       ABI_FIELD_CASE(305, 2, XClientMessageEvent, message_type);
       ABI_FIELD_CASE(305, 3, XClientMessageEvent, format);
       ABI_FIELD_CASE(305, 4, XClientMessageEvent, data);
+      ABI_FIELD_CASE(306, 1, XFocusChangeEvent, window);
       ABI_FIELD_CASE(307, 1, DBusError, name);
       ABI_FIELD_CASE(307, 2, DBusError, message);
       ABI_FIELD_CASE(307, 4, DBusError, padding1);

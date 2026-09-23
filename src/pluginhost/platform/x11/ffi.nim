@@ -10,14 +10,17 @@ const
   X11Library* = "libX11.so.6"
   X11ExposureMask* = 1'i64 shl 15
   X11StructureNotifyMask* = 1'i64 shl 17
+  X11FocusChangeMask* = 1'i64 shl 21
   X11DestroyNotify* = 17
   X11UnmapNotify* = 18
   X11MapNotify* = 19
+  X11FocusIn* = 9
+  X11FocusOut* = 10
   X11ConfigureNotify* = 22
   X11ClientMessage* = 33
-  X11PropModeReplace* = 0
   X11NetWmIconName* = "_NET_WM_ICON"
   X11CardinalName* = "CARDINAL"
+  X11PropModeReplace* = 0
 
 type
   XDisplay* = object
@@ -46,6 +49,15 @@ type
     borderWidth*: cint
     above*: XWindow
     overrideRedirect*: cint
+
+  XFocusChangeEvent* {.bycopy.} = object
+    eventType*: cint
+    serial*: culong
+    sendEvent*: cint
+    display*: ptr XDisplay
+    window*: XWindow
+    mode*: cint
+    detail*: cint
 
   XClientMessageEvent* {.bycopy.} = object
     eventType*: cint
@@ -76,6 +88,8 @@ type
     cdecl, gcsafe, raises: [].}
   X11ResizeWindowProc* = proc(display: ptr XDisplay; window: XWindow;
       width, height: cuint): cint {.cdecl, gcsafe, raises: [].}
+  X11SetInputFocusProc* = proc(display: ptr XDisplay; window: XWindow;
+      revertTo: cint; timestamp: culong): cint {.cdecl, gcsafe, raises: [].}
   X11StoreNameProc* = proc(display: ptr XDisplay; window: XWindow;
       name: cstring): cint {.cdecl, gcsafe, raises: [].}
   X11ChangePropertyProc* = proc(display: ptr XDisplay; window: XWindow;
@@ -104,6 +118,7 @@ type
     mapWindow*: X11MapWindowProc
     unmapWindow*: X11UnmapWindowProc
     resizeWindow*: X11ResizeWindowProc
+    setInputFocus*: X11SetInputFocusProc
     storeName*: X11StoreNameProc
     changeProperty*: X11ChangePropertyProc
     internAtom*: X11InternAtomProc

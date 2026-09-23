@@ -16,7 +16,6 @@ proc vst3AbiUidByte(index: int32): uint64 {.
 proc vst3LinuxResultValues(): uint64 {.
   importc: "pluginhost_vst3_linux_result_values", cdecl, gcsafe, raises: [].}
 
-
 proc vst3FieldId(typeId, fieldId: int32): int32 =
   typeId * 100 + fieldId
 
@@ -175,7 +174,10 @@ suite "VST3 raw ABI and module ownership":
     check uint64(alignof(Vst3IPlugViewVtbl)) == vst3AbiAlign(434)
     check uint64(sizeof(Vst3IPlugFrameVtbl)) == vst3AbiSize(435)
     check uint64(alignof(Vst3IPlugFrameVtbl)) == vst3AbiAlign(435)
-    check uint64(sizeof(Vst3Event)) == vst3AbiSize(427)
+    check uint64(sizeof(Vst3IPlugViewContentScaleSupportVtbl)) ==
+      vst3AbiSize(436)
+    check uint64(alignof(Vst3IPlugViewContentScaleSupportVtbl)) ==
+      vst3AbiAlign(436)
     check uint64(offsetOf(Vst3Event, payload)) ==
       vst3AbiOffset(vst3FieldId(427, 1))
     check uint64(sizeof(Vst3EventListVtbl)) == vst3AbiSize(428)
@@ -244,9 +246,14 @@ suite "VST3 raw ABI and module ownership":
       vst3AbiOffset(vst3FieldId(434, 15))
     check Vst3PlugViewIid == "5BC32507D06049EAA6151B522B755B29"
     check Vst3PlugFrameIid == "367FAF01AFA946938D4DA2A0ED0882A3"
+    check Vst3PlugViewContentScaleSupportIid ==
+      "65ED96908AC445258AADEF7A72EA703F"
     check Vst3PlatformTypeX11EmbedWindowID == "X11EmbedWindowID"
     check uint64(offsetOf(Vst3IPlugFrameVtbl, resizeView)) ==
       vst3AbiOffset(vst3FieldId(435, 4))
+    check uint64(offsetOf(Vst3IPlugViewContentScaleSupportVtbl,
+        setContentScaleFactor)) ==
+      vst3AbiOffset(vst3FieldId(436, 4))
     check uint64(sizeof(Vst3PlugInterfaceSupportVtbl)) == vst3AbiSize(421)
     check uint64(offsetOf(Vst3FactoryInfo, flags)) ==
       vst3AbiOffset(vst3FieldId(402, 4))

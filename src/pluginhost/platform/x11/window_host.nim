@@ -174,7 +174,8 @@ proc openX11WindowHost*(displayName: string = "";
     return failure[X11WindowHost](primary)
 
   let selected = api.functions.selectInput(
-    display, window, clong(X11ExposureMask or X11StructureNotifyMask))
+    display, window, clong(X11ExposureMask or X11StructureNotifyMask or
+      X11FocusChangeMask))
   if selected == 0:
     var primary = x11Error(
       "could not select X11 window events", pathDetail(displayName))
@@ -240,6 +241,25 @@ proc requireStatus(status: cint; operation: string): Result[Unit] =
   if status == 0:
     return failure[Unit](x11Error(
       "X11 window operation failed", "operation=" & operation))
+  success()
+proc focus*(host: var X11WindowHost): Result[Unit] =
+  var open = host.requireOpen("focus")
+  if not open.isOk:
+    return open
+  if host.api.functions.setInputFocus(host.display, host.window, 2, 0) == 0:
+    return failure[Unit](x11Error("could not focus the X11 window"))
+  if host.api.functions.flush(host.display) == 0:
+    return failure[Unit](x11Error("could not flush X11 focus request"))
+  success()
+proc blur*(host: var X11WindowHost): Result[Unit] =
+  var open = host.requireOpen("blur")
+  if not open.isOk:
+    return open
+  let root = host.api.functions.defaultRootWindow(host.display)
+  if root == 0 or host.api.functions.setInputFocus(host.display, root, 2, 0) == 0:
+    return failure[Unit](x11Error("could not blur the X11 window"))
+  if host.api.functions.flush(host.display) == 0:
+    return failure[Unit](x11Error("could not flush X11 blur request"))
   success()
 proc setIcon*(host: var X11WindowHost; icon: GuiIcon): Result[Unit] =
   var open = host.requireOpen("set-icon")
@@ -357,6 +377,16 @@ proc pollEvent*(host: var X11WindowHost): Result[WindowPollResult] =
         host.heightValue = uint32(configure.height)
       return success(WindowPollResult(available: true, event: WindowEvent(
         kind: wekConfigure, width: host.widthValue, height: host.heightValue)))
+  of X11FocusIn:
+    let focus = cast[ptr XFocusChangeEvent](addr raw)
+    if focus.window == host.window:
+      return success(WindowPollResult(available: true,
+        event: WindowEvent(kind: wekFocusIn)))
+  of X11FocusOut:
+    let focus = cast[ptr XFocusChangeEvent](addr raw)
+    if focus.window == host.window:
+      return success(WindowPollResult(available: true,
+        event: WindowEvent(kind: wekFocusOut)))
   of X11MapNotify:
     host.stateValue = whVisible
     return success(WindowPollResult(available: true, event: WindowEvent(kind: wekMap)))

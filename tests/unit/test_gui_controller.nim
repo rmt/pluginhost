@@ -23,6 +23,7 @@ type
     adjustReturns: bool
     adjustedSize: GuiSize
     scaleCount: int
+    focusCount: int
     rejectHide: bool
 
   FakeWindowBackend = ref object of WindowHostBackend
@@ -54,9 +55,11 @@ method isApiSupported*(client: FakeGuiClient; api: GuiWindowApi;
   if floating: client.floating else: client.embedded
 
 method create*(client: FakeGuiClient; api: GuiWindowApi;
-               floating: bool): Result[bool] {.raises: [].} =
+               floating: bool; host: GuiWindowHost): Result[bool] {.
+    raises: [].} =
   discard api
   discard floating
+  discard host
   inc client.createCount
   success(true)
 
@@ -121,6 +124,12 @@ method hide*(client: FakeGuiClient): Result[bool] {.raises: [].} =
   inc client.hideCount
   if client.rejectHide:
     return success(false)
+  success(true)
+
+method focus*(client: FakeGuiClient; focused: bool): Result[bool] {.
+    raises: [].} =
+  discard focused
+  inc client.focusCount
   success(true)
 
 proc newFakeWindow(): FakeWindowBackend =
@@ -356,6 +365,26 @@ suite "GUI controller policy and lifecycle":
     check plugin.sizeValue == GuiSize(width: 512, height: 384)
     check produced.resizeCount == initialResizeCount
     check controller.size == GuiSize(width: 512, height: 384)
+
+  test "focus events are delivered without recreating the editor":
+    var reactor = openTestReactor()
+    var plugin = newFakeGui()
+    var produced: FakeWindowBackend
+    let factory: WindowHostFactory = proc(): WindowHostBackend =
+      produced = newFakeWindow()
+      produced
+    var controller = newGuiController(plugin, addr reactor, factory, "focus")
+    defer:
+      check controller.close().isOk
+      check reactor.close().isOk
+
+    check controller.start(false).isOk
+    dispatchWindowEvent(reactor, controller, produced,
+      WindowEvent(kind: wekFocusIn))
+    dispatchWindowEvent(reactor, controller, produced,
+      WindowEvent(kind: wekFocusOut))
+    check plugin.focusCount == 2
+    check plugin.createCount == 1
 
   test "plugin-owned GUI destruction releases the host surface without double destroy":
     var reactor = openTestReactor()

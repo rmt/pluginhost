@@ -5,7 +5,7 @@
 ## generic GuiController policy.  Every operation is synchronous and must run
 ## on the instance's recorded main thread.
 
-import std/posix
+import std/[math, posix]
 
 import ../domain/[errors, result]
 import ./[ffi, uid]
@@ -45,6 +45,7 @@ type
     attached: bool
     frameInstalled: bool
     viewReleased: bool
+    contentScaleSupport: ptr Vst3IPlugViewContentScaleSupport
     closePending: bool
     closed: bool
 
@@ -235,6 +236,17 @@ proc releaseView(editor: ptr Vst3EditorState) {.raises: [].} =
       discard editor.view.lpVtbl.release(cast[pointer](editor.view))
     editor.viewReleased = true
     editor.view = nil
+proc releaseContentScaleSupport(editor: ptr Vst3EditorState): Result[Unit] =
+  if editor == nil or editor.contentScaleSupport == nil:
+    return success()
+  let support = editor.contentScaleSupport
+  if support.lpVtbl == nil or support.lpVtbl.release == nil:
+    return failure[Unit](editorError(hekVst3Descriptor,
+      "VST3 content-scale interface remains unreleasable"))
+  discard support.lpVtbl.release(cast[pointer](support))
+  editor.contentScaleSupport = nil
+  success()
+
 
 proc releaseFrameOwner(editor: ptr Vst3EditorState) {.raises: [].} =
   if editor == nil or editor.frameOwnerReleased:
@@ -271,6 +283,9 @@ proc close*(editor: Vst3Editor): Result[Unit] =
       "VST3 editor close requires the instance main thread"))
   if editor.closed:
     return success()
+  var scaleReleased = releaseContentScaleSupport(addr editor[])
+  if not scaleReleased.isOk:
+    return scaleReleased
 
   if editor.view != nil and not editor.viewReleased:
     let vtable = editor.view.lpVtbl
@@ -562,3 +577,69 @@ proc canResize*(editor: Vst3Editor): Result[bool] =
 proc checkSizeConstraint*(editor: Vst3Editor;
                           rect: var Vst3ViewRect): Result[Unit] =
   editorCheckSizeConstraint(editor, rect)
+
+proc setContentScale*(editor: Vst3Editor; scale: float64): Result[bool] =
+  var ready = requireMain(editor, "set_content_scale")
+  if not ready.isOk:
+    return failure[bool](move(ready.error))
+  if classify(scale) in {fcNan, fcInf, fcNegInf} or scale <= 0.0:
+    return failure[bool](editorError(hekVst3Unavailable,
+      "VST3 editor content scale is not a finite positive value",
+      "scale=" & $scale))
+  if editor.view == nil or editor.view.lpVtbl == nil or
+      editor.view.lpVtbl.queryInterface == nil:
+    return success(false)
+  if editor.contentScaleSupport != nil:
+    return failure[bool](editorError(hekVst3Descriptor,
+      "VST3 content-scale interface is still retained"))
+  var iid = parseVst3Uid(Vst3PlugViewContentScaleSupportIid)
+  if not iid.isOk:
+    return failure[bool](move(iid.error))
+  var output: pointer = nil
+  let queried = editor.view.lpVtbl.queryInterface(
+    cast[pointer](editor.view), addr iid.value, addr output)
+  if queried == Vst3NoInterface or queried == Vst3ResultFalse or
+      queried == Vst3NotImplemented:
+    return success(false)
+  if queried != Vst3ResultOk or output == nil:
+    return failure[bool](editorError(hekVst3Unavailable,
+      "VST3 editor content-scale query failed", "result=" & $queried))
+  let support = cast[ptr Vst3IPlugViewContentScaleSupport](output)
+  if support.lpVtbl == nil or support.lpVtbl.release == nil:
+    editor.contentScaleSupport = support
+    return failure[bool](editorError(hekVst3Descriptor,
+      "VST3 content-scale interface has no release callback"))
+  let converted = cfloat(scale)
+  if classify(converted) in {fcNan, fcInf, fcNegInf} or converted <= 0.0:
+    discard support.lpVtbl.release(output)
+    return failure[bool](editorError(hekVst3Unavailable,
+      "VST3 editor content scale is not representable",
+      "scale=" & $scale))
+  var supported = false
+  if support.lpVtbl.setContentScaleFactor != nil:
+    let applied = support.lpVtbl.setContentScaleFactor(output, converted)
+    if applied == Vst3ResultOk:
+      supported = true
+    elif applied != Vst3ResultFalse and applied != Vst3NotImplemented:
+      discard support.lpVtbl.release(output)
+      return failure[bool](editorError(hekVst3Unavailable,
+        "VST3 editor rejected content scale",
+        "result=" & $applied))
+  discard support.lpVtbl.release(output)
+  success(supported)
+
+proc focus*(editor: Vst3Editor; focused: bool): Result[bool] =
+  var ready = requireMain(editor, "focus")
+  if not ready.isOk:
+    return failure[bool](move(ready.error))
+  if editor.view == nil or editor.view.lpVtbl == nil or
+      editor.view.lpVtbl.onFocus == nil:
+    return success(false)
+  let code = editor.view.lpVtbl.onFocus(cast[pointer](editor.view),
+    if focused: Vst3TBool(1) else: Vst3TBool(0))
+  if code == Vst3ResultOk:
+    return success(true)
+  if code == Vst3ResultFalse or code == Vst3NotImplemented:
+    return success(false)
+  failure[bool](editorError(hekVst3Unavailable,
+    "VST3 editor focus notification failed", "result=" & $code))

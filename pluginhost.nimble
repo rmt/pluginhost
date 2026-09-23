@@ -666,6 +666,26 @@ proc compileVst3V5aFixture() =
        "tests/fixtures/vst3/v5a_fixture.cpp -o " &
        "build/fixtures/vst3/v5a.vst3/Contents/x86_64-linux/v5a.so"
 
+proc compileVst3V5bFixture() =
+  exec "mkdir -p build/fixtures/vst3/v5b.vst3/Contents/x86_64-linux"
+  exec "c++ -std=c++17 -fPIC -shared -fvisibility=hidden " &
+       "-Wall -Wextra -Werror -Ivendor " &
+       "tests/fixtures/vst3/v5b_fixture.cpp -o " &
+       "build/fixtures/vst3/v5b.vst3/Contents/x86_64-linux/v5b.so"
+
+proc runVst3V5bTests() =
+  compileVst3V5bFixture()
+  exec "mkdir -p build/nimcache/vst3-v5b build/test"
+  exec "command -v Xvfb >/dev/null 2>&1 || { " &
+       "echo 'Xvfb is required for VST3 V5B tests' >&2; exit 1; }"
+  exec "command -v xvfb-run >/dev/null 2>&1 || { " &
+       "echo 'xvfb-run is required for VST3 V5B tests' >&2; exit 1; }"
+  exec "PLUGINHOST_VST3_V5B_FIXTURE_DIR=$PWD/build/fixtures/vst3 " &
+       "xvfb-run -a -s '-screen 0 1024x768x24 -extension GLX -nolisten tcp' " &
+       "nim c -r --hints:off --path:src --path:tests " &
+       dependencyPathsClause() & " --nimcache:build/nimcache/vst3-v5b " &
+       "--out:build/test/test_vst3_v5b tests/fixtures/test_vst3_v5b.nim"
+
 proc runVst3V5aTests() =
   compileVst3V5aFixture()
   exec "mkdir -p build/nimcache/vst3-v5a build/test"
@@ -861,6 +881,8 @@ task testVst3V5a, "Run private VST3 V5A editor ownership checks":
   runVst3V5aTests()
 task testVst3Audio, "Run the bounded private VST3 float32 audio checks":
   runVst3AudioTests()
+task testVst3V5b, "Run private VST3 V5B editor protocol checks under Xvfb":
+  runVst3V5bTests()
 task testVst3V4a, "Run bounded VST3 preset and stream transaction checks":
   runVst3V4aTests()
 task testVst3V4b, "Run private VST3 native reconfiguration checks":
@@ -911,6 +933,7 @@ task all, "Run compile checks, build the executable, and run tests":
   runVst3V4bTests()
   runVst3V4b2Tests()
   runVst3V5aTests()
+  runVst3V5bTests()
   runUnitTests()
   runAbiTests()
   runVst3AbiTests()

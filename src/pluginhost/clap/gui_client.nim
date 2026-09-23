@@ -33,11 +33,12 @@ method isApiSupported*(client: ClapGuiClient; api: GuiWindowApi;
   supported.isOk and supported.value
 
 method create*(client: ClapGuiClient; api: GuiWindowApi;
-               floating: bool): Result[bool] {.raises: [].} =
+               floating: bool; host: GuiWindowHost): Result[bool] {.
+    raises: [].} =
+  discard host
   if client.instance == nil:
     return failure[bool](pluginGuiError("CLAP GUI client has no instance"))
   client.instance[].guiCreate(api.apiName, floating)
-
 method destroy*(client: ClapGuiClient): Result[Unit] {.raises: [].} =
   if client.instance == nil:
     return failure[Unit](pluginGuiError("CLAP GUI client has no instance"))
@@ -105,3 +106,11 @@ method hide*(client: ClapGuiClient): Result[bool] {.raises: [].} =
   if client.instance == nil:
     return failure[bool](pluginGuiError("CLAP GUI client has no instance"))
   client.instance[].guiHide()
+
+method focus*(client: ClapGuiClient; focused: bool): Result[bool] {.
+    raises: [].} =
+  discard focused
+  if client.instance == nil:
+    return failure[bool](pluginGuiError("CLAP GUI client has no instance"))
+  # CLAP has no host focus callback in the capability used by this adapter.
+  success(true)

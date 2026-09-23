@@ -11,6 +11,8 @@ suite "X11 ABI":
     check uint64(alignof(XConfigureEvent)) == abiAlign(304)
     check uint64(sizeof(XClientMessageEvent)) == abiSize(305)
     check uint64(alignof(XClientMessageEvent)) == abiAlign(305)
+    check uint64(sizeof(XFocusChangeEvent)) == abiSize(306)
+    check uint64(alignof(XFocusChangeEvent)) == abiAlign(306)
     check uint64(offsetOf(XConfigureEvent, window)) ==
       abiOffset(abiFieldId(304, 1))
     check uint64(offsetOf(XConfigureEvent, width)) ==
@@ -25,6 +27,8 @@ suite "X11 ABI":
       abiOffset(abiFieldId(305, 3))
     check uint64(offsetOf(XClientMessageEvent, data)) ==
       abiOffset(abiFieldId(305, 4))
+    check uint64(offsetOf(XFocusChangeEvent, window)) ==
+      abiOffset(abiFieldId(306, 1))
 
   test "all X11 procedure aliases are pointer-sized C values":
     check sizeof(X11OpenDisplayProc) == sizeof(pointer)

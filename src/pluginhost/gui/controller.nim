@@ -58,6 +58,22 @@ proc addCleanupDetail(primary: var HostError; cleanup: Result[Unit]) =
     if cleanup.error.context.len > 0:
       primary.context.add(" (" & cleanup.error.context & ")")
 
+proc hostResizeCallback(context: pointer; width, height: uint32): bool {.
+    cdecl, raises: [].} =
+  let controller = cast[GuiController](context)
+  if controller == nil or controller.window == nil or
+      controller.stateValue == gcsClosed or
+      width == 0'u32 or height == 0'u32 or
+      width > uint32(high(int32)) or height > uint32(high(int32)):
+    return false
+  let resized = controller.window.resize(width, height)
+  if not resized.isOk:
+    return false
+  controller.sizeValue = GuiSize(width: width, height: height)
+  controller.pendingHostSize = controller.sizeValue
+  controller.hasPendingHostSize = true
+  true
+
 proc newGuiController*(plugin: GuiPluginClient; reactor: ptr MainReactor;
                        factory: WindowHostFactory; title: string;
                        scale = none(float64); disabled = false;
@@ -105,7 +121,7 @@ proc cleanupSurface(controller: GuiController;
 
   var first: HostError
   var failed = false
-
+  var retainSurface = false
   if controller.pluginCreated:
     # An embedded parent unmap remains authoritative if the plugin declines
     # the advisory hide call during final cleanup.
@@ -115,10 +131,12 @@ proc cleanupSurface(controller: GuiController;
         first = move(hidden.error)
         failed = true
       elif not hidden.value and controller.modeValue != gmEmbedded:
-        first = controllerError("CLAP plugin rejected GUI hide during cleanup")
+        first = controllerError("plugin rejected GUI hide during cleanup")
         failed = true
     var destroyed = controller.plugin.destroy()
     if not destroyed.isOk:
+      if controller.plugin.hasRetainedResources():
+        retainSurface = true
       if not failed:
         first = move(destroyed.error)
         failed = true
@@ -127,7 +145,7 @@ proc cleanupSurface(controller: GuiController;
     else:
       controller.pluginCreated = false
 
-  if controller.tokenRegistered:
+  if controller.tokenRegistered and not retainSurface:
     if controller.reactor == nil:
       if not failed:
         first = controllerError("GUI reactor registration has no owner")
@@ -145,7 +163,7 @@ proc cleanupSurface(controller: GuiController;
 
   # Do not close an X connection while its descriptor remains registered. A
   # later retry can remove the stale registration before releasing the window.
-  if not controller.tokenRegistered and controller.window != nil:
+  if not retainSurface and not controller.tokenRegistered and controller.window != nil:
     var closed = controller.window.close()
     if not closed.isOk:
       if not failed:
@@ -191,7 +209,7 @@ proc ensureCreated*(controller: GuiController): Result[Unit] =
   if controller.plugin == nil or not controller.plugin.available:
     controller.stateValue = gcsUnavailable
     return failure[Unit](controllerError(
-      "CLAP plugin does not provide a usable GUI extension"))
+      "plugin does not provide a usable GUI extension"))
   if controller.reactor == nil or controller.factory == nil:
     controller.stateValue = gcsUnavailable
     return failure[Unit](controllerError(
@@ -203,7 +221,7 @@ proc ensureCreated*(controller: GuiController): Result[Unit] =
   if not embedded and not floating:
     controller.stateValue = gcsUnavailable
     return failure[Unit](controllerError(
-      "CLAP plugin supports neither embedded nor floating X11 GUI hosting"))
+      "plugin supports neither embedded nor floating X11 GUI hosting"))
 
   controller.modeValue = if embedded: gmEmbedded else: gmFloating
   controller.window = controller.factory()
@@ -236,13 +254,20 @@ proc ensureCreated*(controller: GuiController): Result[Unit] =
     return failure[Unit](move(primary))
   controller.token = registered.value
   controller.tokenRegistered = true
-
-  var created = controller.plugin.create(gwaX11, not embedded)
+  let host = GuiWindowHost(
+    handle: controller.window.handle,
+    resizeContext: cast[pointer](controller),
+    resize: hostResizeCallback)
+  var created = controller.plugin.create(gwaX11, not embedded, host)
   if not created.isOk:
+    if controller.plugin.hasRetainedResources():
+      controller.pluginCreated = true
     return controller.failCreation(move(created.error))
   if not created.value:
+    if controller.plugin.hasRetainedResources():
+      controller.pluginCreated = true
     return controller.failCreation(controllerError(
-      "CLAP plugin rejected GUI creation", "api=x11; floating=" & $(not embedded)))
+      "plugin rejected GUI creation", "api=x11; floating=" & $(not embedded)))
   controller.pluginCreated = true
 
   if embedded:
@@ -272,7 +297,7 @@ proc ensureCreated*(controller: GuiController): Result[Unit] =
       return controller.failCreation(move(reportedSize.error))
     if not validateSize(reportedSize.value):
       return controller.failCreation(controllerError(
-        "CLAP plugin reported an invalid GUI size"))
+        "plugin reported an invalid GUI size"))
     var resized = controller.window.resize(
       reportedSize.value.width, reportedSize.value.height)
     if not resized.isOk:
@@ -286,14 +311,14 @@ proc ensureCreated*(controller: GuiController): Result[Unit] =
       return controller.failCreation(move(parent.error))
     if not parent.value:
       return controller.failCreation(controllerError(
-        "CLAP plugin rejected the X11 parent window"))
+        "plugin rejected the X11 parent window"))
   else:
     var transient = controller.plugin.setTransient(controller.window.handle)
     if not transient.isOk:
       return controller.failCreation(move(transient.error))
     if not transient.value:
       return controller.failCreation(controllerError(
-        "CLAP plugin rejected the X11 transient window"))
+        "plugin rejected the X11 transient window"))
     var title = controller.plugin.suggestTitle(controller.titleValue)
     if not title.isOk:
       return controller.failCreation(move(title.error))
@@ -332,7 +357,7 @@ proc show*(controller: GuiController): Result[Unit] =
       addCleanupDetail(shown.error, hidden)
     return failure[Unit](move(shown.error))
   if not shown.value:
-    var rejected = controllerError("CLAP plugin rejected GUI show")
+    var rejected = controllerError("plugin rejected GUI show")
     if controller.modeValue == gmEmbedded:
       let hidden = controller.window.hide()
       addCleanupDetail(rejected, hidden)
@@ -356,7 +381,7 @@ proc hide*(controller: GuiController): Result[Unit] =
     first = move(hidden.error)
     failed = true
   elif not hidden.value and controller.modeValue != gmEmbedded:
-    first = controllerError("CLAP plugin rejected GUI hide")
+    first = controllerError("plugin rejected GUI hide")
     failed = true
   if controller.modeValue == gmEmbedded:
     var unmapped = controller.window.hide()
@@ -515,13 +540,18 @@ proc handleWindowEvents*(controller: GuiController;
           return failure[Unit](move(accepted.error))
         if not accepted.value:
           return failure[Unit](controllerError(
-            "CLAP plugin rejected the host-requested GUI size"))
+            "plugin rejected the host-requested GUI size"))
     of wekMap:
       if controller.stateValue != gcsHidden:
         controller.stateValue = gcsVisible
     of wekUnmap:
       if controller.stateValue == gcsVisible:
         controller.stateValue = gcsHidden
+    of wekFocusIn, wekFocusOut:
+      var focused = controller.plugin.focus(
+        polled.value.event.kind == wekFocusIn)
+      if not focused.isOk:
+        return failure[Unit](move(focused.error))
     else:
       discard
   success()

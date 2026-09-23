@@ -86,6 +86,7 @@ proc openX11Api*(path = X11Library): Result[X11Api] =
   resolveRequired(mapWindow, X11MapWindowProc, "XMapWindow")
   resolveRequired(unmapWindow, X11UnmapWindowProc, "XUnmapWindow")
   resolveRequired(resizeWindow, X11ResizeWindowProc, "XResizeWindow")
+  resolveRequired(setInputFocus, X11SetInputFocusProc, "XSetInputFocus")
   resolveRequired(storeName, X11StoreNameProc, "XStoreName")
   resolveRequired(changeProperty, X11ChangePropertyProc, "XChangeProperty")
   resolveRequired(internAtom, X11InternAtomProc, "XInternAtom")

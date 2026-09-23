@@ -1109,6 +1109,11 @@ proc componentPointer*(instance: Vst3Instance): ptr Vst3Component {.inline.} =
 proc controllerPointer*(instance: Vst3Instance): ptr Vst3EditController {.inline.} =
   if instance == nil: nil else: instance.controller
 
+proc isOpen*(instance: Vst3Instance): bool {.inline.} =
+  instance != nil and not instance.closed and
+    instance.closingState.loadAcquire() == 0'u32 and
+    instance.controller != nil
+
 proc processorPointer*(instance: Vst3Instance): ptr Vst3AudioProcessor {.inline.} =
   if instance == nil: nil else: instance.processor
 proc componentHandlerPointer*(instance: Vst3Instance): ptr Vst3ComponentHandler {.inline.} =

@@ -11,6 +11,17 @@ type
     api*: GuiWindowApi
     id*: uint64
 
+  ## Borrowed capability passed to a plugin GUI while the host window is open.
+  ## The callback is synchronous: a VST3 frame resize must complete the native
+  ## resize before returning to the plugin's callback stack.
+  GuiWindowResizeProc* = proc(context: pointer; width, height: uint32): bool {.
+    cdecl, raises: [].}
+
+  GuiWindowHost* = object
+    handle*: GuiWindowHandle
+    resizeContext*: pointer
+    resize*: GuiWindowResizeProc
+
   GuiResizeHints* = object
     canResizeHorizontally*: bool
     canResizeVertically*: bool
@@ -33,6 +44,8 @@ type
     wekConfigure
     wekMap
     wekUnmap
+    wekFocusIn
+    wekFocusOut
 
   WindowEvent* = object
     kind*: WindowEventKind

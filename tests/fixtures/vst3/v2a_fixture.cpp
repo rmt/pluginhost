@@ -318,6 +318,148 @@ class ControllerPointView : public IConnectionPoint {
   }
 };
 
+#if defined(PLUGINHOST_VST3_V5B_FIXTURE)
+struct V5bPlugFrame : FUnknown {
+  virtual tresult resizeView(void*, void*) = 0;
+};
+struct V5bScaleSupport : FUnknown {
+  virtual tresult setContentScaleFactor(float) = 0;
+};
+struct V5bView : FUnknown {
+  virtual tresult isPlatformTypeSupported(FIDString) = 0;
+  virtual tresult attached(void*, FIDString) = 0;
+  virtual tresult removed() = 0;
+  virtual tresult onWheel(float) = 0;
+  virtual tresult onKeyDown(TChar, std::int16_t, std::int16_t) = 0;
+  virtual tresult onKeyUp(TChar, std::int16_t, std::int16_t) = 0;
+  virtual tresult getSize(void*) = 0;
+  virtual tresult onSize(void*) = 0;
+  virtual tresult onFocus(TBool) = 0;
+  virtual tresult setFrame(V5bPlugFrame*) = 0;
+  virtual tresult canResize() = 0;
+  virtual tresult checkSizeConstraint(void*) = 0;
+};
+static const std::uint8_t kScaleSupportIid[16] = {
+  0x65, 0xED, 0x96, 0x90, 0x8A, 0xC4, 0x45, 0x25,
+  0x8A, 0xAD, 0xEF, 0x7A, 0x72, 0xEA, 0x70, 0x3F};
+struct V5bRect { std::int32_t left, top, right, bottom; };
+static std::uint32_t g_v5b_attached = 0;
+static std::uint32_t g_v5b_removed = 0;
+static std::uint32_t g_v5b_focus = 0;
+static std::uint32_t g_v5b_scale_calls = 0;
+static std::uint32_t g_v5b_scale_refs = 1;
+static float g_v5b_scale = 1.0f;
+static bool g_v5b_fail_attach = false;
+static bool g_v5b_no_scale = false;
+static bool g_v5b_malformed_scale = false;
+static std::uint32_t g_v5b_on_size = 0;
+static bool g_v5b_host_resize_seen = false;
+static bool g_v5b_resize_order_bad = false;
+static bool g_v5b_hold_frame = false;
+static V5bPlugFrame* g_v5b_frame = nullptr;
+using V5bRawRelease = std::uint32_t (*)(void*);
+struct V5bRawScaleVtbl {
+  void* queryInterface;
+  void* addRef;
+  V5bRawRelease release;
+  void* setContentScaleFactor;
+};
+struct V5bRawScale { V5bRawScaleVtbl* lpVtbl; };
+static std::uint32_t v5bBadRelease(void*) {
+  return g_v5b_scale_refs > 0 ? --g_v5b_scale_refs : 0;
+}
+static V5bRawScaleVtbl g_v5b_bad_scale_vtbl{nullptr, nullptr, nullptr, nullptr};
+static V5bRawScale g_v5b_bad_scale{&g_v5b_bad_scale_vtbl};
+static V5bRect g_v5b_size{0, 0, 640, 480};
+
+class V5bScale final : public V5bScaleSupport {
+ public:
+  tresult queryInterface(const TUID iid, void** object) override {
+    if (!object) return 2;
+    *object = nullptr;
+    if (same(iid, kFUnknownIid) || same(iid, kScaleSupportIid)) *object = this;
+    if (!*object) return -1;
+    addRef();
+    return 0;
+  }
+  std::uint32_t addRef() override { return ++g_v5b_scale_refs; }
+  std::uint32_t release() override {
+    return g_v5b_scale_refs > 0 ? --g_v5b_scale_refs : 0;
+  }
+  tresult setContentScaleFactor(float value) override {
+    g_v5b_scale = value; ++g_v5b_scale_calls; return 0;
+  }
+};
+static V5bScale g_v5b_scale_support;
+class V5bEditorView final : public V5bView {
+ public:
+  tresult queryInterface(const TUID iid, void** object) override {
+    if (!object) return 2;
+    *object = nullptr;
+    if (same(iid, kFUnknownIid)) *object = this;
+    else if (!g_v5b_no_scale && same(iid, kScaleSupportIid)) {
+      *object = g_v5b_malformed_scale
+        ? static_cast<void*>(&g_v5b_bad_scale)
+        : static_cast<void*>(static_cast<V5bScaleSupport*>(&g_v5b_scale_support));
+    }
+    if (!*object) return -1;
+    if (same(iid, kScaleSupportIid)) ++g_v5b_scale_refs;
+    else addRef();
+    return 0;
+  }
+  std::uint32_t addRef() override { return ++view_refs_; }
+  std::uint32_t release() override {
+    return view_refs_ > 0 ? --view_refs_ : 0;
+  }
+  tresult isPlatformTypeSupported(FIDString type) override {
+    return type && std::strcmp(type, "X11EmbedWindowID") == 0 ? 0 : 1;
+  }
+  tresult attached(void* parent, FIDString type) override {
+    if (!parent || !type || g_v5b_fail_attach) return 1;
+    ++g_v5b_attached; return 0;
+  }
+  tresult removed() override { ++g_v5b_removed; return 0; }
+  tresult onWheel(float) override { return 0; }
+  tresult onKeyDown(TChar, std::int16_t, std::int16_t) override { return 0; }
+  tresult onKeyUp(TChar, std::int16_t, std::int16_t) override { return 0; }
+  tresult getSize(void* size) override {
+    if (!size) return 2;
+    *static_cast<V5bRect*>(size) = g_v5b_size;
+    return 0;
+  }
+  tresult onSize(void* size) override {
+    if (!size) return 2;
+    if (!g_v5b_host_resize_seen) g_v5b_resize_order_bad = true;
+    g_v5b_size = *static_cast<V5bRect*>(size); ++g_v5b_on_size; return 0;
+  }
+  tresult onFocus(TBool) override { ++g_v5b_focus; return 0; }
+  tresult setFrame(V5bPlugFrame* frame) override {
+    if (!frame) {
+      if (g_v5b_hold_frame) return 0;
+      if (g_v5b_frame) g_v5b_frame->release();
+      g_v5b_frame = nullptr; return 0;
+    }
+    g_v5b_frame = frame; g_v5b_frame->addRef(); return 0;
+  }
+  tresult canResize() override { return 0; }
+  tresult checkSizeConstraint(void* size) override {
+    if (!size) return 2;
+    auto* rect = static_cast<V5bRect*>(size);
+    auto width = rect->right - rect->left;
+    auto height = rect->bottom - rect->top;
+    if (width < 320) width = 320;
+    if (height < 240) height = 240;
+    if (width & 1) ++width;
+    if (height & 1) ++height;
+    rect->right = rect->left + width; rect->bottom = rect->top + height;
+    return 0;
+  }
+ private:
+  std::uint32_t view_refs_ = 1;
+};
+static V5bEditorView g_v5b_view;
+#endif
+
 class FixtureObject final : public ComponentView, public ProcessorView,
                             public CombinedControllerView, public ComponentPointView {
  public:
@@ -551,7 +693,13 @@ class FixtureObject final : public ComponentView, public ProcessorView,
     }
 #endif
   }
-  void* createView(FIDString) override { return nullptr; }
+  void* createView(FIDString) override {
+#if defined(PLUGINHOST_VST3_V5B_FIXTURE)
+    return static_cast<void*>(static_cast<V5bView*>(&g_v5b_view));
+#else
+    return nullptr;
+#endif
+  }
   tresult connect(IConnectionPoint* other) override {
     if (!other) return 2;
 #if PLUGINHOST_VST3_V2A_MODE == 3
@@ -789,3 +937,70 @@ extern "C" __attribute__((visibility("default"))) void pluginhost_vst3_v2a_relea
   g_combined.releaseRetained();
   g_controller.releaseRetained();
 }
+#if defined(PLUGINHOST_VST3_V5B_FIXTURE)
+extern "C" __attribute__((visibility("default")))
+IEditController* pluginhost_vst3_v5b_controller() {
+  return static_cast<IEditController*>(&g_combined);
+}
+extern "C" __attribute__((visibility("default")))
+void pluginhost_vst3_v5b_reset() {
+  g_v5b_attached = g_v5b_removed = g_v5b_focus = g_v5b_scale_calls = 0;
+  g_v5b_scale_refs = 1; g_v5b_scale = 1.0f; g_v5b_on_size = 0;
+  g_v5b_fail_attach = false; g_v5b_no_scale = false;
+  g_v5b_malformed_scale = false; g_v5b_bad_scale_vtbl.release = v5bBadRelease;
+  g_v5b_hold_frame = false; g_v5b_frame = nullptr;
+  g_v5b_size = V5bRect{0, 0, 640, 480};
+}
+extern "C" __attribute__((visibility("default")))
+void pluginhost_vst3_v5b_set_fail_attach(std::int32_t v) {
+  g_v5b_fail_attach = v != 0;
+}
+extern "C" __attribute__((visibility("default")))
+void pluginhost_vst3_v5b_set_malformed_scale(std::int32_t v) {
+  g_v5b_malformed_scale = v != 0;
+  g_v5b_bad_scale_vtbl.release = v ? nullptr : v5bBadRelease;
+}
+extern "C" __attribute__((visibility("default")))
+void pluginhost_vst3_v5b_set_no_scale(std::int32_t v) {
+  g_v5b_no_scale = v != 0;
+}
+extern "C" __attribute__((visibility("default")))
+void pluginhost_vst3_v5b_set_hold_frame(std::int32_t v) {
+  g_v5b_hold_frame = v != 0;
+}
+extern "C" __attribute__((visibility("default")))
+void pluginhost_vst3_v5b_release_frame() {
+  g_v5b_hold_frame = false;
+  if (g_v5b_frame) {
+    g_v5b_frame->release();
+    g_v5b_frame = nullptr;
+  }
+}
+extern "C" __attribute__((visibility("default")))
+void pluginhost_vst3_v5b_mark_host_resize() { g_v5b_host_resize_seen = true; }
+extern "C" __attribute__((visibility("default")))
+tresult pluginhost_vst3_v5b_request_resize(std::int32_t width, std::int32_t height) {
+  if (!g_v5b_frame) return 1;
+  V5bRect rect{0, 0, width, height};
+  g_v5b_host_resize_seen = false;
+  return g_v5b_frame->resizeView(&g_v5b_view, &rect);
+}
+extern "C" __attribute__((visibility("default")))
+std::uint32_t pluginhost_vst3_v5b_attached() { return g_v5b_attached; }
+extern "C" __attribute__((visibility("default")))
+std::uint32_t pluginhost_vst3_v5b_removed() { return g_v5b_removed; }
+extern "C" __attribute__((visibility("default")))
+std::uint32_t pluginhost_vst3_v5b_focus_calls() { return g_v5b_focus; }
+extern "C" __attribute__((visibility("default")))
+std::uint32_t pluginhost_vst3_v5b_scale_calls() { return g_v5b_scale_calls; }
+extern "C" __attribute__((visibility("default")))
+std::uint32_t pluginhost_vst3_v5b_scale_refs() { return g_v5b_scale_refs; }
+extern "C" __attribute__((visibility("default")))
+float pluginhost_vst3_v5b_scale() { return g_v5b_scale; }
+extern "C" __attribute__((visibility("default")))
+std::uint32_t pluginhost_vst3_v5b_on_size_calls() { return g_v5b_on_size; }
+extern "C" __attribute__((visibility("default")))
+std::uint32_t pluginhost_vst3_v5b_resize_order_bad() {
+  return g_v5b_resize_order_bad ? 1U : 0U;
+}
+#endif

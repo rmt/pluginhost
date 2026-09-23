@@ -60,3 +60,7 @@ method width*(backend: X11WindowBackend): uint32 {.raises: [].} =
 
 method height*(backend: X11WindowBackend): uint32 {.raises: [].} =
   backend.host.height
+proc focus*(backend: X11WindowBackend): Result[Unit] =
+  backend.host.focus()
+proc blur*(backend: X11WindowBackend): Result[Unit] =
+  backend.host.blur()

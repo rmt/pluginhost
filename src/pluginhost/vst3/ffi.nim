@@ -28,6 +28,8 @@ const
   Vst3Factory3Iid* = "4555A2ABC1234E579B12291036878931"
   Vst3PlugViewIid* = "5BC32507D06049EAA6151B522B755B29"
   Vst3PlugFrameIid* = "367FAF01AFA946938D4DA2A0ED0882A3"
+  Vst3PlugViewContentScaleSupportIid* =
+    "65ED96908AC445258AADEF7A72EA703F"
   Vst3PlatformTypeX11EmbedWindowID* = "X11EmbedWindowID"
 
   Vst3MediaAudio* = 0'i32
@@ -399,6 +401,18 @@ type
   Vst3IPlugView* {.bycopy.} = object
     lpVtbl*: ptr Vst3IPlugViewVtbl
 
+  Vst3IPlugViewContentScaleSupportVtbl* {.bycopy.} = object
+    queryInterface*: proc(thisInterface: pointer; iid: ptr Vst3Tuid;
+                          obj: ptr pointer): int32 {.cdecl, raises: [].}
+    addRef*: proc(thisInterface: pointer): uint32 {.cdecl, raises: [].}
+    release*: proc(thisInterface: pointer): uint32 {.cdecl, raises: [].}
+    setContentScaleFactor*: proc(thisInterface: pointer;
+                                 factor: cfloat): int32 {.
+      cdecl, raises: [].}
+
+  Vst3IPlugViewContentScaleSupport* {.bycopy.} = object
+    lpVtbl*: ptr Vst3IPlugViewContentScaleSupportVtbl
+
   Vst3IPlugFrameVtbl* {.bycopy.} = object
     queryInterface*: proc(thisInterface: pointer; iid: ptr Vst3Tuid;
                           obj: ptr pointer): int32 {.cdecl, raises: [].}
@@ -710,3 +724,4 @@ static:
   doAssert alignof(Vst3ViewRect) == 4
   doAssert sizeof(Vst3IPlugViewVtbl) == 120
   doAssert sizeof(Vst3IPlugFrameVtbl) == 32
+  doAssert sizeof(Vst3IPlugViewContentScaleSupportVtbl) == 32
