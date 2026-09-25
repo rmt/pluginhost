@@ -88,8 +88,6 @@ type
     activeCallbacks: RtAtomicU32
     closingState: RtAtomicU32
     handlerObject: Vst3HandlerObject
-    componentProxy: Vst3ConnectionProxy
-    controllerProxy: Vst3ConnectionProxy
     parameters*: seq[Vst3ParameterMetadata]
     buses*: seq[Vst3BusMetadata]
 
@@ -97,14 +95,6 @@ type
     iface: Vst3ComponentHandler
     vtable: Vst3ComponentHandlerVtbl
     owner: ptr Vst3InstanceState
-    references: RtAtomicU32
-
-  Vst3ConnectionProxy = object
-    iface: Vst3ConnectionPoint
-    vtable: Vst3ConnectionPointVtbl
-    owner: ptr Vst3InstanceState
-    target: pointer
-    peer: pointer
     references: RtAtomicU32
 
   Vst3Instance* = ref Vst3InstanceState
@@ -418,59 +408,6 @@ proc handlerRestartComponent(thisInterface: pointer; flags: int32): int32 {.
   release(handler.owner[].mailbox.lock)
   Vst3ResultOk
 
-proc proxyState(thisInterface: pointer): ptr Vst3ConnectionProxy {.inline.} =
-  cast[ptr Vst3ConnectionProxy](thisInterface)
-
-proc proxyQueryInterface(thisInterface: pointer; iid: ptr Vst3Tuid;
-                         obj: ptr pointer): int32 {.cdecl, raises: [].} =
-  let proxy = proxyState(thisInterface)
-  if proxy == nil or obj == nil or
-      (not uidMatches(iid, Vst3ConnectionPointIid) and
-       not uidMatches(iid, Vst3FUnknownIid)):
-    if obj != nil: obj[] = nil
-    return Vst3NoInterface
-  obj[] = thisInterface
-  discard retainReference(proxy.references)
-  Vst3ResultOk
-
-proc proxyAddRef(thisInterface: pointer): uint32 {.cdecl, raises: [].} =
-  let proxy = proxyState(thisInterface)
-  if proxy == nil: return 0'u32
-  retainReference(proxy.references)
-
-proc proxyRelease(thisInterface: pointer): uint32 {.cdecl, raises: [].} =
-  let proxy = proxyState(thisInterface)
-  if proxy == nil: return 0'u32
-  releaseReference(proxy.references)
-
-proc proxyConnect(thisInterface, other: pointer): int32 {.cdecl, raises: [].} =
-  let proxy = proxyState(thisInterface)
-  if proxy == nil or other == nil: return Vst3ResultFalse
-  proxy.peer = other
-  Vst3ResultOk
-
-proc proxyDisconnect(thisInterface, other: pointer): int32 {.cdecl, raises: [].} =
-  let proxy = proxyState(thisInterface)
-  if proxy == nil or proxy.peer != other: return Vst3ResultFalse
-  proxy.peer = nil
-  Vst3ResultOk
-
-proc proxyNotify(thisInterface, message: pointer): int32 {.cdecl, raises: [].} =
-  let proxy = proxyState(thisInterface)
-  if proxy == nil or proxy.owner == nil or
-      not enterCallback(proxy.owner):
-    return Vst3ResultFalse
-  defer: leaveCallback(proxy.owner)
-  if pthread_equal(pthread_self(), proxy.owner[].mainThread) == 0:
-    incrementWrongThread(addr proxy.owner[].wrongThreadNotifications)
-    return Vst3ResultFalse
-  if message == nil:
-    return Vst3ResultFalse
-  let target = cast[ptr Vst3ConnectionPoint](proxy.target)
-  if target == nil or target.lpVtbl == nil or target.lpVtbl.notify == nil:
-    return Vst3ResultFalse
-  let code = target.lpVtbl.notify(proxy.target, message)
-  if code == Vst3ResultOk: Vst3ResultOk else: Vst3ResultFalse
 
 proc initHandler(instance: Vst3Instance) =
   instance.handlerObject.owner = addr instance[]
@@ -481,15 +418,6 @@ proc initHandler(instance: Vst3Instance) =
     performEdit: handlerPerformEdit, endEdit: handlerEndEdit,
     restartComponent: handlerRestartComponent)
   instance.handlerObject.iface.lpVtbl = addr instance.handlerObject.vtable
-
-proc initProxy(proxy: var Vst3ConnectionProxy; owner: ptr Vst3InstanceState) =
-  proxy.owner = owner
-  proxy.references.storeRelaxed(1'u32)
-  proxy.vtable = Vst3ConnectionPointVtbl(
-    queryInterface: proxyQueryInterface, addRef: proxyAddRef,
-    release: proxyRelease, connect: proxyConnect,
-    disconnect: proxyDisconnect, notify: proxyNotify)
-  proxy.iface.lpVtbl = addr proxy.vtable
 
 proc appendUtf8(output: var string; codepoint: uint32) {.inline.} =
   if codepoint <= 0x7F'u32:
@@ -657,17 +585,19 @@ proc close*(instance: Vst3Instance;
         "VST3 controller rejected handler removal", instance.module.bundlePath,
         "result=" & $removed))
     instance.handlerInstalled = false
-  if instance.componentConnected and instance.componentPoint != nil:
+  if instance.componentConnected and instance.componentPoint != nil and
+      instance.controllerPoint != nil:
     let disconnected = instance.componentPoint.lpVtbl.disconnect(
-      cast[pointer](instance.componentPoint), addr instance.controllerProxy.iface)
+      cast[pointer](instance.componentPoint), cast[pointer](instance.controllerPoint))
     if disconnected != Vst3ResultOk:
       return failure[Unit](instanceError(hekVst3Factory,
         "VST3 component connection disconnect failed", instance.module.bundlePath,
         "result=" & $disconnected))
     instance.componentConnected = false
-  if instance.controllerConnected and instance.controllerPoint != nil:
+  if instance.controllerConnected and instance.controllerPoint != nil and
+      instance.componentPoint != nil:
     let disconnected = instance.controllerPoint.lpVtbl.disconnect(
-      cast[pointer](instance.controllerPoint), addr instance.componentProxy.iface)
+      cast[pointer](instance.controllerPoint), cast[pointer](instance.componentPoint))
     if disconnected != Vst3ResultOk:
       return failure[Unit](instanceError(hekVst3Factory,
         "VST3 controller connection disconnect failed", instance.module.bundlePath,
@@ -702,6 +632,10 @@ proc close*(instance: Vst3Instance;
   if instance.component != nil:
     releaseInterface(cast[pointer](instance.component))
     instance.component = nil
+  if instance.handlerObject.references.loadAcquire() > 1'u32:
+    return failure[Unit](instanceError(hekVst3Factory,
+      "VST3 host callback remained retained",
+      instance.module.bundlePath))
   # Run-loop registrations must drain before module shutdown. The public
   # process permits plugin-held host interfaces only because the module stays
   # mapped and application teardown retires the context before reactor close;
@@ -724,16 +658,6 @@ proc close*(instance: Vst3Instance;
       return failure[Unit](instanceError(hekVst3Factory,
         "VST3 state transaction stream remained retained during shutdown",
         instance.module.bundlePath))
-  if instance.handlerObject.references.loadAcquire() > 1'u32 or
-      instance.componentProxy.references.loadAcquire() > 1'u32 or
-      instance.controllerProxy.references.loadAcquire() > 1'u32:
-    return failure[Unit](instanceError(hekVst3Factory,
-      "VST3 host callback or connection proxy remained retained",
-      instance.module.bundlePath))
-  if instance.componentProxy.peer != nil or
-      instance.controllerProxy.peer != nil:
-    return failure[Unit](instanceError(hekVst3Factory,
-      "VST3 connection proxy remained connected", instance.module.bundlePath))
   deinitLock(instance.mailbox.lock)
   var moduleClosed = instance.module.close()
   if not moduleClosed.isOk:
@@ -777,8 +701,6 @@ proc openVst3Instance*(module: var Vst3Module; classId: Vst3Tuid;
       "VST3 host context allocation failed", instance.module.bundlePath))
   instance.mainThread = pthread_self()
   initHandler(instance)
-  initProxy(instance.componentProxy, addr instance[])
-  initProxy(instance.controllerProxy, addr instance[])
   var hostContextResult = instance.module.setFactoryHostContext(
     cast[pointer](instance.context.hostApplicationPointer()))
   if not hostContextResult.isOk and
@@ -896,17 +818,15 @@ proc openVst3Instance*(module: var Vst3Module; classId: Vst3Tuid;
       return failOpen(instance, instanceError(hekVst3Factory,
         "VST3 controller connection point has an incomplete ABI",
         instance.module.bundlePath))
-    instance.componentProxy.target = cast[pointer](instance.componentPoint)
-    instance.controllerProxy.target = cast[pointer](instance.controllerPoint)
     let componentConnection = instance.componentPoint.lpVtbl.connect(
-      cast[pointer](instance.componentPoint), addr instance.controllerProxy.iface)
+      cast[pointer](instance.componentPoint), cast[pointer](instance.controllerPoint))
     if componentConnection != Vst3ResultOk:
       return failOpen(instance, instanceError(
         hekVst3Factory, "VST3 component connection failed", instance.module.bundlePath,
         "result=" & $componentConnection))
     instance.componentConnected = true
     let controllerConnection = instance.controllerPoint.lpVtbl.connect(
-      cast[pointer](instance.controllerPoint), addr instance.componentProxy.iface)
+      cast[pointer](instance.controllerPoint), cast[pointer](instance.componentPoint))
     if controllerConnection != Vst3ResultOk:
       return failOpen(instance, instanceError(
         hekVst3Factory, "VST3 controller connection failed", instance.module.bundlePath,
@@ -1122,8 +1042,6 @@ proc processorPointer*(instance: Vst3Instance): ptr Vst3AudioProcessor {.inline.
 proc componentHandlerPointer*(instance: Vst3Instance): ptr Vst3ComponentHandler {.inline.} =
   if instance == nil: nil else: addr instance.handlerObject.iface
 
-proc componentProxyPointer*(instance: Vst3Instance): ptr Vst3ConnectionPoint {.inline.} =
-  if instance == nil: nil else: addr instance.componentProxy.iface
 
 proc instanceRootCount*(): int {.inline.} =
   int(instanceRootCountAtomic.loadAcquire())

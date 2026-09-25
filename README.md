@@ -298,6 +298,10 @@ multiple channels retain the source channel when it is in range. MIDI system
 real-time messages, such as clock, have no supported VST3 input conversion and
 can still produce event-drop warnings.
 
+VST3 processors can request tempo and transport context, but the host provides
+only a free-running sample clock. Requested fields that are unavailable remain
+invalid in each process context; tempo-synced plugin features may not work.
+
 Information commands have these options:
 
 - `list [--json] PLUGIN_PATH` copies descriptors without creating a plugin

@@ -125,7 +125,6 @@ bool outputParameter() { return PLUGINHOST_VST3_V2B_MODE == 11; }
 bool cvBus() { return PLUGINHOST_VST3_V2B_MODE == 12; }
 bool tooManyBuses() { return PLUGINHOST_VST3_V2B_MODE == 13; }
 bool negativeBusCount() { return PLUGINHOST_VST3_V2B_MODE == 14; }
-bool unsupportedRequirements() { return PLUGINHOST_VST3_V2B_MODE == 16; }
 bool supportedContinuousRequirements() { return PLUGINHOST_VST3_V2B_MODE == 17; }
 bool multiMidi() { return PLUGINHOST_VST3_V2B_MODE == 18; }
 bool mappingFailedCandidate() { return PLUGINHOST_VST3_V3_MODE == 19; }
@@ -653,8 +652,6 @@ Steinberg_tresult componentQuery(void* raw, const Steinberg_TUID iid, void** obj
 Steinberg_uint32 requirementsGet(void* raw) {
   auto* state = static_cast<RequirementsObject*>(raw)->state;
   ++state->requirementsCalls;
-  if (unsupportedRequirements())
-    return Steinberg_Vst_IProcessContextRequirements_Flags_kNeedTempo;
   return supportedContinuousRequirements()
       ? Steinberg_Vst_IProcessContextRequirements_Flags_kNeedContinousTimeSamples
       : 0;

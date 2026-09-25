@@ -540,7 +540,7 @@ proc compileVst3V2aFixtures() =
   compileVst3V2aFixtureVariant("malformed_params", 10)
   compileVst3V2aFixtureVariant("quarantine", 11)
   compileVst3V2aFixtureVariant("retained_handler", 12)
-  compileVst3V2aFixtureVariant("retained_proxy", 13)
+  compileVst3V2aFixtureVariant("retained_peer", 13)
   compileVst3V2aFixtureVariant("retained_stream", 14)
 
 proc compileVst3V2bFixtureVariant(name: string; mode: int) =
@@ -568,7 +568,7 @@ proc compileVst3V2bFixtures() =
   compileVst3V2bFixtureVariant("cv_bus", 12)
   compileVst3V2bFixtureVariant("too_many_buses", 13)
   compileVst3V2bFixtureVariant("negative_buses", 14)
-  compileVst3V2bFixtureVariant("requirements_unsupported", 16)
+  compileVst3V2bFixtureVariant("requirements_all", 16)
   compileVst3V2bFixtureVariant("requirements_continuous", 17)
   compileVst3V2bFixtureVariant("processing_notimpl", 18)
   compileVst3V2bFixtureVariant("processing_rejected", 19)

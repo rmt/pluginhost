@@ -203,6 +203,31 @@ suite "VST3 V2B bounded JACK audio":
     check continuousSamples() == 0'i64
     closeSlice(slice, services, controls)
 
+  test "all requested context fields leave unavailable values invalid":
+    var controlsResult = openFakeJackControls()
+    require controlsResult.isOk
+    var controls = move(controlsResult.value)
+    controls.reset()
+    var services = newServices()
+    var observer = openObserver("requirements_all")
+    let requirementsCalls = resolveU32(observer,
+      "pluginhost_vst3_fixture_requirements_calls")
+    let contextState = resolveU32(observer,
+      "pluginhost_vst3_fixture_last_context_state")
+    let continuousSamples = resolveI64(observer,
+      "pluginhost_vst3_fixture_last_continuous_time_samples")
+    var opened = openSlice("requirements_all", services)
+    require opened.isOk
+    var slice = move(opened.value)
+    check requirementsCalls() == 1'u32
+    check controls.invokeProcess(128) == 0
+    check contextState() == Vst3ProcessContextStateContinuousTimeValid
+    check continuousSamples() == 0'i64
+    check controls.invokeProcess(128) == 0
+    check contextState() == Vst3ProcessContextStateContinuousTimeValid
+    check continuousSamples() == 128'i64
+    closeSlice(slice, services, controls)
+
   test "instrument and non-stereo native arrangements retain channel identity":
     var controlsResult = openFakeJackControls()
     require controlsResult.isOk
@@ -281,7 +306,7 @@ suite "VST3 V2B bounded JACK audio":
     closeSlice(slice, services, controls)
 
     for name in ["float64_only", "setup_fail", "activation_fail", "cv_bus",
-                 "too_many_buses", "negative_buses", "requirements_unsupported"]:
+                 "too_many_buses", "negative_buses"]:
       var controlsResult = openFakeJackControls()
       require controlsResult.isOk
       var controls = move(controlsResult.value)

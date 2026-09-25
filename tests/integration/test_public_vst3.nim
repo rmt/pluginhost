@@ -182,6 +182,16 @@ suite "public VST3 process contract":
     let diagnostics = closeHost(host)
     check diagnostics.len == 0
 
+  test "public VST3 accepts partially available process context":
+    require getEnv("PLUGINHOST_INTEGRATION_ISOLATED") == "1"
+    var host = startHost(fixturePath("requirements_all"), ProcessorCid,
+      "partial-context", @["--no-gui"])
+    defer:
+      if host.process != nil:
+        discard closeHost(host)
+    let diagnostics = closeHost(host)
+    check diagnostics.len == 0
+
   test "public VST3 state load and save use a bounded vstpreset transaction":
     require getEnv("PLUGINHOST_INTEGRATION_ISOLATED") == "1"
     let statePath = getTempDir() / ("pluginhost-vst3-public-" &

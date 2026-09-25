@@ -67,8 +67,6 @@ const
   ## free-running sample clock. No musical/system/tempo fields are asserted.
   Vst3ProcessContextStateContinuousTimeValid* = 1'u32 shl 17
   Vst3ProcessContextRequirementNeedContinousTimeSamples* = 1'u32 shl 1
-  Vst3ProcessContextSupportedRequirements* =
-    Vst3ProcessContextRequirementNeedContinousTimeSamples
   Vst3ProcessContextRequirementNeedSystemTime* = 1'u32 shl 0
   Vst3ProcessContextRequirementNeedProjectTimeMusic* = 1'u32 shl 2
   Vst3ProcessContextRequirementNeedBarPositionMusic* = 1'u32 shl 3

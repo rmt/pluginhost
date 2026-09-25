@@ -574,13 +574,11 @@ proc newVst3AudioProcess*(processor: ptr Vst3AudioProcessor;
         return failure[Vst3AudioProcess](vst3ProcessError(hekVst3Factory,
           "VST3 process-context requirements ABI is incomplete", path,
           pluginId, ""))
-      let flags = requirements.lpVtbl.getProcessContextRequirements(
+      # Requested fields are advisory. Publish only the fields we actually
+      # provide; ProcessContext.state remains the validity contract.
+      discard requirements.lpVtbl.getProcessContextRequirements(
         requirementsObject)
       discard requirements.lpVtbl.release(requirementsObject)
-      if (flags and not Vst3ProcessContextSupportedRequirements) != 0'u32:
-        return failure[Vst3AudioProcess](vst3ProcessError(hekVst3Factory,
-          "VST3 processor requires unsupported process-context fields", path,
-          pluginId, "flags=" & $flags))
   var context = cast[ptr Vst3AudioProcessContext](
     allocShared0(sizeof(Vst3AudioProcessContext)))
   if context == nil:

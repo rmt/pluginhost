@@ -652,8 +652,13 @@ first supported VST3 configuration is:
 - Float32 real-time JACK processing with grouped buses flattened to mono JACK
   ports and distinct input/output storage.
 - Ordinary main and auxiliary audio/event buses within named host bounds;
-  control-voltage buses, float64-only processors, offline processing, and
-  transport/tempo synchronization are rejected explicitly.
+  control-voltage buses, float64-only processors, and offline processing are
+  rejected explicitly.
+- VST3 process-context requests do not require every requested field to be
+  available. The host supplies a free-running sample clock and MUST mark only
+  actually supplied optional fields valid. JACK transport and tempo
+  synchronization remain unavailable; no transport or musical timing may be
+  invented to satisfy a processor's request.
 - MIDI 1.0 note, pressure, mapped controller/pitch, supported program, SysEx,
   and representable output conversions with preserved sample offsets.
 - Controller-to-processor and processor-to-controller normalized parameter

@@ -1096,6 +1096,12 @@ uses managed Nim containers. All VST3 host callbacks are stable-address,
 non-capturing, `raises: []` boundaries with explicit validation and audited
 generated-C call paths.
 
+VST3 process-context requests are read at setup, but the JACK callback
+publishes only the free-running sample clock and its validity flag. Unavailable
+transport, tempo, musical time, and system time remain invalid even when the
+processor requests them. Requested fields do not imply that the host can
+provide them or prevent processing with a partial context.
+
 The Linux VST3 run loop adapts `IRunLoop` to `MainReactor` with the existing
 256-FD/256-timer bounds, generation tokens, main-thread dispatch, retained
 handler references, duplicate rejection, self-unregistration safety, and

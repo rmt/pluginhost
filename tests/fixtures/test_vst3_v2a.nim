@@ -128,15 +128,6 @@ proc foreignRunLoopThread(argument: pointer): pointer {.noconv, raises: [].} =
       cast[pointer](call.runLoop), cast[pointer](call.handler), 9)
   nil
 
-type ForeignProxyCall = object
-  proxy: ptr Vst3ConnectionPoint
-  result: int32
-
-proc foreignProxyThread(argument: pointer): pointer {.noconv, raises: [].} =
-  let call = cast[ptr ForeignProxyCall](argument)
-  call.result = call.proxy.lpVtbl.notify(
-    cast[pointer](call.proxy), cast[pointer](1))
-  nil
 type ForeignMessageReleaseCall = object
   message: ptr Vst3Message
   attributes: ptr Vst3AttributeList
@@ -200,7 +191,8 @@ type FixtureLedger = object
   controllerAcquire, controllerAddRef, controllerRelease: uint32
   controllerPointAcquire, controllerPointAddRef, controllerPointRelease: uint32
   handlerRetentionAddRef, handlerRetentionRelease: uint32
-  proxyRetentionAddRef, proxyRetentionRelease: uint32
+  directPeerRetentionAddRef, directPeerRetentionRelease: uint32
+  directPeerComponent, directPeerController: uint32
 
 proc fixtureLedger(name: string): FixtureLedger =
   result.factoryAcquire = fixtureCounter(name, "pluginhost_vst3_v2a_factory_acquire")
@@ -223,8 +215,10 @@ proc fixtureLedger(name: string): FixtureLedger =
   result.controllerPointRelease = fixtureCounter(name, "pluginhost_vst3_v2a_controller_point_release")
   result.handlerRetentionAddRef = fixtureCounter(name, "pluginhost_vst3_v2a_handler_retention_addref")
   result.handlerRetentionRelease = fixtureCounter(name, "pluginhost_vst3_v2a_handler_retention_release")
-  result.proxyRetentionAddRef = fixtureCounter(name, "pluginhost_vst3_v2a_proxy_retention_addref")
-  result.proxyRetentionRelease = fixtureCounter(name, "pluginhost_vst3_v2a_proxy_retention_release")
+  result.directPeerRetentionAddRef = fixtureCounter(name, "pluginhost_vst3_v2a_direct_peer_retention_addref")
+  result.directPeerRetentionRelease = fixtureCounter(name, "pluginhost_vst3_v2a_direct_peer_retention_release")
+  result.directPeerComponent = fixtureCounter(name, "pluginhost_vst3_v2a_direct_peer_component")
+  result.directPeerController = fixtureCounter(name, "pluginhost_vst3_v2a_direct_peer_controller")
 
 suite "VST3 V2A lifecycle boundary":
   test "factory mapping and component processor QI are exercised":
@@ -269,19 +263,7 @@ suite "VST3 V2A lifecycle boundary":
       addr unknownIid.value, addr handlerUnknown) == Vst3ResultOk
     require handlerUnknown != nil
     discard handler.lpVtbl.release(handlerUnknown)
-    var proxyUnknown: pointer
-    let proxy = instance.componentProxyPointer()
-    require proxy != nil
-    check proxy.lpVtbl.queryInterface(cast[pointer](proxy),
-      addr unknownIid.value, addr proxyUnknown) == Vst3ResultOk
-    require proxyUnknown != nil
-    discard proxy.lpVtbl.release(proxyUnknown)
-    var foreignProxy = ForeignProxyCall(proxy: proxy)
-    check pthread_create(addr foreignThread, nil, foreignProxyThread,
-      addr foreignProxy) == 0
-    check pthread_join(foreignThread, nil) == 0
-    check foreignProxy.result == Vst3ResultFalse
-    check instance.wrongThreadNotifications() == 2'u64
+    check instance.wrongThreadNotifications() == 1'u64
     check instance.close().isOk
     check instance.close().isOk
     check instanceRootCount() == initialInstanceRoots
@@ -313,6 +295,10 @@ suite "VST3 V2A lifecycle boundary":
       "pluginhost_vst3_v2a_disconnect_component") == 5'u32
     check fixtureCounter("separate",
       "pluginhost_vst3_v2a_disconnect_controller") == 5'u32
+    check fixtureCounter("separate",
+      "pluginhost_vst3_v2a_direct_peer_component") == 5'u32
+    check fixtureCounter("separate",
+      "pluginhost_vst3_v2a_direct_peer_controller") == 5'u32
 
   test "combined and controller-absent forms preserve valid lifecycle":
     check mappingProbe("combined") == 1'u32
@@ -386,8 +372,8 @@ suite "VST3 V2A lifecycle boundary":
       check afterLedger.controllerPointRelease == beforeLedger.controllerPointRelease + points
       check afterLedger.handlerRetentionAddRef == beforeLedger.handlerRetentionAddRef
       check afterLedger.handlerRetentionRelease == beforeLedger.handlerRetentionRelease
-      check afterLedger.proxyRetentionAddRef == beforeLedger.proxyRetentionAddRef
-      check afterLedger.proxyRetentionRelease == beforeLedger.proxyRetentionRelease
+      check afterLedger.directPeerRetentionAddRef == beforeLedger.directPeerRetentionAddRef
+      check afterLedger.directPeerRetentionRelease == beforeLedger.directPeerRetentionRelease
       let componentTerminateDelta = if name == "component_init_fail": 0'u32 else: 1'u32
       let controllerInitializeDelta = if name == "component_init_fail": 0'u32 else: 1'u32
       let controllerTerminateDelta = if name == "component_init_fail" or
@@ -852,7 +838,7 @@ suite "VST3 V2A lifecycle boundary":
     check instance.close().isOk
     check reactor.close().isOk
 
-  test "instance close rejects retained handler and proxy ownership":
+  test "instance close rejects retained handler and direct peer ownership":
     let initialInstanceRoots = instanceRootCount()
     let handlerBefore = fixtureLedger("retained_handler")
     var retainedHandler = openFixture("retained_handler")
@@ -866,17 +852,24 @@ suite "VST3 V2A lifecycle boundary":
     check handlerAfter.handlerRetentionAddRef == handlerBefore.handlerRetentionAddRef + 1'u32
     check handlerAfter.handlerRetentionRelease == handlerBefore.handlerRetentionRelease + 1'u32
 
-    let proxyBefore = fixtureLedger("retained_proxy")
-    var retainedProxy = openFixture("retained_proxy")
-    require retainedProxy.isOk
-    check not retainedProxy.value.close().isOk
+    let directBefore = fixtureLedger("retained_peer")
+    var retainedDirect = openFixture("retained_peer")
+    require retainedDirect.isOk
+    check not retainedDirect.value.close().isOk
     check instanceRootCount() == initialInstanceRoots + 1
-    releaseRetainedProbe("retained_proxy")
-    check retainedProxy.value.close().isOk
+    let directRetained = fixtureLedger("retained_peer")
+    check directRetained.directPeerComponent == directBefore.directPeerComponent + 1'u32
+    check directRetained.directPeerController == directBefore.directPeerController + 1'u32
+    check directRetained.directPeerRetentionAddRef ==
+      directBefore.directPeerRetentionAddRef + 2'u32
+    check directRetained.directPeerRetentionRelease ==
+      directBefore.directPeerRetentionRelease
+    releaseRetainedProbe("retained_peer")
+    check retainedDirect.value.close().isOk
     check instanceRootCount() == initialInstanceRoots
-    let proxyAfter = fixtureLedger("retained_proxy")
-    check proxyAfter.proxyRetentionAddRef == proxyBefore.proxyRetentionAddRef + 2'u32
-    check proxyAfter.proxyRetentionRelease == proxyBefore.proxyRetentionRelease + 2'u32
+    let directAfter = fixtureLedger("retained_peer")
+    check directAfter.directPeerRetentionRelease ==
+      directBefore.directPeerRetentionRelease + 2'u32
 
   test "instance close rejects retained startup state stream":
     let initialInstanceRoots = instanceRootCount()

@@ -172,8 +172,8 @@ static std::uint32_t g_controller_point_addref = 0;
 static std::uint32_t g_controller_point_release = 0;
 static std::uint32_t g_handler_retention_addref = 0;
 static std::uint32_t g_handler_retention_release = 0;
-static std::uint32_t g_proxy_retention_addref = 0;
-static std::uint32_t g_proxy_retention_release = 0;
+static std::uint32_t g_direct_peer_retention_addref = 0;
+static std::uint32_t g_direct_peer_retention_release = 0;
 static std::uint32_t g_module_exit = 0;
 static std::uint32_t g_component_initialize = 0;
 static std::uint32_t g_component_terminate = 0;
@@ -183,6 +183,8 @@ static std::uint32_t g_connect_component = 0;
 static std::uint32_t g_connect_controller = 0;
 static std::uint32_t g_disconnect_component = 0;
 static std::uint32_t g_disconnect_controller = 0;
+static std::uint32_t g_direct_peer_component = 0;
+static std::uint32_t g_direct_peer_controller = 0;
 static std::uint32_t g_state_get = 0;
 static std::uint32_t g_state_set = 0;
 static std::uint32_t g_controller_state_set = 0;
@@ -681,10 +683,10 @@ class FixtureObject final : public ComponentView, public ProcessorView,
       retained_handler_->release();
       retained_handler_ = nullptr;
     }
-    if (retained_proxy_ != nullptr) {
-      ++g_proxy_retention_release;
-      retained_proxy_->release();
-      retained_proxy_ = nullptr;
+    if (retained_peer_ != nullptr) {
+      ++g_direct_peer_retention_release;
+      retained_peer_->release();
+      retained_peer_ = nullptr;
     }
 #if PLUGINHOST_VST3_V2A_MODE == 14 || PLUGINHOST_VST3_V4A_MODE == 5
     if (g_retained_stream != nullptr) {
@@ -705,22 +707,29 @@ class FixtureObject final : public ComponentView, public ProcessorView,
 #if PLUGINHOST_VST3_V2A_MODE == 3
     return -42;
 #endif
+    if (dynamic_cast<ControllerPointView*>(other) == nullptr) return -42;
+    ++g_direct_peer_component;
     ++g_connect_component;
     peer_ = other;
-    if (PLUGINHOST_VST3_V2A_MODE == 13 && retained_proxy_ == nullptr) {
-      retained_proxy_ = other;
-      ++g_proxy_retention_addref;
-      retained_proxy_->addRef();
+    if (PLUGINHOST_VST3_V2A_MODE == 13 && retained_peer_ == nullptr) {
+      retained_peer_ = other;
+      ++g_direct_peer_retention_addref;
+      retained_peer_->addRef();
     }
     return 0;
   }
-  tresult disconnect(IConnectionPoint* other) override { if (peer_ != other) return 1; peer_ = nullptr; ++g_disconnect_component; return 0; }
+  tresult disconnect(IConnectionPoint* other) override {
+    if (peer_ != other || retained_peer_ != nullptr) return 1;
+    peer_ = nullptr;
+    ++g_disconnect_component;
+    return 0;
+  }
   tresult notify(IMessage*) override { return 0; }
  private:
   IConnectionPoint* peer_ = nullptr;
   IComponentHandler* handler_ = nullptr;
   IComponentHandler* retained_handler_ = nullptr;
-  IConnectionPoint* retained_proxy_ = nullptr;
+  IConnectionPoint* retained_peer_ = nullptr;
 };
 static FixtureObject g_combined;
 
@@ -780,16 +789,23 @@ class SeparateController final : public SeparateControllerView, public Controlle
   tresult connect(IConnectionPoint* other) override {
     if (!other) return 2;
     if (PLUGINHOST_VST3_V2A_MODE == 4) return -42;
+    if (dynamic_cast<ComponentPointView*>(other) == nullptr) return -42;
+    ++g_direct_peer_controller;
     peer_ = other;
-    if (PLUGINHOST_VST3_V2A_MODE == 13 && retained_proxy_ == nullptr) {
-      retained_proxy_ = other;
-      ++g_proxy_retention_addref;
-      retained_proxy_->addRef();
+    if (PLUGINHOST_VST3_V2A_MODE == 13 && retained_peer_ == nullptr) {
+      retained_peer_ = other;
+      ++g_direct_peer_retention_addref;
+      retained_peer_->addRef();
     }
     ++g_connect_controller;
     return 0;
   }
-  tresult disconnect(IConnectionPoint* other) override { if (peer_ != other) return 1; peer_ = nullptr; ++g_disconnect_controller; return 0; }
+  tresult disconnect(IConnectionPoint* other) override {
+    if (peer_ != other || retained_peer_ != nullptr) return 1;
+    peer_ = nullptr;
+    ++g_disconnect_controller;
+    return 0;
+  }
   tresult notify(IMessage*) override { return 0; }
   void releaseRetained() {
     if (retained_handler_ != nullptr) {
@@ -797,16 +813,16 @@ class SeparateController final : public SeparateControllerView, public Controlle
       retained_handler_->release();
       retained_handler_ = nullptr;
     }
-    if (retained_proxy_ != nullptr) {
-      ++g_proxy_retention_release;
-      retained_proxy_->release();
-      retained_proxy_ = nullptr;
+    if (retained_peer_ != nullptr) {
+      ++g_direct_peer_retention_release;
+      retained_peer_->release();
+      retained_peer_ = nullptr;
     }
   }
  private:
   IConnectionPoint* peer_ = nullptr;
   IComponentHandler* retained_handler_ = nullptr;
-  IConnectionPoint* retained_proxy_ = nullptr;
+  IConnectionPoint* retained_peer_ = nullptr;
 };
 static SeparateController g_controller;
 class Factory final : public IPluginFactory {
@@ -902,6 +918,7 @@ extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_
 extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_state_set() { return g_state_set; }
 extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_state_bytes_observed() { return g_state_bytes_observed; }
 extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_connect_component() { return g_connect_component; }
+extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_direct_peer_component() { return g_direct_peer_component; }
 extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_factory_refs() { return g_factory_refs; }
 extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_factory_addref() { return g_factory_addref; }
 extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_factory_acquire() { return g_factory_acquire; }
@@ -921,14 +938,15 @@ extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_
 extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_controller_point_release() { return g_controller_point_release; }
 extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_handler_retention_addref() { return g_handler_retention_addref; }
 extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_handler_retention_release() { return g_handler_retention_release; }
-extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_proxy_retention_addref() { return g_proxy_retention_addref; }
-extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_proxy_retention_release() { return g_proxy_retention_release; }
+extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_direct_peer_retention_addref() { return g_direct_peer_retention_addref; }
+extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_direct_peer_retention_release() { return g_direct_peer_retention_release; }
 extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_controller_refs() { return g_controller_refs; }
 extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_controller_acquire() { return g_controller_acquire; }
 extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_controller_addref() { return g_controller_addref; }
 extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_controller_release() { return g_controller_release; }
 extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_module_exit() { return g_module_exit; }
 extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_connect_controller() { return g_connect_controller; }
+extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_direct_peer_controller() { return g_direct_peer_controller; }
 extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_disconnect_component() { return g_disconnect_component; }
 extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_disconnect_controller() { return g_disconnect_controller; }
 extern "C" __attribute__((visibility("default"))) std::uint32_t pluginhost_vst3_v2a_runloop_fd_callbacks() { return g_runloop_fd_callbacks; }
