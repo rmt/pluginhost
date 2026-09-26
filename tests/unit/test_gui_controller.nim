@@ -196,14 +196,18 @@ method handle*(backend: FakeWindowBackend): GuiWindowHandle {.raises: [].} =
   GuiWindowHandle(api: gwaX11, id: 42)
 
 proc dispatchWindowEvent(reactor: var MainReactor; controller: GuiController;
-                         backend: FakeWindowBackend; event: WindowEvent) =
+                         backend: FakeWindowBackend; event: WindowEvent;
+                         closeRequested: ptr bool = nil) =
   backend.hasEvent = true
   backend.pendingEvent = WindowPollResult(available: true, event: event)
   var byte = 'x'
   check posix.write(backend.writeFd, addr byte, 1) == 1
   var events = reactor.wait(monotonicNanos(50_000_000))
   require events.isOk
-  check controller.handleWindowEvents(events.value).isOk
+  let handled = controller.handleWindowEvents(events.value)
+  require handled.isOk
+  if closeRequested != nil:
+    closeRequested[] = handled.value
 
 proc openTestReactor(): MainReactor =
   var driver = linux_reactor.openLinuxReactorDriver()
@@ -259,7 +263,7 @@ suite "GUI controller policy and lifecycle":
     check plugin.destroyCount == 1
     check controller.state == gcsClosed
 
-  test "WM close uses hide and restores even when embedded hide is rejected":
+  test "WM close leaves the GUI intact until session shutdown":
     var reactor = openTestReactor()
     var plugin = newFakeGui()
     plugin.rejectHide = true
@@ -275,22 +279,38 @@ suite "GUI controller policy and lifecycle":
 
     check controller.start(true).isOk
     check controller.state == gcsVisible
+    var closeRequested = false
     dispatchWindowEvent(reactor, controller, produced,
-      WindowEvent(kind: wekClose))
-    check controller.state == gcsHidden
-    check produced.state == whHidden
-    check plugin.hideCount == 1
-    check plugin.destroyCount == 0
-    check plugin.createCount == 1
-
-    check controller.show().isOk
+      WindowEvent(kind: wekClose), addr closeRequested)
+    check closeRequested
     check controller.state == gcsVisible
-    check plugin.showCount == 2
-    check plugin.createCount == 1
+    check produced.state == whVisible
+    check plugin.hideCount == 0
     check plugin.destroyCount == 0
 
     check controller.close().isOk
+    check plugin.hideCount == 1
     check plugin.destroyCount == 1
+
+  test "window unmap does not request process shutdown":
+    var reactor = openTestReactor()
+    var plugin = newFakeGui()
+    var produced: FakeWindowBackend
+    let factory: WindowHostFactory = proc(): WindowHostBackend =
+      produced = newFakeWindow()
+      produced
+    var controller = newGuiController(plugin, addr reactor, factory, "test")
+    defer:
+      check controller.close().isOk
+      check reactor.close().isOk
+
+    check controller.start(true).isOk
+    var closeRequested = false
+    dispatchWindowEvent(reactor, controller, produced,
+      WindowEvent(kind: wekUnmap), addr closeRequested)
+    check not closeRequested
+    check controller.state == gcsVisible
+    check plugin.destroyCount == 0
 
   test "actual surface destruction cleans up and permits recreation":
     var reactor = openTestReactor()

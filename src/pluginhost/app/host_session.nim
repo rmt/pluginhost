@@ -660,13 +660,15 @@ proc serviceGuiFailure(session: var HostSession; config: RunConfig;
   success()
 
 proc serviceGuiEvents(session: var HostSession; config: RunConfig;
-                       events: seq[ReactorEvent]; errorOutput: File): Result[Unit] =
+                      events: seq[ReactorEvent]; errorOutput: File;
+                      closeRequested: var bool): Result[Unit] =
   if session.gui == nil:
     return success()
   var handled = session.gui.handleWindowEvents(events)
   if not handled.isOk:
     return session.serviceGuiFailure(config, errorOutput, "service",
       move(handled.error))
+  closeRequested = handled.value
   success()
 
 proc serviceTrayFailure(session: var HostSession; config: RunConfig;
@@ -836,9 +838,13 @@ proc run*(session: var HostSession; config: RunConfig;
       if not stopping.isOk:
         return stopping
       return success()
-    var guiEvents = session.serviceGuiEvents(config, events.value, errorOutput)
+    var closeRequested = false
+    var guiEvents = session.serviceGuiEvents(
+      config, events.value, errorOutput, closeRequested)
     if not guiEvents.isOk:
       return failSession[Unit](session, move(guiEvents.error))
+    if closeRequested:
+      return session.state.transition(ssStopping)
     var trayEvents = session.serviceTrayEvents(
       config, events.value, errorOutput)
     if not trayEvents.isOk:

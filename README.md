@@ -55,7 +55,7 @@ Requirements:
   fixture builds
 - Python 3 for generated-code auditing and the disposable integration harness
 - PipeWire, PipeWire's JACK implementation, `pw-jack`, `pw-cli`, and `pw-dump` for `testIntegration` and the strict `all` gate
-- Xlib, D-Bus development headers/runtime (`dbus-1`, `dbus-run-session`, and `gdbus`), `Xvfb`, and `xvfb-run` for `testGui` and the strict `all` gate
+- Xlib, D-Bus development headers/runtime (`dbus-1`, `dbus-run-session`, and `gdbus`), `Xvfb`, `xvfb-run`, and `xwininfo` for `testGui` and the strict `all` gate
 
 ```sh
 nimble check
@@ -107,6 +107,7 @@ export PLUGINHOST_CLAP_SMOKE_PLUGIN_ID=optional.stable.id
 nimble testIntegration
 nimble all
 ```
+
 The strict public VST3 process task uses synthetic bundles for deterministic
 selection, JACK audio, PID/signal cleanup, `.vstpreset` load/save, and reload
 lifecycle evidence. It also runs independent instrument and effect bundles
@@ -154,7 +155,14 @@ has no transitive package dependencies, and is used only in the non-real-time
 control plane.
 
 `nimble testAbi` verifies the handwritten raw bindings against the vendored
-official CLAP 1.2.10 headers, the installed JACK development headers, the installed Xlib and libdbus layouts, and the dynamic-loader boundaries. `nimble testGui` independently compiles the CLAP GUI fixture, X11 window-host/controller test, and a fake StatusNotifierWatcher, then runs the X11 and D-Bus paths under disposable Xvfb/session-bus environments. The complete CLAP header tree is preserved under `vendor/clap/`
+official CLAP 1.2.10 headers, the installed JACK development headers, the
+installed Xlib and libdbus layouts, and the dynamic-loader boundaries.
+`nimble testGui` compiles CLAP and VST3 GUI fixtures, the public host, a fake
+JACK DSO, the X11 window-host/controller test, and a fake
+StatusNotifierWatcher. Under disposable Xvfb/session-bus environments it
+checks both public formats exit cleanly on WM close, remove their tray items
+and PID files, and save requested VST3 state. The complete CLAP header tree is
+preserved under `vendor/clap/`
 with its MIT license and exact upstream provenance. Draft headers are vendored
 unchanged but are not part of pluginhost's bound or supported ABI surface.
 
@@ -190,7 +198,6 @@ owners are move-only and require explicit, checked, idempotent close.
 Importing JACK, X11, D-Bus, or VST3 declarations does not eagerly load their
 shared libraries; information and headless commands remain independent of
 those platform libraries, and concrete backends load them explicitly.
-
 
 The optional tray backend owns a private dynamically loaded libdbus-1 session
 connection and exports a `org.freedesktop.StatusNotifierItem` object. It
@@ -238,10 +245,12 @@ as one JACK client. The Linux process name and X11 window title use
 `Surge XT [VST3]`.
 Linux `ps`/`top` `COMM` output is limited to 15 bytes, so long process names
 are UTF-8-safe truncated; the X11 title retains the full display name.
-`SIGINT` and `SIGTERM` request clean shutdown; `SIGUSR1` shows and `SIGUSR2`
-hides the GUI when enabled, while `--no-gui` retains a rate-limited disabled-GUI
-warning. `--pid-file` atomically publishes the running PID and removes only the
-entry the process owns.
+`SIGINT`, `SIGTERM`, and closing the X11 host window request clean shutdown.
+`SIGUSR1` shows and `SIGUSR2` hides the GUI when enabled; tray activation
+also toggles GUI visibility without stopping audio. Minimizing the window
+keeps the plugin and JACK client running. Under `--no-gui`, GUI signals retain
+a rate-limited warning. `--pid-file` atomically publishes the running PID
+and removes only the entry the process owns.
 By default the host attempts an embedded X11 GUI, falls back to floating X11
 when supported, and otherwise warns and continues headlessly; `--hide-gui`
 creates it hidden, `--require-gui` makes failure fatal, and `--gui-scale`
@@ -250,13 +259,15 @@ image and applies it to both the X11 window and the StatusNotifierItem tray
 item; without it, a generic icon is used.
 When a StatusNotifierWatcher is available, the tray item's left-click activation
 alternates GUI show/hide; watcher/session-bus absence is a warning, not a
-startup failure. Tray events are handled on the CLAP main/reactor thread and do
-not affect audio. The backend accepts both the standard freedesktop and KDE
-StatusNotifierItem interface spellings.
+startup failure. Tray events are handled on the main control thread and do
+not affect audio. The backend accepts both the freedesktop and KDE
+StatusNotifierItem interface spellings. Closing the host window does not
+hide it to the tray: it stops the process and removes its tray item.
 The GUI path is main-thread-only and does not enter JACK processing. `--load-state`
 loads format-native state before audio configuration. `--save-state` saves after
-JACK processing is quiesced during clean `SIGINT`/`SIGTERM` shutdown; CLAP state
-uses its native stream, while VST3 state uses a standard `.vstpreset` container.
+JACK processing is quiesced during clean signal or window-manager shutdown;
+CLAP state uses its native stream, while VST3 state uses a standard
+`.vstpreset` container.
 Both transactions are bounded and saved atomically through a mode-0600
 same-directory temporary.
 
@@ -279,7 +290,7 @@ The path-only form is an alias for `run`. The options below are available on
 | `--gui-scale SCALE` | Request a finite positive GUI scale. |
 | `--icon PATH` | Load a bounded 8-bit RGB P3/P6 PPM for the GUI and tray. |
 | `--load-state PATH` | Load CLAP state or a VST3 `.vstpreset` before activation. |
-| `--save-state PATH` | Save CLAP state or a VST3 `.vstpreset` after clean signal shutdown. |
+| `--save-state PATH` | Save CLAP state or a VST3 `.vstpreset` after clean signal or window-manager shutdown. |
 | `--pid-file PATH` | Atomically publish the running PID and remove only the owned entry. |
 | `-v`, `--verbose` | Emit non-error host diagnostics. |
 | `-q`, `--quiet` | Suppress non-error host diagnostics. |
@@ -288,9 +299,11 @@ The path-only form is an alias for `run`. The options below are available on
 
 `--plugin-id` and `--plugin-index` are mutually exclusive. The three GUI
 policy flags are mutually exclusive; `--no-gui` cannot be combined with
-`--require-gui`, `--gui-scale`, or `--icon`. `--save-state` is attempted only
-for a clean `SIGINT` or `SIGTERM` shutdown. A plugin that does not expose its
-format-native state interface makes a requested load/save fail with status 6.
+`--require-gui`, `--gui-scale`, or `--icon`. Explicit `SIGUSR2` and tray
+activation can still hide a running GUI; `SIGUSR1` can show it again.
+`--save-state` is attempted only for a clean `SIGINT`, `SIGTERM`, or
+window-manager close shutdown. A plugin that does not expose its format-native
+state interface makes a requested load/save fail with status 6.
 
 For a VST3 event bus that advertises one MIDI channel, JACK MIDI channel-voice
 messages are routed to that channel (VST3 channel index 0). Buses advertising
@@ -420,6 +433,7 @@ pluginhost --pid-file /run/user/$UID/vital-gui.pid \
 kill -USR2 "$(cat /run/user/$UID/vital-gui.pid)"  # hide
 kill -USR1 "$(cat /run/user/$UID/vital-gui.pid)"  # show
 kill -TERM "$(cat /run/user/$UID/vital-gui.pid)"
+```
 
 Load and save plugin-owned state. CLAP keeps its native state contract; VST3
 uses a `.vstpreset` destination:
@@ -511,4 +525,3 @@ with their own licenses and are not distributed here.
 The project is licensed under the MIT License; see [`LICENSE`](LICENSE). CLAP
 plugins and system dependencies remain third-party works with their own
 licenses.
- 

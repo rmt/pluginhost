@@ -908,6 +908,12 @@ proc runSanitizeTask() =
 
 proc runGuiTests() =
   exec "mkdir -p build/test build/integration build/nimcache/integration build/fixtures/clap"
+  compileTestBinary()
+  compileFakeJackFixture()
+  compileVst3V5bFixture()
+  exec "mkdir -p build/fixtures/gui-jack"
+  exec "ln -sfn ../libpluginhost_jack_fake_fixture.so " &
+       "build/fixtures/gui-jack/libjack.so.0"
   compileGuiFixture()
   exec "cc -std=gnu11 -Wall -Wextra -Werror $(pkg-config --cflags x11) " &
        "tests/integration/x11_send_wm_delete.c $(pkg-config --libs x11) " &
@@ -919,6 +925,7 @@ proc runGuiTests() =
   exec "command -v xvfb-run >/dev/null 2>&1 || { echo 'xvfb-run is required for GUI tests' >&2; exit 1; }"
   exec "command -v dbus-run-session >/dev/null 2>&1 || { echo 'dbus-run-session is required for GUI tests' >&2; exit 1; }"
   exec "command -v gdbus >/dev/null 2>&1 || { echo 'gdbus is required for GUI tests' >&2; exit 1; }"
+  exec "command -v xwininfo >/dev/null 2>&1 || { echo 'xwininfo is required for public GUI checks' >&2; exit 1; }"
   compileControlIntegrationTest(
     "tests/integration/test_x11_window_host.nim", "x11_window_host")
   compileControlIntegrationTest(
@@ -929,9 +936,14 @@ proc runGuiTests() =
   exec "dependencies=$(readelf -d build/test/dbus_tray_icon) || exit 1; " &
        "if printf '%s\\n' \"$dependencies\" | grep -Fq 'libdbus-1.so'; then " &
        "echo 'unexpected eager libdbus-1 dependency in D-Bus tray test host' >&2; exit 1; fi"
-  exec "PLUGINHOST_X11_SEND_DELETE=$PWD/build/integration/x11_send_wm_delete " &
+  exec "PLUGINHOST_TEST_BIN=$PWD/build/test/pluginhost " &
+       "PLUGINHOST_DBUS_FAKE_WATCHER=$PWD/build/integration/dbus_fake_watcher " &
+       "PLUGINHOST_VST3_GUI_FIXTURE_DIR=$PWD/build/fixtures/vst3 " &
+       "PLUGINHOST_X11_SEND_DELETE=$PWD/build/integration/x11_send_wm_delete " &
        "PLUGINHOST_CLAP_FIXTURE_DIR=$PWD/build/fixtures/clap " &
-       "xvfb-run -a -s '-screen 0 1024x768x24 -extension GLX -noreset -nolisten tcp' " &
+       "LD_LIBRARY_PATH=$PWD/build/fixtures/gui-jack " &
+       "dbus-run-session -- xvfb-run -a " &
+       "-s '-screen 0 1024x768x24 -extension GLX -noreset -nolisten tcp' " &
        "build/test/x11_window_host"
   exec "PLUGINHOST_DBUS_FAKE_WATCHER=$PWD/build/integration/dbus_fake_watcher " &
        "dbus-run-session -- xvfb-run -a " &

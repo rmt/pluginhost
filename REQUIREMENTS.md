@@ -162,8 +162,8 @@ A persistent plugin cache is not required initially.
 - Handled signals MUST be blocked with `pthread_sigmask` before `jack_client_open` so JACK-created threads inherit the mask.
 - The main control plane MUST consume handled signals through `signalfd` or an equivalent dedicated mechanism; no handled signal may run host policy or wakeup I/O on the JACK process thread.
 - Any POSIX signal handler used by a fallback implementation MUST only perform async-signal-safe notification and MUST NOT call CLAP, JACK, X11, D-Bus, allocation, or logging APIs.
-- Closing the GUI window MUST hide/destroy the GUI as required by the plugin, but MUST NOT stop audio or terminate the host.
-- A request to show a GUI after it was closed MUST recreate it when the plugin permits recreation.
+- A window manager `WM_DELETE_WINDOW` request for the host GUI MUST request orderly process shutdown for both CLAP and VST3, including JACK quiescence, plugin GUI/editor destruction, tray-item removal, plugin and JACK teardown, and PID-file cleanup. It MUST NOT merely hide the window.
+- Minimizing the window (X11 unmap/iconify) MUST NOT stop processing or terminate the host. Explicit tray activation and `SIGUSR2` continue to hide the GUI without stopping audio; `SIGUSR1` can show it again. Plugin-originated GUI-close notifications are not window-manager shutdown requests.
 - `SIGUSR1` under `--no-gui` MUST be ignored with a rate-limited warning.
 - When GUI hosting is enabled, the host SHOULD register a
   `org.freedesktop.StatusNotifierItem` on the session bus when a
@@ -433,7 +433,7 @@ The host MUST query the initial sample rate and buffer size before CLAP activati
 - Successful save MUST be atomic: write a temporary file in the destination directory, flush/close it, then rename it over the target.
 - A failed save MUST leave an existing destination file unchanged.
 - State stream callbacks MUST correctly support partial reads/writes and reject invalid negative/error behavior.
-- Clean shutdown caused by `SIGINT` or `SIGTERM` counts as an opportunity to save. An uncatchable signal or plugin crash does not.
+- Clean shutdown caused by `SIGINT`, `SIGTERM`, or a window-manager close request counts as an opportunity to save. An uncatchable signal or plugin crash does not.
 
 ## 13. Threading and real-time safety
 
@@ -547,7 +547,7 @@ The initial release is accepted only when all of these pass:
 2. **Effect:** Launch a stereo CLAP effect, connect generated JACK audio to it, and verify processed stereo output.
 3. **Multiple ports:** Use a fixture with multiple grouped audio and note ports and verify counts, direction, ordering, and naming.
 4. **MIDI timing:** Verify events at multiple offsets in one JACK period reach the plugin at the same offsets and plugin MIDI output retains offsets.
-5. **GUI:** Show the embedded X11 GUI, resize it, hide with `SIGUSR2`, show with `SIGUSR1`, close and reopen it, and toggle it from the StatusNotifierItem tray activation, all while audio continues.
+5. **GUI:** Show the embedded X11 GUI, resize it, minimize and restore it without stopping audio, hide with `SIGUSR2`, show with `SIGUSR1`, and toggle it from the StatusNotifierItem tray activation. A window-manager close request must instead exit cleanly, save requested state, and remove the JACK client, tray item, and PID file.
 6. **Headless:** Run with `--no-gui` without an X display and process audio/MIDI normally.
 7. **GUI services:** Verify a test GUI using CLAP timers and POSIX FD support remains responsive.
 8. **Parameters:** Change a control in the plugin GUI and verify `request_flush`, parameter events, and dirty state work without deadlock.
@@ -666,7 +666,7 @@ first supported VST3 configuration is:
 - Optional X11/XEmbed editor hosting with main-thread timers and FDs. GUI
   failure is headless fallback unless `--require-gui` is selected.
 - Bounded standard `.vstpreset` load before activation and save after clean
-  signal shutdown. CLAP raw state files remain unchanged.
+  signal or window-manager shutdown. CLAP raw state files remain unchanged.
 
 VST3 is identified by bundle path and processor CID. Controller CIDs are not
 selectable processors. A `.vst3` directory is one terminal discovery candidate;

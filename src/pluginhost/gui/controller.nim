@@ -474,13 +474,13 @@ proc handlePluginRequests*(controller: GuiController;
   success()
 
 proc handleWindowEvents*(controller: GuiController;
-                         events: seq[ReactorEvent]): Result[Unit] =
+                         events: seq[ReactorEvent]): Result[bool] =
   if controller == nil or not controller.tokenRegistered or controller.window == nil:
-    return success()
+    return success(false)
   for event in events:
     if event.kind == rekFd and event.token == controller.token:
       if riError in event.interests or riHangup in event.interests:
-        return failure[Unit](controllerError(
+        return failure[bool](controllerError(
           "X11 connection became unavailable", "fd=" & $controller.window.fileDescriptor))
   # Xlib may have already moved socket events into its own queue, leaving the
   # descriptor unreadable. Drain that queue on every reactor turn.
@@ -489,19 +489,19 @@ proc handleWindowEvents*(controller: GuiController;
     discard ignored
     var polled = controller.window.pollEvent()
     if not polled.isOk:
-      return failure[Unit](move(polled.error))
+      return failure[bool](move(polled.error))
     if not polled.value.available:
       break
     case polled.value.event.kind
     of wekClose:
-      var hidden = controller.hide()
-      if not hidden.isOk:
-        return hidden
+      # The session owns process shutdown. Leave the surface intact until it
+      # quiesces JACK and closes the tray, GUI, and plugin in their normal order.
+      return success(true)
     of wekDestroyed:
       var closed = controller.cleanupSurface(
         pluginWindowAlreadyDestroyed = true)
       if not closed.isOk:
-        return closed
+        return failure[bool](move(closed.error))
       controller.stateValue = gcsUncreated
       break
     of wekConfigure:
@@ -524,19 +524,19 @@ proc handleWindowEvents*(controller: GuiController;
         var adjusted = incoming
         var adjustedResult = controller.plugin.adjustSize(adjusted)
         if not adjustedResult.isOk:
-          return failure[Unit](move(adjustedResult.error))
+          return failure[bool](move(adjustedResult.error))
         if adjustedResult.value and not sameSize(adjusted, incoming):
-          let resized = controller.window.resize(adjusted.width, adjusted.height)
+          var resized = controller.window.resize(adjusted.width, adjusted.height)
           if not resized.isOk:
-            return resized
+            return failure[bool](move(resized.error))
           controller.pendingHostSize = adjusted
           controller.hasPendingHostSize = true
           controller.sizeValue = adjusted
         var accepted = controller.plugin.setSize(adjusted)
         if not accepted.isOk:
-          return failure[Unit](move(accepted.error))
+          return failure[bool](move(accepted.error))
         if not accepted.value:
-          return failure[Unit](controllerError(
+          return failure[bool](controllerError(
             "plugin rejected the host-requested GUI size"))
     of wekMap:
       if controller.window.state == whVisible and
@@ -550,10 +550,10 @@ proc handleWindowEvents*(controller: GuiController;
       var focused = controller.plugin.focus(
         polled.value.event.kind == wekFocusIn)
       if not focused.isOk:
-        return failure[Unit](move(focused.error))
+        return failure[bool](move(focused.error))
     else:
       discard
-  success()
+  success(false)
 
 proc close*(controller: GuiController): Result[Unit] =
   if controller == nil:

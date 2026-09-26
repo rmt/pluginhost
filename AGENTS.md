@@ -90,7 +90,6 @@ Current source responsibilities:
 - `tests/integration/` — strict disposable PipeWire-JACK orchestration, public signal/PID process tests, independent C audio/MIDI peers, and Xvfb GUI/controller tests.
 - `tests/unit/` — control-plane, ownership, naming, rollback, quiescence, fake-processing, role, CLI, CLAP, GUI, and support tests.
 - `docs/adr/` — accepted and proposed binding/architecture decisions.
-- `REVIEW_ISSUES.md` — preserved findings plus owner-approved dispositions and named targets.
 - `config.nims` — shared ARC/thread/panic/signal profile plus optional local Nimble paths.
 - `docs/adr/0003-*.md` through `0006-*.md` — callback profile, checked JACK loading, audited atomics, and direct Linux reactor decisions.
 - `docs/adr/0007-*.md` and `0008-*.md` — dynamically loaded Xlib window-host and CLAP GUI controller decisions.

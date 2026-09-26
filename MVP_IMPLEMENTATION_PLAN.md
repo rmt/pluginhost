@@ -19,9 +19,9 @@ Version 0.1.0 is complete when a user can:
 1. List and select a native Linux CLAP plugin.
 2. Run one plugin instance as one JACK client.
 3. Use all declared float32 audio inputs/outputs and MIDI/note inputs/outputs.
-4. Show, hide, close, and reopen an embedded X11/XWayland plugin GUI while audio continues.
+4. Show and hide an embedded X11/XWayland plugin GUI while audio continues; minimize and restore without stopping audio, or close the window to shut down the process cleanly.
 5. Load and atomically save plugin state.
-6. Stop cleanly through signals or JACK shutdown.
+6. Stop cleanly through signals, window-manager close, or JACK shutdown.
 7. Rely on tested CLAP lifecycle/thread behavior and an allocation-free, non-blocking host process path.
 
 The release must satisfy the applicable MUST requirements and release acceptance scenarios in `REQUIREMENTS.md`. Deferred SHOULD items must be listed in release notes rather than silently omitted.
@@ -744,6 +744,13 @@ compatibility registration/property signatures, StatusNotifierItem
 registration/properties/activation behavior, icon byte/layout conversion,
 reactor generation/cleanup behavior, bounded dispatch, non-fatal fallback, and
 proof that tray activation remains a main-thread GUI operation.
+
+The approved 10B description above records its historical hide-on-WM-close
+behavior. A later owner-requested behavior change makes WM close request
+orderly shutdown for both CLAP and VST3, while tray and signal hide/show
+remain GUI-only and window minimization does not stop audio. The current
+contract is in `REQUIREMENTS.md` and `DESIGN.md`; progress rows are updated
+only after human review.
 
 
 ## 18. Increment 11 — Feature-complete hardening and release candidate

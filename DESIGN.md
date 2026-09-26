@@ -247,13 +247,16 @@ with fake plugin/window clients while the production path uses `ClapGuiClient`,
 The host bridge exposes `clap.gui` only when GUI hosting is enabled. GUI callback
 bits, packed resize dimensions, and plugin-owned close state are atomically
 coalesced; callbacks never call CLAP or Xlib policy directly. A bounded main-loop
-turn drains those requests and X11 events. WM close applies the same
-plugin-hide/host-unmap path as `SIGUSR2` without destroying the CLAP GUI, so a
-same-turn or later show reuses the existing CLAP GUI object. For embedded GUIs, a
-plugin `hide()` result of false is tolerated because unmapping the host parent is
-authoritative. Actual X11 surface destruction releases the host surface for
-recreation, while `clap_host_gui.closed(true)` causes one host-side
-`clap_plugin_gui.destroy()` acknowledgement before release.
+turn drains those requests and X11 events. A `WM_DELETE_WINDOW` event is
+reported to `HostSession` rather than hidden: the main reactor marks the
+session stopping before servicing tray activation, GUI show, plugin callbacks,
+or restarts in that turn. `HostSession.close` quiesces JACK and tears down the
+tray, GUI/editor, plugin, JACK client, PID file, and reactor in the established
+order, including a requested clean state save. An X11 unmap/iconify event
+does not request shutdown. Explicit tray and signal hide/show retain the
+existing GUI-only behavior. Actual X11 surface destruction releases the host
+surface for recreation, while `clap_host_gui.closed(true)` causes one
+host-side `clap_plugin_gui.destroy()` acknowledgement before release.
 
 Increment 10A established the X11 declaration/API/window ownership boundary.
 Increment 10B connects it to CLAP and the session. The window host applies the
@@ -542,7 +545,9 @@ Hidden/Visible -> Uncreated       (destroy/recreate)
 Any enabled state -> Failed       (recoverable unless GUI is required)
 ```
 
-`show` and `hide` are idempotent commands. A close notification updates state before any later recreate attempt. GUI state does not control audio state.
+`show` and `hide` are idempotent commands and do not affect audio. Plugin-side
+close notifications update GUI state before a later recreate attempt; a window
+manager close request instead transitions the owning session to Stopping.
 
 ## 10. Startup, restart, and shutdown flows
 
@@ -600,12 +605,12 @@ normal orderly teardown keeps outputs silent.
 
 ### 10.3 Shutdown
 
-1. Mark the session stopping so new show/restart requests are ignored.
+1. Mark the session stopping on `SIGINT`, `SIGTERM`, or a window-manager close request so new show/restart requests are ignored.
 2. Deactivate JACK and wait for the process callback to finish. The JACK client remains open so ports/resources can be closed in order.
 3. Call `stop_processing()` under `AudioRoleGuard` if CLAP still considers the instance processing.
-4. Save requested state on the main thread when clean signal shutdown requested it. The
-   state stream is valid only for the synchronous plugin call after JACK quiescence and
-   `stop_processing()`, before CLAP deactivation.
+4. Save requested state on the main thread for clean signal or window-manager
+   shutdown. The state stream is valid only for the synchronous plugin call
+   after JACK quiescence and `stop_processing()`, before CLAP deactivation.
 5. Hide/destroy the GUI and unregister plugin timers/FDs.
 6. Deactivate and destroy the CLAP instance.
 7. Deinitialize the CLAP entry and unload the library.
@@ -1033,7 +1038,7 @@ Implementation reviews must verify:
 - [ ] No exception or Defect unwinds across a C ABI boundary; callback checks are disabled only behind explicit validation.
 - [ ] JACK is loaded only by the checked owned procedure table, never by eager module initialization.
 - [ ] Every successful CLAP entry init, plugin init, GUI create, JACK open, and file transaction has a matching cleanup action.
-- [ ] GUI state changes do not alter audio activation.
+- [ ] GUI show/hide/minimize do not alter audio activation; window-manager close requests orderly session shutdown.
 - [ ] Tray activation is dispatched on the main/reactor thread and cannot
   alter JACK activation or enter the process callback.
 - [ ] Tray and GUI resources close idempotently before reactor/plugin teardown.

@@ -1,4 +1,4 @@
-import std/[os, options, osproc, strutils, unittest]
+import std/[os, options, osproc, posix, streams, strutils, unittest]
 
 import fixtures/clap/gui_fixture_api
 import pluginhost/app/[main_reactor, plugin_services]
@@ -73,7 +73,8 @@ proc openGuiFixture(path: string;
 proc dispatchCombinedEvents(reactor: var MainReactor;
                             services: PluginServiceRegistry;
                             instance: var ClapInstance;
-                            controller: GuiController): bool =
+                            controller: GuiController;
+                            closeRequested: ptr bool = nil): bool =
   var ready = reactor.wait(monotonicNanos(100_000_000))
   require ready.isOk
   if ready.value.len == 0:
@@ -89,7 +90,10 @@ proc dispatchCombinedEvents(reactor: var MainReactor;
     of psekFd:
       require instance.callOnFd(serviceEvent.get.fd,
         serviceEvent.get.fdFlags).isOk
-  require controller.handleWindowEvents(ready.value).isOk
+  let handled = controller.handleWindowEvents(ready.value)
+  require handled.isOk
+  if closeRequested != nil:
+    closeRequested[] = handled.value
   # The fixture FD is level-triggered and may keep wait() immediately ready;
   # yield so the X server can process a newly flushed map/resize request.
   sleep(5)
@@ -173,7 +177,104 @@ method width(backend: TraceWindowBackend): uint32 {.raises: [].} =
 method height(backend: TraceWindowBackend): uint32 {.raises: [].} =
   backend.inner.height
 
+proc trayNameOwned(service: string): bool =
+  let queried = execCmdEx(
+    "gdbus call --session --dest org.freedesktop.DBus " &
+    "--object-path /org/freedesktop/DBus " &
+    "--method org.freedesktop.DBus.NameHasOwner '" & service & "'")
+  queried.exitCode == 0 and queried.output.contains("(true,)")
+
+proc exercisePublicWindowClose(pluginPath, title, label: string;
+                               saveState = false) =
+  let binary = getEnv("PLUGINHOST_TEST_BIN")
+  let sender = getEnv("PLUGINHOST_X11_SEND_DELETE")
+  let watcherBinary = getEnv("PLUGINHOST_DBUS_FAKE_WATCHER")
+  require fileExists(binary) and fileExists(sender) and
+    fileExists(watcherBinary) and (fileExists(pluginPath) or dirExists(pluginPath))
+
+  let pidPath = getTempDir() / ("pluginhost-gui-close-" & label & "-" &
+    $getCurrentProcessId() & ".pid")
+  let statePath = getTempDir() / ("pluginhost-gui-close-" & label & "-" &
+    $getCurrentProcessId() & ".vstpreset")
+  if fileExists(pidPath): removeFile(pidPath)
+  if fileExists(statePath): removeFile(statePath)
+  var watcher = startProcess(watcherBinary, args = @["no-activate"], options = {})
+  defer:
+    if watcher.peekExitCode() == -1:
+      watcher.terminate()
+      discard watcher.waitForExit(2_000)
+    watcher.close()
+  require watcher.outputStream.readLine() == "READY"
+
+  var args = @["--quiet", "--require-gui", "--no-start-server",
+    "--pid-file", pidPath]
+  if saveState:
+    args.add(@["--save-state", statePath])
+  args.add(pluginPath)
+  var host = startProcess(binary, args = args, options = {})
+  defer:
+    if host.peekExitCode() == -1:
+      host.terminate()
+      discard host.waitForExit(2_000)
+    host.close()
+    if fileExists(pidPath): removeFile(pidPath)
+    if fileExists(statePath): removeFile(statePath)
+
+  var windowId = ""
+  for _ in 0 ..< 500:
+    let queried = execCmdEx("xwininfo -name '" & title & "'")
+    if queried.exitCode == 0:
+      let marker = "Window id: 0x"
+      let index = queried.output.find(marker)
+      if index >= 0:
+        windowId = $parseHexInt(
+          queried.output[index + marker.len .. ^1].splitWhitespace()[0])
+        break
+    if host.peekExitCode() != -1:
+      checkpoint host.errorStream.readAll()
+      break
+    sleep(10)
+  require windowId.len > 0
+  require fileExists(pidPath)
+  check readFile(pidPath).strip() == $host.processID
+
+  let trayService = "org.freedesktop.StatusNotifierItem-" &
+    $host.processID & "-1"
+  var registered = false
+  for _ in 0 ..< 100:
+    if trayNameOwned(trayService):
+      registered = true
+      break
+    sleep(10)
+  require registered
+
+  let sent = execCmdEx(sender & " " & windowId)
+  require sent.exitCode == 0
+  let exitCode = host.waitForExit(5_000)
+  require exitCode != -1
+  let output = host.outputStream.readAll()
+  let diagnostic = host.errorStream.readAll()
+  checkpoint diagnostic
+  check exitCode == 0
+  check output.len == 0
+  check diagnostic.len == 0
+  check not fileExists(pidPath)
+  check not trayNameOwned(trayService)
+  if saveState:
+    require fileExists(statePath)
+    check readFile(statePath).startsWith("VST3")
+
 suite "X11 window-host integration":
+  test "public CLAP WM close stops the process and removes its tray":
+    exercisePublicWindowClose(
+      getEnv("PLUGINHOST_CLAP_FIXTURE_DIR") / "gui.clap",
+      "Fixture GUI [CLAP]", "clap")
+
+  test "public VST3 WM close saves state and removes its tray":
+    exercisePublicWindowClose(
+      getEnv("PLUGINHOST_VST3_GUI_FIXTURE_DIR") / "v5b.vst3",
+      "V2A Fixture [VST3]", "vst3", saveState = true)
+
   test "Xvfb window lifecycle handles reactor and buffered Xlib events":
     require getEnv("DISPLAY").len > 0
     var opened = openX11WindowHost(width = 160, height = 90,
@@ -312,26 +413,27 @@ suite "X11 window-host integration":
     require sender.len > 0 and fileExists(sender)
     let sent = execCmdEx(sender & " " & $produced.handle.id)
     check sent.exitCode == 0
-    require controller.handleWindowEvents(@[]).isOk
-    var restoredFromClose = controller.state == gcsHidden
+    var handled = controller.handleWindowEvents(@[])
+    require handled.isOk
+    var closeRequested = handled.value
     for _ in 0 ..< 8:
-      if restoredFromClose: break
+      if closeRequested: break
       var events = reactor.wait(monotonicNanos(100_000_000))
       require events.isOk
-      require controller.handleWindowEvents(events.value).isOk
-      restoredFromClose = controller.state == gcsHidden
-    check restoredFromClose
-    check controller.state == gcsHidden
-    check api.hideCalls() == 1
+      handled = controller.handleWindowEvents(events.value)
+      require handled.isOk
+      closeRequested = handled.value
+    check closeRequested
+    check controller.state == gcsVisible
+    check api.hideCalls() == 0
     check api.destroyCalls() == 0
     check api.createCalls() == 1
 
+    check controller.hide().isOk
     check controller.show().isOk
-    check controller.state == gcsVisible
     check api.showCalls() == 2
     check api.createCalls() == 1
     check api.destroyCalls() == 0
-
     check controller.hide().isOk
     check controller.state == gcsHidden
 
@@ -434,30 +536,21 @@ suite "X11 window-host integration":
     let sent = execCmdEx(sender & " " & $produced.handle.id)
     check sent.exitCode == 0
     let closeBefore = produced.closeEvents
-    var restoredFromClose = false
+    var closeRequested = false
     for ignored in 0 ..< 12:
       discard ignored
-      discard dispatchCombinedEvents(reactor, services, instance, controller)
-      if controller.state == gcsHidden and produced.closeEvents > closeBefore:
-        restoredFromClose = true
+      discard dispatchCombinedEvents(reactor, services, instance,
+        controller, addr closeRequested)
+      if closeRequested:
         break
-    check restoredFromClose
+    check closeRequested
+    check produced.closeEvents > closeBefore
+    check controller.state == gcsVisible
     check api.destroyCalls() == 0'u32
 
-    let mapBeforeRestore = produced.mapEvents
-    require controller.show().isOk
-    check controller.state == gcsVisible
-    var restoredEvent = false
-    for ignored in 0 ..< 12:
-      discard ignored
-      discard dispatchCombinedEvents(reactor, services, instance, controller)
-      if produced.mapEvents > mapBeforeRestore:
-        restoredEvent = true
-        break
-    check restoredEvent
     check waitForCombinedServices(reactor, services, instance, controller,
       api, 12'u32, 12'u32)
-    check produced.mapEvents >= 3'u32
+    check produced.mapEvents >= 2'u32
     check produced.unmapEvents >= 1'u32
     check produced.configureEvents > configureBefore
     check produced.closeEvents >= 1'u32
